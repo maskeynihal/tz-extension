@@ -17,7 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["chrome", "vitest/globals", "@testing-library/jest-dom"]
+    "types": ["chrome", "node", "vitest/globals", "@testing-library/jest-dom"]
   },
   "include": ["src", "tests", "e2e", "vite.config.ts", "vitest.config.ts"]
 }
