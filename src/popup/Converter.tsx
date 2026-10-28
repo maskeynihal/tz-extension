@@ -75,9 +75,14 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
           <button
             type="button"
             className={sourceIsLocal ? 'tzx-chip tzx-chip-on' : 'tzx-chip'}
-            title={`Use your local timezone (${LOCAL_ZONE})`}
+            title={
+              sourceIsLocal
+                ? `Source is your local timezone (${LOCAL_ZONE})`
+                : `Use your local timezone (${LOCAL_ZONE})`
+            }
+            aria-pressed={sourceIsLocal}
             onClick={() => setSourceZone(LOCAL_ZONE)}
-            disabled={sourceIsLocal || !isValidZone(LOCAL_ZONE)}
+            disabled={!isValidZone(LOCAL_ZONE)}
           >
             Local
           </button>
