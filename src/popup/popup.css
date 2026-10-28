@@ -119,3 +119,22 @@ input:focus-visible, button:focus-visible, .tzx-opt:focus-visible {
   border-radius: 8px; background: var(--card);
 }
 .tzx-zone-item-actions { display: flex; gap: 4px; }
+
+.tzx-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  user-select: text;
+}
+.tzx-foot-sep {
+  opacity: 0.5;
+}
+.tzx-foot-commit {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

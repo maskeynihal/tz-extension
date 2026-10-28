@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_PREFERENCES, type Preferences } from '../types';
 import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
+import { getBuildInfo } from '../lib/build-info';
 import { Converter } from './Converter';
 import { EpochTab } from './EpochTab';
 
 type Tab = 'converter' | 'epoch';
+
+const BUILD = getBuildInfo();
 
 export function App(): JSX.Element {
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFERENCES);
@@ -89,6 +92,12 @@ export function App(): JSX.Element {
       ) : (
         <EpochTab prefs={prefs} />
       )}
+
+      <footer className="tzx-foot" title={BUILD.builtAt ? `Built ${BUILD.builtAt}` : undefined}>
+        <span>v{BUILD.version}</span>
+        <span className="tzx-foot-sep">·</span>
+        <span className="tzx-foot-commit">{BUILD.commit}</span>
+      </footer>
     </div>
   );
 }
