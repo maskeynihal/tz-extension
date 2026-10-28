@@ -1,6 +1,10 @@
 import { defineManifest } from '@crxjs/vite-plugin';
 import pkg from '../package.json';
 
+// Single source manifest in the Chromium MV3 shape (crxjs types are Chromium-focused).
+// The Firefox build runs `vite build` with TARGET=firefox, then `scripts/firefox-manifest.mjs`
+// rewrites dist-firefox/manifest.json into the Firefox MV3 shape (event-page background +
+// browser_specific_settings). See package.json build:firefox.
 export default defineManifest({
   manifest_version: 3,
   name: 'TZ Converter — Timezone Tools',

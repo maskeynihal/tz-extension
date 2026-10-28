@@ -16,5 +16,5 @@ module.exports = {
     'react-hooks/exhaustive-deps': 'warn',
     'no-console': ['warn', { allow: ['warn', 'error'] }],
   },
-  ignorePatterns: ['dist', 'node_modules', '*.config.ts', '*.config.js', 'e2e'],
+  ignorePatterns: ['dist', 'dist-firefox', 'node_modules', '*.config.ts', '*.config.js', 'e2e', 'scripts'],
 };
