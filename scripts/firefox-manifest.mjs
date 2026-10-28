@@ -27,14 +27,29 @@ if (m.background && typeof m.background === 'object') {
 }
 
 // Firefox MV3 requires an explicit add-on id and a minimum version.
+// `data_collection_permissions` is required by AMO / recent Firefox; this
+// extension sends nothing off-device (all conversions are local), so declare
+// `none`. `strict_min_version` is bumped to 128 where the key is understood.
 m.browser_specific_settings = {
   ...(m.browser_specific_settings ?? {}),
   gecko: {
     id: 'tz-converter@maskeynihal',
-    strict_min_version: '115.0',
+    strict_min_version: '128.0',
+    data_collection_permissions: { required: ['none'] },
     ...(m.browser_specific_settings?.gecko ?? {}),
   },
 };
+
+// Strip Chrome-only keys Firefox warns about. `use_dynamic_url` in
+// web_accessible_resources is a Chromium MV3 extension that Firefox does not
+// recognize ("An unexpected property was found in the WebExtension manifest").
+if (Array.isArray(m.web_accessible_resources)) {
+  for (const entry of m.web_accessible_resources) {
+    if (entry && typeof entry === 'object' && 'use_dynamic_url' in entry) {
+      delete entry.use_dynamic_url;
+    }
+  }
+}
 
 writeFileSync(manifestPath, JSON.stringify(m, null, 2) + '\n');
 console.log('[firefox-manifest] patched dist-firefox/manifest.json for Firefox MV3');
