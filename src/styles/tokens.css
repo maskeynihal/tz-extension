@@ -16,21 +16,21 @@
   --tz-brand-softer: #e8e8f8;
   --tz-lime: #edff45; /* reserved accent */
 
-  /* Ink / neutrals (indigo-tinted) */
-  --tz-dark-strong: #0c0c2e;
-  --tz-dark: #16164a;
-  --tz-heading: #1313ba;
-  --tz-body: #16164a;
-  --tz-body-subtle: #6363c6;
-  --tz-muted: #9090ce;
+  /* Ink / neutrals — neutral slate, NOT indigo, so blue stays an accent only. */
+  --tz-dark-strong: #0f1115;
+  --tz-dark: #1b1d24;
+  --tz-heading: #16181d;
+  --tz-body: #24262e;
+  --tz-body-subtle: #5b5e68;
+  --tz-muted: #898c96;
 
-  /* Surfaces & borders */
+  /* Surfaces & borders — near-neutral, a whisper of cool. */
   --tz-surface: #ffffff;
-  --tz-surface-raised: #f4f4fc;
-  --tz-surface-sunken: #f0f0fa;
-  --tz-border: #e8e8f8;
-  --tz-border-medium: #e0e0f2;
-  --tz-border-brand: #cacaf0;
+  --tz-surface-raised: #f7f8fa;
+  --tz-surface-sunken: #f1f2f5;
+  --tz-border: #e6e7ec;
+  --tz-border-medium: #dcdee4;
+  --tz-border-brand: #cfd0ea;
 
   /* Semantic */
   --tz-success: #15a34a;
@@ -82,17 +82,17 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --tz-surface: #0c0c2e;
-    --tz-surface-raised: #16164a;
-    --tz-surface-sunken: #121238;
-    --tz-border: #26265e;
-    --tz-border-medium: #2e2e6e;
-    --tz-border-brand: #3a3a86;
+    --tz-surface: #121318;
+    --tz-surface-raised: #1b1d24;
+    --tz-surface-sunken: #16171c;
+    --tz-border: #2a2c33;
+    --tz-border-medium: #33353d;
+    --tz-border-brand: #3a3a7a;
 
-    --tz-heading: #c7c7f5;
-    --tz-body: #e8e8fb;
-    --tz-body-subtle: #a9a9e0;
-    --tz-muted: #8080c0;
+    --tz-heading: #f3f4f6;
+    --tz-body: #e7e8ec;
+    --tz-body-subtle: #a0a3ac;
+    --tz-muted: #787b85;
 
     --tz-brand: #8989dd;
     --tz-brand-strong: #a9a9ec;

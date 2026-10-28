@@ -33,11 +33,11 @@ const STYLE = `
   font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
   line-height: 1.5;
-  color: #16164a;
+  color: #24262e;
   background: #ffffff;
   border: 1px solid #e8e8f8;
   border-radius: 8px;
-  box-shadow: 0 10px 30px rgba(19,19,186,0.12);
+  box-shadow: 0 10px 30px rgba(15,17,21,0.14);
   padding: 10px 12px;
   min-width: 240px;
   max-width: 360px;
@@ -68,7 +68,7 @@ const STYLE = `
 }
 .tzx-assumed { color: #f97316; font-weight: 600; }
 .tzx-dateonly { margin-top: 6px; display: flex; align-items: center; gap: 6px; font-size: 11px; }
-.tzx-dateonly select { font: inherit; font-size: 11px; padding: 2px 5px; border-radius: 6px; border: 1px solid #e0e0f2; background: #fff; color: #16164a; }
+.tzx-dateonly select { font: inherit; font-size: 11px; padding: 2px 5px; border-radius: 6px; border: 1px solid #e0e0f2; background: #fff; color: #24262e; }
 
 /* Stacked row: zone label on its own line, value below — no truncation. */
 .tzx-row { padding: 5px 0; }
@@ -81,7 +81,7 @@ const STYLE = `
 .tzx-del:hover { opacity: 1; color: #be123c; }
 .tzx-val { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-top: 1px; }
 .tzx-date { font-size: 11px; color: #9090ce; font-variant-numeric: tabular-nums; }
-.tzx-time { font-variant-numeric: tabular-nums; font-weight: 600; color: #16164a; }
+.tzx-time { font-variant-numeric: tabular-nums; font-weight: 600; color: #24262e; }
 .tzx-off { color: #9090ce; font-size: 11px; }
 /* Compact: single line per zone, no date, no remove button. */
 .tzx-card.compact .tzx-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 1px 0; border: none; }
@@ -93,7 +93,7 @@ const STYLE = `
 .tzx-select {
   width: 100%; font: inherit; font-size: 12px; padding: 6px 7px;
   border-radius: 6px; border: 1px solid #e0e0f2;
-  background: #fff; color: #16164a; cursor: pointer;
+  background: #fff; color: #24262e; cursor: pointer;
 }
 @media (prefers-color-scheme: dark) {
   .tzx-card { color: #e8e8fb; background: #0c0c2e; border-color: #26265e; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
