@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Timezone Converter — TZ Converter</title>
+    <meta name="description" content="A free online timezone converter. Paste any time — Unix epoch, ISO string, or a written date — and read it across every zone. Powered by the same engine as the TZ Converter extension." />
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <style>
+      :root {
+        --ground: #ffffff; --raised: #f7f8fa; --sunken: #f1f2f5;
+        --border: #e6e7ec; --border-strong: #dcdee4;
+        --ink: #16181d; --body: #3a3d46; --muted: #767983;
+        --accent: #4f46e5; --accent-ink: #ffffff; --amber: #f5c518;
+        --maxw: 780px; --radius: 12px;
+        --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ground: #0f1115; --raised: #16181d; --sunken: #121318;
+          --border: #262930; --border-strong: #31343c;
+          --ink: #f3f4f6; --body: #c3c6ce; --muted: #8b8e98;
+          --accent: #8b8bf0; --accent-ink: #0b0b16; --amber: #f5c518;
+        }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--ground); color: var(--body); font-family: var(--font); font-size: 17px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+      h1 { color: var(--ink); letter-spacing: -0.02em; line-height: 1.12; margin: 0; }
+
+      header.nav { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--ground) 86%, transparent); backdrop-filter: saturate(140%) blur(10px); border-bottom: 1px solid var(--border); }
+      .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; max-width: 980px; margin: 0 auto; padding: 0 24px; }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--ink); font-size: 18px; }
+      .brand .dot { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-grid; place-items: center; color: var(--accent-ink); font-size: 12px; font-weight: 800; }
+      .nav-links { display: flex; align-items: center; gap: 24px; font-size: 15px; }
+      .nav-links a { color: var(--body); }
+      .btn { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); cursor: pointer; }
+      .btn:hover { border-color: var(--accent); text-decoration: none; }
+      .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+      .app-head { padding: 48px 0 10px; }
+      .eyebrow { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); margin: 0 0 12px; }
+      .app-head h1 { font-size: clamp(30px, 5vw, 42px); font-weight: 800; }
+      .app-head p { font-size: 18px; color: var(--body); max-width: 56ch; margin: 14px 0 0; }
+      .app-main { padding: 28px 0 80px; }
+
+      .demo-card { border: 1px solid var(--border); border-radius: 16px; background: var(--raised); padding: 24px; box-shadow: 0 1px 0 var(--border), 0 24px 60px -40px rgba(20,24,40,0.5); }
+      .demo-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+      .demo-tabs { display: flex; gap: 4px; background: var(--sunken); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+      .demo-tab { border: none; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; padding: 7px 14px; border-radius: 7px; cursor: pointer; }
+      .demo-tab.is-on { background: var(--ground); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+      .demo-chip { border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); border-radius: 8px; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 12px; cursor: pointer; }
+      .demo-input { width: 100%; font: inherit; font-size: 18px; padding: 15px 16px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); }
+      .demo-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+      .demo-hint { font-size: 14px; color: var(--muted); margin: 14px 2px; font-family: var(--mono); word-break: break-word; }
+      .demo-hint.is-error { color: #d14343; font-family: var(--font); }
+      .demo-rows { display: grid; gap: 4px; }
+      .demo-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 14px 16px; border-radius: 10px; background: var(--ground); border: 1px solid var(--border); }
+      .demo-row.is-local { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+      .demo-zone { color: var(--body); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+      .demo-local { font-size: 10px; font-weight: 800; letter-spacing: 0.04em; color: var(--accent-ink); background: var(--accent); border-radius: 5px; padding: 2px 6px; }
+      .demo-val { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; justify-content: flex-end; text-align: right; }
+      .demo-date { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+      .demo-time { font-weight: 700; font-size: 19px; color: var(--ink); font-variant-numeric: tabular-nums; }
+      .demo-off { font-size: 14px; color: var(--muted); }
+      .demo-select { width: 100%; margin-top: 14px; font: inherit; font-size: 15px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); cursor: pointer; }
+
+      .app-tip { margin-top: 20px; font-size: 14px; color: var(--muted); text-align: center; }
+      footer { border-top: 1px solid var(--border); padding: 32px 0; color: var(--muted); font-size: 14px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <header class="nav">
+      <div class="nav-inner">
+        <a class="brand" href="./index.html"><span class="dot">TZ</span> TZ Converter</a>
+        <nav class="nav-links">
+          <a href="./index.html">Home</a>
+          <a href="./index.html#install">Get the extension</a>
+          <a class="btn primary" href="./index.html#install">Add to browser</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="app-head">
+        <div class="wrap">
+          <p class="eyebrow">Online converter</p>
+          <h1>Timezone converter</h1>
+          <p>Paste any time — a Unix epoch, an ISO string, or a written date like "Oct 28 2026 4:24 UTC" — and read it across every zone. Same engine the extension ships, nothing leaves your browser.</p>
+        </div>
+      </section>
+
+      <section class="app-main">
+        <div class="wrap">
+          <div class="demo-card">
+            <div id="demo-app"></div>
+          </div>
+          <p class="app-tip">Tip: install the extension to do this on any page without opening a tab. <a href="./index.html#install">Get it →</a></p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">© 2026 TZ Converter · <a href="https://github.com/maskeynihal/tz-extension">GitHub</a> · <a href="./index.html">Home</a></div>
+    </footer>
+
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>
