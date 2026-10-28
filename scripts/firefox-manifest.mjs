@@ -27,11 +27,15 @@ if (m.background && typeof m.background === 'object') {
 }
 
 // Firefox MV3 requires an explicit add-on id and a minimum version.
+// `data_collection_permissions` is required by AMO / recent Firefox; this
+// extension sends nothing off-device (all conversions are local), so declare
+// `none`. `strict_min_version` is bumped to 128 where the key is understood.
 m.browser_specific_settings = {
   ...(m.browser_specific_settings ?? {}),
   gecko: {
     id: 'tz-converter@maskeynihal',
-    strict_min_version: '115.0',
+    strict_min_version: '128.0',
+    data_collection_permissions: { required: ['none'] },
     ...(m.browser_specific_settings?.gecko ?? {}),
   },
 };
