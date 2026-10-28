@@ -183,3 +183,46 @@ describe('Popover', () => {
     expect(labels).not.toContain('UTC');
   });
 });
+
+describe('Popover compact mode', () => {
+  it('compact hides the source line and add dropdown, shows time rows', () => {
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover
+        parsed={parsed!}
+        matchCount={1}
+        prefs={prefs}
+        pinned
+        compact
+        onClose={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole('dialog');
+    // No "read as" source line, no add-timezone select in compact mode.
+    expect(within(dialog).queryByText(/read as/i)).toBeNull();
+    expect(screen.queryByLabelText('Add a timezone')).toBeNull();
+    // Still shows the converted zone rows.
+    expect(dialog.querySelectorAll('.tzx-zone').length).toBeGreaterThan(0);
+    expect(dialog.classList.contains('compact')).toBe(true);
+  });
+
+  it('a transient card offers both a full-pin and a compact-pin button', () => {
+    const onPin = vi.fn();
+    const onPinCompact = vi.fn();
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover
+        parsed={parsed!}
+        matchCount={1}
+        prefs={prefs}
+        pinned={false}
+        onPin={onPin}
+        onPinCompact={onPinCompact}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Pin compact'));
+    expect(onPinCompact).toHaveBeenCalled();
+    expect(onPin).not.toHaveBeenCalled();
+  });
+});

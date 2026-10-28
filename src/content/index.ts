@@ -29,6 +29,67 @@ interface Pin {
 }
 const pins = new Set<Pin>();
 
+// --- Selection highlight --------------------------------------------------
+// Draw a persistent highlight on the matched range using the CSS Custom
+// Highlight API, so the text stays visibly marked even after the native
+// selection is lost (clicking the popover, focus change). No-op where the API
+// or a static stylesheet injection is unavailable.
+const HIGHLIGHT_NAME = 'tz-extension-match';
+let highlightStyleInjected = false;
+let highlightRange: Range | null = null;
+
+interface HighlightRegistry {
+  set(name: string, hl: unknown): void;
+  delete(name: string): void;
+}
+function highlightRegistry(): HighlightRegistry | null {
+  const c = (globalThis as unknown as { CSS?: { highlights?: HighlightRegistry } }).CSS;
+  return c && c.highlights ? c.highlights : null;
+}
+function HighlightCtor(): (new (range: Range) => unknown) | null {
+  return (globalThis as unknown as { Highlight?: new (r: Range) => unknown }).Highlight ?? null;
+}
+
+function ensureHighlightStyle(): void {
+  if (highlightStyleInjected) return;
+  try {
+    const style = document.createElement('style');
+    style.id = 'tz-extension-highlight-style';
+    // ::highlight() paints under the normal selection; a soft amber marker.
+    style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: rgba(250, 204, 21, 0.4); color: inherit; }`;
+    (document.head ?? document.documentElement).appendChild(style);
+    highlightStyleInjected = true;
+  } catch {
+    /* ignore */
+  }
+}
+
+function setHighlight(range: Range): void {
+  if (!prefs.keepSelection) return;
+  const reg = highlightRegistry();
+  const Ctor = HighlightCtor();
+  if (!reg || !Ctor) return;
+  try {
+    ensureHighlightStyle();
+    highlightRange = range.cloneRange();
+    reg.set(HIGHLIGHT_NAME, new Ctor(highlightRange));
+  } catch {
+    highlightRange = null;
+  }
+}
+
+function clearHighlight(): void {
+  const reg = highlightRegistry();
+  if (reg) {
+    try {
+      reg.delete(HIGHLIGHT_NAME);
+    } catch {
+      /* ignore */
+    }
+  }
+  highlightRange = null;
+}
+
 void loadPreferences().then((p) => {
   prefs = p;
 });
@@ -121,21 +182,27 @@ function teardownTransient(): void {
   document.removeEventListener('scroll', onScroll, true);
 }
 
+/** User-facing dismissal: also clears the match highlight. */
+function dismissTransient(): void {
+  clearHighlight();
+  teardownTransient();
+}
+
 function onScroll(): void {
   // Only the transient card is viewport-anchored; pinned cards scroll naturally.
-  teardownTransient();
+  dismissTransient();
 }
 
 function onDocMouseDown(e: MouseEvent): void {
   // Clicking outside the transient card dismisses it. Pinned cards are ignored
   // (each manages its own close button).
   if (tHost && e.target instanceof Node && !tHost.contains(e.target)) {
-    teardownTransient();
+    dismissTransient();
   }
 }
 
 function onKeyDown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') teardownTransient();
+  if (e.key === 'Escape') dismissTransient();
 }
 
 function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, srcText: string): void {
@@ -161,8 +228,9 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, 
         matchCount,
         prefs,
         pinned: false,
-        onPin: () => pinCard(parsed, matchCount, pageX, pageY, srcText),
-        onClose: teardownTransient,
+        onPin: () => pinCard(parsed, matchCount, pageX, pageY, srcText, false),
+        onPinCompact: () => pinCard(parsed, matchCount, pageX, pageY, srcText, true),
+        onClose: dismissTransient,
         onDragStart: (e) => startDrag(hostEl, e, true),
         onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
           // Persist as the global default, then re-parse this value with it.
@@ -191,6 +259,7 @@ function pinCard(
   pageX: number,
   pageY: number,
   srcText: string,
+  compact: boolean,
 ): void {
   try {
     const host = document.createElement('div');
@@ -205,6 +274,7 @@ function pinCard(
     const pin: Pin = { host, root, pageX, pageY };
     pins.add(pin);
 
+    let isCompact = compact;
     const renderPin = (p: ParsedTime, count: number): void => {
       root.render(
         createElement(Popover, {
@@ -212,7 +282,12 @@ function pinCard(
           matchCount: count,
           prefs,
           pinned: true,
+          compact: isCompact,
           onClose: () => removePin(pin),
+          onToggleCompact: () => {
+            isCompact = !isCompact;
+            renderPin(p, count);
+          },
           onDragStart: (e) => startDrag(host, e, false),
           onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
             prefs = { ...prefs, dateOnlyPolicy: policy };
@@ -229,8 +304,8 @@ function pinCard(
     };
     renderPin(parsed, matchCount);
 
-    // The transient card has served its purpose; the pin replaces it in place.
-    teardownTransient();
+    // The value is pinned; drop the transient card and its match highlight.
+    dismissTransient();
   } catch {
     /* restricted page — ignore */
   }
@@ -248,7 +323,7 @@ function removePin(pin: Pin): void {
 
 // --- Selection handling ---------------------------------------------------
 
-function showForSelection(rect: DOMRect, text: string): void {
+function showForSelection(rect: DOMRect, text: string, range: Range | null): void {
   const matches = parseTimes(text, {
     assumedZone: prefs.homeZone,
     dateOnlyPolicy: prefs.dateOnlyPolicy,
@@ -259,11 +334,12 @@ function showForSelection(rect: DOMRect, text: string): void {
     teardownTransient();
     return;
   }
+  if (range) setHighlight(range);
   renderTransient(rect, parsed, matches.length, text);
 }
 
 /** Read the active selection from the page OR from an input/textarea. */
-function readSelection(): { text: string; rect: DOMRect } | null {
+function readSelection(): { text: string; rect: DOMRect; range: Range | null } | null {
   const active = document.activeElement;
 
   // <input> / <textarea>: use selectionStart/End and a mirror rect.
@@ -276,9 +352,9 @@ function readSelection(): { text: string; rect: DOMRect } | null {
     if (end > start) {
       const text = active.value.slice(start, end).trim();
       if (text.length > 0) {
-        // No per-character rect for form fields; anchor to the field box.
+        // Form fields have no Range for the CSS highlight; anchor to the box.
         const rect = active.getBoundingClientRect();
-        return { text, rect };
+        return { text, rect, range: null };
       }
     }
     return null;
@@ -299,13 +375,15 @@ function readSelection(): { text: string; rect: DOMRect } | null {
   }
 
   let rect: DOMRect;
+  let range: Range | null = null;
   try {
-    rect = sel.getRangeAt(0).getBoundingClientRect();
+    range = sel.getRangeAt(0);
+    rect = range.getBoundingClientRect();
   } catch {
     return null;
   }
   if (rect.width === 0 && rect.height === 0) return null;
-  return { text, rect };
+  return { text, rect, range };
 }
 
 function handleSelectionChange(): void {
@@ -313,7 +391,7 @@ function handleSelectionChange(): void {
   debounceTimer = window.setTimeout(() => {
     const got = readSelection();
     if (!got) return;
-    showForSelection(got.rect, got.text);
+    showForSelection(got.rect, got.text, got.range);
   }, DEBOUNCE_MS);
 }
 
