@@ -26,6 +26,7 @@ await build({
 
 copyFileSync(resolve(siteDir, 'index.html'), resolve(outDir, 'index.html'));
 copyFileSync(resolve(siteDir, 'app.html'), resolve(outDir, 'app.html'));
+copyFileSync(resolve(siteDir, 'privacy.html'), resolve(outDir, 'privacy.html'));
 // Copy static assets (screenshots, video) if present.
 if (existsSync(resolve(siteDir, 'assets'))) {
   cpSync(resolve(siteDir, 'assets'), resolve(outDir, 'assets'), { recursive: true });
