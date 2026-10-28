@@ -82,7 +82,7 @@ describe('Popover', () => {
     const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
     expect(parsed).toBeDefined();
     render(
-      <Popover parsed={parsed!} matchCount={1} prefs={prefs} onClose={vi.fn()} />,
+      <Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={vi.fn()} />,
     );
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText(/2024-01-02T12:00:00Z/)).toBeInTheDocument();
@@ -93,18 +93,90 @@ describe('Popover', () => {
     expect(zoneLabels).toContain('Asia/Kathmandu');
   });
 
+  it('shows the date for each zone row', () => {
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={vi.fn()} />,
+    );
+    const dialog = screen.getByRole('dialog');
+    // The UTC row must show the calendar date, not only the time.
+    expect(within(dialog).getAllByText(/2024-01-02/).length).toBeGreaterThan(0);
+  });
+
   it('labels an assumed zone', () => {
     const [parsed] = parseTimes('3pm', 'UTC');
     expect(parsed?.assumed).toBe(true);
-    render(<Popover parsed={parsed!} matchCount={1} prefs={prefs} onClose={vi.fn()} />);
+    render(
+      <Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={vi.fn()} />,
+    );
     expect(screen.getByText(/assumed/i)).toBeInTheDocument();
   });
 
   it('fires onClose from the close button', () => {
     const onClose = vi.fn();
     const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
-    render(<Popover parsed={parsed!} matchCount={1} prefs={prefs} onClose={onClose} />);
+    render(
+      <Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={onClose} />,
+    );
     fireEvent.click(screen.getByLabelText('Close'));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('shows a pin button only when transient and fires onPin', () => {
+    const onPin = vi.fn();
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover
+        parsed={parsed!}
+        matchCount={1}
+        prefs={prefs}
+        pinned={false}
+        onPin={onPin}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Pin to page'));
+    expect(onPin).toHaveBeenCalled();
+  });
+
+  it('hides the pin button on an already-pinned card', () => {
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover
+        parsed={parsed!}
+        matchCount={1}
+        prefs={prefs}
+        pinned
+        onPin={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText('Pin to page')).toBeNull();
+  });
+
+  it('adds a timezone row via the dropdown', () => {
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={vi.fn()} />,
+    );
+    const dialog = screen.getByRole('dialog');
+    const before = dialog.querySelectorAll('.tzx-zone').length;
+    fireEvent.change(screen.getByLabelText('Add a timezone'), {
+      target: { value: 'Asia/Tokyo' },
+    });
+    const labels = Array.from(dialog.querySelectorAll('.tzx-zone')).map((n) => n.textContent);
+    expect(labels).toContain('Asia/Tokyo');
+    expect(dialog.querySelectorAll('.tzx-zone').length).toBe(before + 1);
+  });
+
+  it('removes a timezone row via its × button', () => {
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={vi.fn()} />,
+    );
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(screen.getByLabelText('Remove UTC'));
+    const labels = Array.from(dialog.querySelectorAll('.tzx-zone')).map((n) => n.textContent);
+    expect(labels).not.toContain('UTC');
   });
 });
