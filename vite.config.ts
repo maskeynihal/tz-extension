@@ -37,12 +37,28 @@ function gitCommit(): string {
 const BUILD_COMMIT = process.env.BUILD_COMMIT ?? gitCommit();
 const BUILD_TIME = new Date().toISOString();
 
+/** Canonical GitHub repo URL from package.json, normalized (no git+ / .git). */
+function repoUrl(): string {
+  const raw =
+    typeof pkg.repository === 'object' && pkg.repository
+      ? (pkg.repository as { url?: string }).url ?? ''
+      : typeof pkg.repository === 'string'
+        ? pkg.repository
+        : '';
+  return raw
+    .replace(/^git\+/, '')
+    .replace(/\.git$/, '')
+    .replace(/^git@github\.com:/, 'https://github.com/');
+}
+const REPO_URL = repoUrl();
+
 export default defineConfig({
   plugins: [react(), crx({ manifest })],
   define: {
     __BUILD_COMMIT__: JSON.stringify(BUILD_COMMIT),
     __BUILD_TIME__: JSON.stringify(BUILD_TIME),
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __REPO_URL__: JSON.stringify(REPO_URL),
   },
   build: {
     target: 'es2022',

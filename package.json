@@ -4,6 +4,10 @@
   "description": "Browser extension for timezone conversion: select-to-convert, full converter, epoch converter.",
   "type": "module",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maskeynihal/tz-extension"
+  },
   "scripts": {
     "dev": "vite",
     "dev:firefox": "TARGET=firefox vite",

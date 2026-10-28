@@ -11,6 +11,9 @@ const prefs: Preferences = {
   homeZone: 'UTC',
   targetZones: ['UTC', 'Asia/Kathmandu'],
   hour12: false,
+  dateOnlyPolicy: 'midnight',
+  keepSelection: true,
+  customFormats: [],
 };
 
 describe('EpochTab', () => {
@@ -44,7 +47,7 @@ describe('EpochTab', () => {
 
 describe('Converter', () => {
   it('renders a result card per target zone', () => {
-    render(<Converter prefs={prefs} />);
+    render(<Converter prefs={prefs} onPrefsChange={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Date & time'), {
       target: { value: '2024-01-02T12:00' },
     });
@@ -53,7 +56,7 @@ describe('Converter', () => {
   });
 
   it('shows an error when the datetime is cleared', () => {
-    render(<Converter prefs={prefs} />);
+    render(<Converter prefs={prefs} onPrefsChange={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Date & time'), { target: { value: '' } });
     expect(screen.getByRole('alert')).toBeInTheDocument();
   });
@@ -178,5 +181,64 @@ describe('Popover', () => {
     fireEvent.click(screen.getByLabelText('Remove UTC'));
     const labels = Array.from(dialog.querySelectorAll('.tzx-zone')).map((n) => n.textContent);
     expect(labels).not.toContain('UTC');
+  });
+});
+
+describe('Popover compact mode', () => {
+  it('compact hides the source line and add dropdown, shows time rows', () => {
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover
+        parsed={parsed!}
+        matchCount={1}
+        prefs={prefs}
+        pinned
+        compact
+        onClose={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole('dialog');
+    // No "read as" source line, no add-timezone select in compact mode.
+    expect(within(dialog).queryByText(/read as/i)).toBeNull();
+    expect(screen.queryByLabelText('Add a timezone')).toBeNull();
+    // Still shows the converted zone rows.
+    expect(dialog.querySelectorAll('.tzx-zone').length).toBeGreaterThan(0);
+    expect(dialog.classList.contains('compact')).toBe(true);
+  });
+
+  it('a transient card offers both a full-pin and a compact-pin button', () => {
+    const onPin = vi.fn();
+    const onPinCompact = vi.fn();
+    const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
+    render(
+      <Popover
+        parsed={parsed!}
+        matchCount={1}
+        prefs={prefs}
+        pinned={false}
+        onPin={onPin}
+        onPinCompact={onPinCompact}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Pin compact'));
+    expect(onPinCompact).toHaveBeenCalled();
+    expect(onPin).not.toHaveBeenCalled();
+  });
+});
+
+describe('Converter source + target editing', () => {
+  it('removes a target zone via its ✕ and persists', () => {
+    const onPrefsChange = vi.fn();
+    render(<Converter prefs={prefs} onPrefsChange={onPrefsChange} />);
+    fireEvent.click(screen.getByLabelText('Remove UTC'));
+    expect(onPrefsChange).toHaveBeenCalledWith(
+      expect.objectContaining({ targetZones: expect.not.arrayContaining(['UTC']) }),
+    );
+  });
+
+  it('offers a Local source button', () => {
+    render(<Converter prefs={prefs} onPrefsChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /local/i })).toBeInTheDocument();
   });
 });
