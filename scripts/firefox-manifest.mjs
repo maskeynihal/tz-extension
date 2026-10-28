@@ -36,5 +36,16 @@ m.browser_specific_settings = {
   },
 };
 
+// Strip Chrome-only keys Firefox warns about. `use_dynamic_url` in
+// web_accessible_resources is a Chromium MV3 extension that Firefox does not
+// recognize ("An unexpected property was found in the WebExtension manifest").
+if (Array.isArray(m.web_accessible_resources)) {
+  for (const entry of m.web_accessible_resources) {
+    if (entry && typeof entry === 'object' && 'use_dynamic_url' in entry) {
+      delete entry.use_dynamic_url;
+    }
+  }
+}
+
 writeFileSync(manifestPath, JSON.stringify(m, null, 2) + '\n');
 console.log('[firefox-manifest] patched dist-firefox/manifest.json for Firefox MV3');
