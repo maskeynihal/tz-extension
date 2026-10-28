@@ -42,7 +42,30 @@ export function sanitize(input: unknown): Preferences {
 
   const hour12 = typeof obj.hour12 === 'boolean' ? obj.hour12 : base.hour12;
 
-  return { homeZone, targetZones, hour12 };
+  const dateOnlyPolicy =
+    obj.dateOnlyPolicy === 'now' || obj.dateOnlyPolicy === 'midnight'
+      ? obj.dateOnlyPolicy
+      : base.dateOnlyPolicy;
+
+  const keepSelection =
+    typeof obj.keepSelection === 'boolean' ? obj.keepSelection : base.keepSelection;
+
+  let customFormats = base.customFormats;
+  if (Array.isArray(obj.customFormats)) {
+    customFormats = obj.customFormats
+      .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
+      .map((f) => ({
+        id: typeof f.id === 'string' && f.id ? f.id : `fmt-${Math.random().toString(36).slice(2, 9)}`,
+        label: typeof f.label === 'string' ? f.label.slice(0, 80) : 'Custom',
+        pattern: typeof f.pattern === 'string' ? f.pattern.slice(0, 300) : '',
+        advanced: typeof f.advanced === 'boolean' ? f.advanced : false,
+        enabled: typeof f.enabled === 'boolean' ? f.enabled : true,
+      }))
+      .filter((f) => f.pattern.length > 0)
+      .slice(0, 50);
+  }
+
+  return { homeZone, targetZones, hour12, dateOnlyPolicy, keepSelection, customFormats };
 }
 
 export async function loadPreferences(): Promise<Preferences> {

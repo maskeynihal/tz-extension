@@ -138,3 +138,41 @@ input:focus-visible, button:focus-visible, .tzx-opt:focus-visible {
 .tzx-foot-commit {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+
+.tzx-select {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--fg);
+  cursor: pointer;
+  min-width: 220px;
+}
+.tzx-input {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  width: 100%;
+  margin-bottom: 6px;
+}
+.tzx-adder {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.tzx-adder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0 8px;
+}

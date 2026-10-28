@@ -1,14 +1,14 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { createElement } from 'react';
 import { parseTimes } from '../lib/parse';
-import { loadPreferences, onPreferencesChanged } from '../lib/storage';
-import { DEFAULT_PREFERENCES, type ParsedTime, type Preferences } from '../types';
+import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
+import { DEFAULT_PREFERENCES, type DateOnlyPolicy, type ParsedTime, type Preferences } from '../types';
 import { Popover } from './Popover';
 
 const TRANSIENT_HOST_ID = 'tz-extension-popover-host';
 const PIN_HOST_CLASS = 'tz-extension-pin-host';
 const DEBOUNCE_MS = 200;
-const CARD_MAX_W = 340;
+const CARD_MAX_W = 360;
 const MARGIN = 8;
 const EST_HEIGHT = 200;
 
@@ -80,6 +80,35 @@ function applyBox(
   hostEl.style.setProperty('z-index', '2147483647', 'important');
 }
 
+/**
+ * Make a host draggable from a pointerdown on the card header. `fixedPos`
+ * controls whether offsets are viewport (transient) or document (pinned) space.
+ */
+function startDrag(
+  hostEl: HTMLDivElement,
+  startEvent: PointerEvent | React.PointerEvent,
+  fixedPos: boolean,
+): void {
+  const native = 'nativeEvent' in startEvent ? startEvent.nativeEvent : startEvent;
+  const rect = hostEl.getBoundingClientRect();
+  const grabX = native.clientX - rect.left;
+  const grabY = native.clientY - rect.top;
+
+  function onMove(e: PointerEvent): void {
+    const vx = e.clientX - grabX;
+    const vy = e.clientY - grabY;
+    const left = fixedPos ? vx : vx + window.scrollX;
+    const top = fixedPos ? vy : vy + window.scrollY;
+    applyBox(hostEl, fixedPos ? 'fixed' : 'absolute', Math.max(0, top), Math.max(0, left));
+  }
+  function onUp(): void {
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', onUp, true);
+  }
+  window.addEventListener('pointermove', onMove, true);
+  window.addEventListener('pointerup', onUp, true);
+}
+
 // --- Transient lifecycle --------------------------------------------------
 
 function teardownTransient(): void {
@@ -109,7 +138,7 @@ function onKeyDown(e: KeyboardEvent): void {
   if (e.key === 'Escape') teardownTransient();
 }
 
-function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number): void {
+function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, srcText: string): void {
   teardownTransient();
   try {
     tHost = document.createElement('div');
@@ -123,6 +152,7 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number):
     // Capture a document-space point for the pin, from the current scroll.
     const pageX = rect.left + window.scrollX;
     const pageY = rect.bottom + MARGIN + window.scrollY;
+    const hostEl = tHost;
 
     tRoot = createRoot(mount);
     tRoot.render(
@@ -131,8 +161,20 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number):
         matchCount,
         prefs,
         pinned: false,
-        onPin: () => pinCard(parsed, matchCount, pageX, pageY),
+        onPin: () => pinCard(parsed, matchCount, pageX, pageY, srcText),
         onClose: teardownTransient,
+        onDragStart: (e) => startDrag(hostEl, e, true),
+        onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
+          // Persist as the global default, then re-parse this value with it.
+          prefs = { ...prefs, dateOnlyPolicy: policy };
+          void savePreferences(prefs);
+          const again = parseTimes(srcText, {
+            assumedZone: prefs.homeZone,
+            dateOnlyPolicy: policy,
+            customFormats: prefs.customFormats,
+          });
+          if (again[0]) renderTransient(rect, again[0], again.length, srcText);
+        },
       }),
     );
     document.addEventListener('scroll', onScroll, true);
@@ -143,7 +185,13 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number):
 
 // --- Pin lifecycle --------------------------------------------------------
 
-function pinCard(parsed: ParsedTime, matchCount: number, pageX: number, pageY: number): void {
+function pinCard(
+  parsed: ParsedTime,
+  matchCount: number,
+  pageX: number,
+  pageY: number,
+  srcText: string,
+): void {
   try {
     const host = document.createElement('div');
     host.className = PIN_HOST_CLASS;
@@ -157,15 +205,29 @@ function pinCard(parsed: ParsedTime, matchCount: number, pageX: number, pageY: n
     const pin: Pin = { host, root, pageX, pageY };
     pins.add(pin);
 
-    root.render(
-      createElement(Popover, {
-        parsed,
-        matchCount,
-        prefs,
-        pinned: true,
-        onClose: () => removePin(pin),
-      }),
-    );
+    const renderPin = (p: ParsedTime, count: number): void => {
+      root.render(
+        createElement(Popover, {
+          parsed: p,
+          matchCount: count,
+          prefs,
+          pinned: true,
+          onClose: () => removePin(pin),
+          onDragStart: (e) => startDrag(host, e, false),
+          onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
+            prefs = { ...prefs, dateOnlyPolicy: policy };
+            void savePreferences(prefs);
+            const again = parseTimes(srcText, {
+              assumedZone: prefs.homeZone,
+              dateOnlyPolicy: policy,
+              customFormats: prefs.customFormats,
+            });
+            if (again[0]) renderPin(again[0], again.length);
+          },
+        }),
+      );
+    };
+    renderPin(parsed, matchCount);
 
     // The transient card has served its purpose; the pin replaces it in place.
     teardownTransient();
@@ -187,39 +249,71 @@ function removePin(pin: Pin): void {
 // --- Selection handling ---------------------------------------------------
 
 function showForSelection(rect: DOMRect, text: string): void {
-  const matches = parseTimes(text, prefs.homeZone);
+  const matches = parseTimes(text, {
+    assumedZone: prefs.homeZone,
+    dateOnlyPolicy: prefs.dateOnlyPolicy,
+    customFormats: prefs.customFormats,
+  });
   const parsed = matches[0];
   if (!parsed) {
     teardownTransient();
     return;
   }
-  renderTransient(rect, parsed, matches.length);
+  renderTransient(rect, parsed, matches.length, text);
+}
+
+/** Read the active selection from the page OR from an input/textarea. */
+function readSelection(): { text: string; rect: DOMRect } | null {
+  const active = document.activeElement;
+
+  // <input> / <textarea>: use selectionStart/End and a mirror rect.
+  if (
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLTextAreaElement
+  ) {
+    const start = active.selectionStart ?? 0;
+    const end = active.selectionEnd ?? 0;
+    if (end > start) {
+      const text = active.value.slice(start, end).trim();
+      if (text.length > 0) {
+        // No per-character rect for form fields; anchor to the field box.
+        const rect = active.getBoundingClientRect();
+        return { text, rect };
+      }
+    }
+    return null;
+  }
+
+  // Normal DOM / contenteditable selection.
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const text = sel.toString().trim();
+  if (text.length === 0) return null;
+
+  // Ignore selections inside the transient card or any pinned card.
+  if (sel.anchorNode) {
+    if (tHost && tHost.contains(sel.anchorNode)) return null;
+    for (const pin of pins) {
+      if (pin.host.contains(sel.anchorNode)) return null;
+    }
+  }
+
+  let rect: DOMRect;
+  try {
+    rect = sel.getRangeAt(0).getBoundingClientRect();
+  } catch {
+    return null;
+  }
+  if (rect.width === 0 && rect.height === 0) return null;
+  return { text, rect };
 }
 
 function handleSelectionChange(): void {
   window.clearTimeout(debounceTimer);
   debounceTimer = window.setTimeout(() => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
-    const text = sel.toString().trim();
-    if (text.length === 0) return;
-
-    // Ignore selections inside the transient card or any pinned card.
-    if (sel.anchorNode) {
-      if (tHost && tHost.contains(sel.anchorNode)) return;
-      for (const pin of pins) {
-        if (pin.host.contains(sel.anchorNode)) return;
-      }
-    }
-
-    let rect: DOMRect;
-    try {
-      rect = sel.getRangeAt(0).getBoundingClientRect();
-    } catch {
-      return;
-    }
-    if (rect.width === 0 && rect.height === 0) return;
-    showForSelection(rect, text);
+    const got = readSelection();
+    if (!got) return;
+    showForSelection(got.rect, got.text);
   }, DEBOUNCE_MS);
 }
 

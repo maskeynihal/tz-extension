@@ -11,6 +11,9 @@ const prefs: Preferences = {
   homeZone: 'UTC',
   targetZones: ['UTC', 'Asia/Kathmandu'],
   hour12: false,
+  dateOnlyPolicy: 'midnight',
+  keepSelection: true,
+  customFormats: [],
 };
 
 describe('EpochTab', () => {

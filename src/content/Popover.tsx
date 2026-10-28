@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ParsedTime, Preferences } from '../types';
+import type { DateOnlyPolicy, ParsedTime, Preferences } from '../types';
+import { resolveLocalZone } from '../types';
 import { viewInZone, listTimeZones, isValidZone } from '../lib/tz';
 
 export interface PopoverProps {
@@ -11,7 +12,16 @@ export interface PopoverProps {
   /** Pin a transient card. Absent on an already-pinned card. */
   readonly onPin?: () => void;
   readonly onClose: () => void;
+  /** Start dragging the card from the header. Provided by the host. */
+  readonly onDragStart?: (e: React.PointerEvent) => void;
+  /**
+   * Re-resolve the instant when the user flips the date-only time policy on a
+   * date that carried no time. Host re-parses and re-renders.
+   */
+  readonly onDateOnlyPolicy?: (policy: DateOnlyPolicy) => void;
 }
+
+const LOCAL_ZONE = resolveLocalZone();
 
 const STYLE = `
 :host { all: initial; }
@@ -26,15 +36,17 @@ const STYLE = `
   border-radius: 10px;
   box-shadow: 0 8px 28px rgba(0,0,0,0.18);
   padding: 10px 12px;
-  min-width: 248px;
-  max-width: 340px;
+  min-width: 272px;
+  max-width: 360px;
 }
 .tzx-card.pinned { border-color: #2563eb; box-shadow: 0 6px 20px rgba(37,99,235,0.28); }
 .tzx-head {
   display: flex; justify-content: space-between; align-items: center;
-  gap: 8px; margin-bottom: 8px;
+  gap: 8px; margin-bottom: 8px; cursor: grab; user-select: none;
 }
+.tzx-head:active { cursor: grabbing; }
 .tzx-title { font-weight: 600; font-size: 12px; opacity: 0.7; display: flex; align-items: center; gap: 6px; }
+.tzx-grip { opacity: 0.4; font-size: 12px; }
 .tzx-pindot { color: #2563eb; font-size: 11px; }
 .tzx-actions { display: flex; align-items: center; gap: 2px; }
 .tzx-btn {
@@ -44,14 +56,18 @@ const STYLE = `
 .tzx-btn:hover { opacity: 1; background: rgba(0,0,0,0.06); }
 .tzx-btn.active { opacity: 1; color: #2563eb; }
 .tzx-src {
-  font-size: 11px; opacity: 0.65; margin-bottom: 8px;
+  font-size: 11px; opacity: 0.7; margin-bottom: 8px;
   padding-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.08);
   word-break: break-word;
 }
 .tzx-assumed { color: #b45309; font-weight: 600; }
+.tzx-dateonly { margin-top: 6px; display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.tzx-dateonly select { font: inherit; font-size: 11px; padding: 1px 4px; border-radius: 5px; border: 1px solid rgba(0,0,0,0.18); background: #fff; color: inherit; }
 .tzx-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 3px 0; }
+.tzx-row.local .tzx-zone { text-decoration: underline; text-decoration-color: #2563eb; text-underline-offset: 2px; font-weight: 600; }
 .tzx-zonewrap { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.tzx-zone { opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tzx-zone { opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tzx-localtag { font-size: 9px; font-weight: 700; color: #2563eb; border: 1px solid #2563eb; border-radius: 4px; padding: 0 3px; letter-spacing: 0.03em; }
 .tzx-del { border: none; background: transparent; cursor: pointer; color: inherit; opacity: 0.35; font-size: 12px; padding: 0 2px; line-height: 1; }
 .tzx-del:hover { opacity: 0.9; color: #dc2626; }
 .tzx-val { text-align: right; white-space: nowrap; }
@@ -59,9 +75,7 @@ const STYLE = `
 .tzx-time { font-variant-numeric: tabular-nums; font-weight: 600; }
 .tzx-off { opacity: 0.5; font-size: 11px; margin-left: 4px; }
 .tzx-more { font-size: 11px; opacity: 0.55; margin-top: 6px; }
-.tzx-add {
-  margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.08);
-}
+.tzx-add { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.08); }
 .tzx-select {
   width: 100%; font: inherit; font-size: 12px; padding: 5px 6px;
   border-radius: 6px; border: 1px solid rgba(0,0,0,0.18);
@@ -72,7 +86,9 @@ const STYLE = `
   .tzx-src, .tzx-add { border-color: rgba(255,255,255,0.1); }
   .tzx-assumed { color: #fbbf24; }
   .tzx-btn:hover { background: rgba(255,255,255,0.08); }
-  .tzx-select { background: #1f1f23; border-color: rgba(255,255,255,0.18); }
+  .tzx-select, .tzx-dateonly select { background: #1f1f23; border-color: rgba(255,255,255,0.18); }
+  .tzx-localtag { color: #60a5fa; border-color: #60a5fa; }
+  .tzx-row.local .tzx-zone { text-decoration-color: #60a5fa; }
 }
 `;
 
@@ -83,17 +99,23 @@ export function Popover({
   pinned,
   onPin,
   onClose,
+  onDragStart,
+  onDateOnlyPolicy,
 }: PopoverProps): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
 
-  // Per-card zone list, seeded from preferences. Editable without touching
-  // global prefs so each pinned card can compare its own set of zones.
-  const [zones, setZones] = useState<string[]>(() => [...prefs.targetZones]);
+  const [zones, setZones] = useState<string[]>(() => {
+    // Ensure the local zone is shown so its "Local" tag is visible.
+    const base = [...prefs.targetZones];
+    if (isValidZone(LOCAL_ZONE) && !base.includes(LOCAL_ZONE)) base.unshift(LOCAL_ZONE);
+    return base;
+  });
   const allZones = useMemo(() => listTimeZones(), []);
 
   useEffect(() => {
-    if (!pinned) ref.current?.focus();
-  }, [pinned]);
+    // Only steal focus when the user did NOT ask to keep the page selection.
+    if (!pinned && !prefs.keepSelection) ref.current?.focus();
+  }, [pinned, prefs.keepSelection]);
 
   const sourceLabel = parsed.assumed
     ? `${parsed.assumedZone} (assumed)`
@@ -116,8 +138,13 @@ export function Popover({
       ref={ref}
     >
       <style>{STYLE}</style>
-      <div className="tzx-head">
+      <div
+        className="tzx-head"
+        onPointerDown={onDragStart}
+        title="Drag to move"
+      >
         <span className="tzx-title">
+          <span className="tzx-grip" aria-hidden>⋮⋮</span>
           TZ Converter{pinned && <span className="tzx-pindot" title="Pinned">📌</span>}
         </span>
         <div className="tzx-actions">
@@ -125,7 +152,7 @@ export function Popover({
             <button
               className="tzx-btn"
               aria-label="Pin to page"
-              title="Pin to page — stays until you close it"
+              title="Pin / stick to page — stays until you close it"
               onClick={onPin}
             >
               📌
@@ -144,14 +171,29 @@ export function Popover({
           read as{' '}
           <span className={parsed.assumed ? 'tzx-assumed' : undefined}>{sourceLabel}</span>
         </span>
+        {parsed.dateOnly && onDateOnlyPolicy && (
+          <div className="tzx-dateonly">
+            <span>date only — time:</span>
+            <select
+              aria-label="Date-only time policy"
+              value={prefs.dateOnlyPolicy}
+              onChange={(e) => onDateOnlyPolicy(e.target.value as DateOnlyPolicy)}
+            >
+              <option value="midnight">midnight (00:00)</option>
+              <option value="now">current time</option>
+            </select>
+          </div>
+        )}
       </div>
 
       {zones.map((zone) => {
         const v = viewInZone(parsed.epochMs, zone, prefs.hour12);
+        const isLocal = zone === LOCAL_ZONE;
         return (
-          <div className="tzx-row" key={zone}>
+          <div className={`tzx-row${isLocal ? ' local' : ''}`} key={zone}>
             <span className="tzx-zonewrap">
               <span className="tzx-zone" title={zone}>{zone}</span>
+              {isLocal && <span className="tzx-localtag" title="Your local timezone">LOCAL</span>}
               <button
                 className="tzx-del"
                 aria-label={`Remove ${zone}`}
