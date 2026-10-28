@@ -8,9 +8,11 @@ No install needed to try it — the [online converter](https://maskeynihal.githu
 
 ## Demo
 
-https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/launch.mp4
+A real walkthrough of every feature, in an actual browser:
 
-<sub>A 20-second tour. If the player doesn't load, [download the MP4](https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/launch.mp4).</sub>
+https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/demo-real.mp4
+
+<sub>Can't see the player? <a href="https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/demo-real.mp4">Download the demo</a> · or watch the <a href="https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/launch.mp4">20-second montage</a>.</sub>
 
 | Select to convert | Full converter |
 |---|---|
