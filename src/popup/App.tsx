@@ -45,6 +45,14 @@ export function App(): JSX.Element {
     void savePreferences(next);
   }
 
+  function cycleTheme(): void {
+    const order: Preferences['theme'][] = ['system', 'light', 'dark'];
+    const i = order.indexOf(prefs.theme);
+    const next: Preferences = { ...prefs, theme: order[(i + 1) % order.length] ?? 'system' };
+    setPrefs(next);
+    void savePreferences(next);
+  }
+
   function updatePrefs(next: Preferences): void {
     setPrefs(next);
     void savePreferences(next);
@@ -78,6 +86,15 @@ export function App(): JSX.Element {
           </button>
         </div>
         <div className="tzx-head-actions">
+          <button
+            type="button"
+            className="tzx-icon-btn"
+            aria-label={`Theme: ${prefs.theme}. Click to change.`}
+            title={`Theme: ${prefs.theme === 'system' ? 'System' : prefs.theme === 'light' ? 'Light' : 'Dark'} (click to cycle)`}
+            onClick={cycleTheme}
+          >
+            {prefs.theme === 'system' ? '◐' : prefs.theme === 'light' ? '☀' : '☾'}
+          </button>
           <button
             type="button"
             className="tzx-chip"
