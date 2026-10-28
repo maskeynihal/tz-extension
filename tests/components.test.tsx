@@ -13,6 +13,7 @@ const prefs: Preferences = {
   hour12: false,
   dateOnlyPolicy: 'midnight',
   keepSelection: true,
+  theme: 'system',
   customFormats: [],
 };
 

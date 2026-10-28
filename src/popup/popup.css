@@ -74,6 +74,17 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 .tzx-btn:hover, .tzx-chip:hover, .tzx-icon-btn:hover { border-color: var(--tz-border-brand); background: var(--tz-surface-raised); }
 .tzx-chip-on, .tzx-chip.tzx-chip-on { background: var(--tz-brand); color: #fff; border-color: var(--tz-brand); }
 .tzx-icon-btn { padding: 7px 9px; }
+
+/* Segmented control (e.g. theme chooser): flush buttons sharing one border. */
+.tzx-segment { display: inline-flex; border: 1px solid var(--border); border-radius: var(--tz-radius-md); overflow: hidden; }
+.tzx-seg-btn {
+  border: none; background: var(--bg); color: var(--fg);
+  padding: 7px 14px; font-size: var(--tz-fs-sm); font-weight: var(--tz-fw-medium);
+  cursor: pointer; white-space: nowrap; transition: background 0.12s, color 0.12s;
+}
+.tzx-seg-btn + .tzx-seg-btn { border-left: 1px solid var(--border); }
+.tzx-seg-btn:hover { background: var(--tz-surface-raised); }
+.tzx-seg-btn.active { background: var(--tz-brand); color: #fff; }
 .tzx-unit-toggle { display: flex; gap: 4px; margin-top: 6px; }
 
 .tzx-picker { position: relative; }

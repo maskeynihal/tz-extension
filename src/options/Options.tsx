@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_PREFERENCES, type CustomFormat, type Preferences } from '../types';
 import { loadPreferences, savePreferences } from '../lib/storage';
+import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { viewInZone } from '../lib/tz';
 import { compileTokenPattern, compileAdvancedPattern, parseCustom } from '../lib/custom-formats';
 import { ZonePicker } from '../popup/ZonePicker';
@@ -24,6 +25,13 @@ export function Options(): JSX.Element {
       window.clearInterval(t);
     };
   }, []);
+
+  // Paint the chosen theme; when following the OS, re-apply on OS flips.
+  useEffect(() => {
+    applyThemeToDocument(prefs.theme);
+    if (prefs.theme !== 'system') return;
+    return watchSystemTheme(() => applyThemeToDocument('system'));
+  }, [prefs.theme]);
 
   function update(next: Preferences): void {
     setPrefs(next);
@@ -79,6 +87,27 @@ export function Options(): JSX.Element {
         >
           {prefs.hour12 ? '12-hour' : '24-hour'}
         </button>
+      </section>
+
+      <section className="tzx-field">
+        <span className="tzx-field-label">Appearance</span>
+        <div className="tzx-segment" role="group" aria-label="Theme">
+          {(['system', 'light', 'dark'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`tzx-seg-btn${prefs.theme === t ? ' active' : ''}`}
+              aria-pressed={prefs.theme === t}
+              onClick={() => update({ ...prefs, theme: t })}
+            >
+              {t === 'system' ? 'System' : t === 'light' ? 'Light' : 'Dark'}
+            </button>
+          ))}
+        </div>
+        <p className="tzx-hint">
+          System follows your OS setting. Light or Dark forces that theme
+          everywhere — the popup, this page, and the in-page converter.
+        </p>
       </section>
 
       <section className="tzx-field">

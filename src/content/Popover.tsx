@@ -101,24 +101,42 @@ const STYLE = `
   background: #fff; color: #24262e; cursor: pointer;
 }
 @media (prefers-color-scheme: dark) {
-  .tzx-card { color: #e7e8ec; background: #121318; border-color: #2a2c33; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-  .tzx-card.pinned { border-color: #8989dd; }
-  .tzx-title { color: #787b85; }
-  .tzx-grip { color: #5f6169; }
-  .tzx-pindot { color: #9d9dea; }
-  .tzx-btn { color: #a0a3ac; }
-  .tzx-btn:hover { background: #22242b; color: #f3f4f6; }
-  .tzx-btn.active { color: #9d9dea; }
-  .tzx-src, .tzx-add { border-color: #2a2c33; color: #a0a3ac; }
-  .tzx-row + .tzx-row { border-color: #22242b; }
-  .tzx-zone { color: #a0a3ac; }
-  .tzx-date, .tzx-off, .tzx-more { color: #787b85; }
-  .tzx-time { color: #f3f4f6; }
-  .tzx-assumed { color: #fb923c; }
-  .tzx-select, .tzx-dateonly select { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
-  .tzx-localtag { color: #c7c7f5; background: #2a2a5a; }
-  .tzx-row.local .tzx-zone { text-decoration-color: #8989dd; color: #f3f4f6; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-card { color: #e7e8ec; background: #121318; border-color: #2a2c33; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-card.pinned { border-color: #8989dd; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-title { color: #787b85; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-grip { color: #5f6169; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-pindot { color: #9d9dea; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-btn { color: #a0a3ac; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-btn:hover { background: #22242b; color: #f3f4f6; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-btn.active { color: #9d9dea; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-src, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-add { border-color: #2a2c33; color: #a0a3ac; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-row + .tzx-row { border-color: #22242b; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-zone { color: #a0a3ac; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-date, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-off, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-more { color: #787b85; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-time { color: #f3f4f6; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-assumed { color: #fb923c; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-select, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-dateonly select { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-localtag { color: #c7c7f5; background: #2a2a5a; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-row.local .tzx-zone { text-decoration-color: #8989dd; color: #f3f4f6; }
 }
+/* Explicit dark override (user chose Dark), independent of the OS setting. */
+:host([data-tz-theme='dark']) .tzx-card { color: #e7e8ec; background: #121318; border-color: #2a2c33; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+:host([data-tz-theme='dark']) .tzx-card.pinned { border-color: #8989dd; }
+:host([data-tz-theme='dark']) .tzx-title { color: #787b85; }
+:host([data-tz-theme='dark']) .tzx-grip { color: #5f6169; }
+:host([data-tz-theme='dark']) .tzx-pindot { color: #9d9dea; }
+:host([data-tz-theme='dark']) .tzx-btn { color: #a0a3ac; }
+:host([data-tz-theme='dark']) .tzx-btn:hover { background: #22242b; color: #f3f4f6; }
+:host([data-tz-theme='dark']) .tzx-btn.active { color: #9d9dea; }
+:host([data-tz-theme='dark']) .tzx-src, :host([data-tz-theme='dark']) .tzx-add { border-color: #2a2c33; color: #a0a3ac; }
+:host([data-tz-theme='dark']) .tzx-row + .tzx-row { border-color: #22242b; }
+:host([data-tz-theme='dark']) .tzx-zone { color: #a0a3ac; }
+:host([data-tz-theme='dark']) .tzx-date, :host([data-tz-theme='dark']) .tzx-off, :host([data-tz-theme='dark']) .tzx-more { color: #787b85; }
+:host([data-tz-theme='dark']) .tzx-time { color: #f3f4f6; }
+:host([data-tz-theme='dark']) .tzx-assumed { color: #fb923c; }
+:host([data-tz-theme='dark']) .tzx-select, :host([data-tz-theme='dark']) .tzx-dateonly select { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
+:host([data-tz-theme='dark']) .tzx-localtag { color: #c7c7f5; background: #2a2a5a; }
+:host([data-tz-theme='dark']) .tzx-row.local .tzx-zone { text-decoration-color: #8989dd; color: #f3f4f6; }
 `;
 
 export function Popover({

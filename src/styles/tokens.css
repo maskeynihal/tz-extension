@@ -80,8 +80,42 @@
   --tz-space-8: 24px;
 }
 
+/* Dark palette. Applied in two ways:
+ *   1. [data-theme="dark"] — the user explicitly chose Dark.
+ *   2. prefers-color-scheme: dark — only when no explicit theme is set
+ *      (data-theme is absent or "system"), so an explicit Light choice on a
+ *      dark OS still shows light.
+ */
+:root[data-theme='dark'] {
+  --tz-surface: #121318;
+  --tz-surface-raised: #1b1d24;
+  --tz-surface-sunken: #16171c;
+  --tz-border: #2a2c33;
+  --tz-border-medium: #33353d;
+  --tz-border-brand: #3a3a7a;
+
+  --tz-heading: #f3f4f6;
+  --tz-body: #e7e8ec;
+  --tz-body-subtle: #a0a3ac;
+  --tz-muted: #787b85;
+
+  --tz-brand: #8989dd;
+  --tz-brand-strong: #a9a9ec;
+  --tz-brand-soft: #2e2e6e;
+  --tz-brand-softer: #1a1a52;
+
+  --tz-success: #4ade80;
+  --tz-success-soft: #0f2a1a;
+  --tz-danger: #fb7185;
+  --tz-danger-soft: #2a1115;
+  --tz-warning: #fb923c;
+  --tz-warning-soft: #2a1e0f;
+
+  --tz-shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']):not([data-theme='dark']) {
     --tz-surface: #121318;
     --tz-surface-raised: #1b1d24;
     --tz-surface-sunken: #16171c;

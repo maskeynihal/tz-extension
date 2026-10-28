@@ -50,6 +50,11 @@ export function sanitize(input: unknown): Preferences {
   const keepSelection =
     typeof obj.keepSelection === 'boolean' ? obj.keepSelection : base.keepSelection;
 
+  const theme =
+    obj.theme === 'light' || obj.theme === 'dark' || obj.theme === 'system'
+      ? obj.theme
+      : base.theme;
+
   let customFormats = base.customFormats;
   if (Array.isArray(obj.customFormats)) {
     customFormats = obj.customFormats
@@ -65,7 +70,7 @@ export function sanitize(input: unknown): Preferences {
       .slice(0, 50);
   }
 
-  return { homeZone, targetZones, hour12, dateOnlyPolicy, keepSelection, customFormats };
+  return { homeZone, targetZones, hour12, dateOnlyPolicy, keepSelection, theme, customFormats };
 }
 
 export async function loadPreferences(): Promise<Preferences> {
