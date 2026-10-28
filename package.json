@@ -1,6 +1,6 @@
 {
   "name": "tz-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser extension for timezone conversion: select-to-convert, full converter, epoch converter.",
   "type": "module",
   "private": true,
