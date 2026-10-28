@@ -25,6 +25,20 @@ describe('parseTimes — ISO', () => {
     // 15:04 Kathmandu -> 09:19 UTC
     expect(toIsoUtc(r!.epochMs)).toBe('2024-01-02T09:19:00.000Z');
   });
+
+  it('bare ISO calendar date (no time) -> midnight in assumed zone', () => {
+    const [r] = parseTimes('see you 2024-01-02', Z);
+    expect(r).toBeDefined();
+    expect(r!.kind).toBe('date-no-tz');
+    expect(r!.assumed).toBe(true);
+    expect(toIsoUtc(r!.epochMs)).toBe('2024-01-02T00:00:00.000Z');
+  });
+
+  it('bare ISO date -> midnight is zone-relative', () => {
+    const [r] = parseTimes('2024-01-02', 'Asia/Kathmandu');
+    // midnight Kathmandu (+05:45) is 18:15 the previous day UTC
+    expect(toIsoUtc(r!.epochMs)).toBe('2024-01-01T18:15:00.000Z');
+  });
 });
 
 describe('parseTimes — epoch', () => {

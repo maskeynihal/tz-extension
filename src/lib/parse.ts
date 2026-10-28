@@ -82,8 +82,11 @@ function assumedIn(
 
 // --- Regex building blocks -------------------------------------------------
 
+// Date is required; the time portion is optional. A bare calendar date
+// ("2024-01-02") parses as midnight in the assumed zone. When a time is
+// present a zone/offset may follow it.
 const RE_ISO =
-  /\b(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?\s*(Z|[+-]\d{2}:?\d{2})?/;
+  /\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?\s*(Z|[+-]\d{2}:?\d{2})?)?/;
 
 const RE_DATE_SLASH =
   /\b(\d{4})\/(\d{2})\/(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\b/;
@@ -157,20 +160,24 @@ export function parseTimes(text: string, assumedZone: string): ParsedTime[] {
     }
   }
 
-  // 2) ISO-8601.
+  // 2) ISO-8601 (date required, time optional -> midnight).
   const iso = RE_ISO.exec(src);
   if (iso) {
     const [, y, mo, d, h, mi, s, zone] = iso;
+    const hh = h ?? '00';
+    const mm = mi ?? '00';
     const sec = s ?? '00';
-    const base = `${y}-${mo}-${d}T${h}:${mi}:${sec}`;
+    const base = `${y}-${mo}-${d}T${hh}:${mm}:${sec}`;
+    const kindTz: ParseKind = h !== undefined ? 'iso' : 'date-no-tz';
+    const kindNoTz: ParseKind = h !== undefined ? 'iso-no-tz' : 'date-no-tz';
     if (zone) {
       const off = zone === 'Z' ? '+00:00' : normalizeOffsetToken(zone.replace(':', '').replace(/(\d{2})(\d{2})$/, '$1:$2')) ?? '+00:00';
       const epochMs = Date.parse(`${base}${off}`);
       if (Number.isFinite(epochMs)) {
-        results.push(zoned(epochMs, iso[0], off === '+00:00' && zone === 'Z' ? 'UTC' : off, assumedZone, 'iso'));
+        results.push(zoned(epochMs, iso[0], off === '+00:00' && zone === 'Z' ? 'UTC' : off, assumedZone, kindTz));
       }
     } else {
-      const r = assumedIn(base, iso[0], assumedZone, 'iso-no-tz');
+      const r = assumedIn(base, iso[0], assumedZone, kindNoTz);
       if (r) results.push(r);
     }
   }

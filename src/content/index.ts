@@ -67,10 +67,12 @@ function position(hostEl: HTMLDivElement, rect: DOMRect): void {
   }
   left = Math.max(margin, left);
 
-  hostEl.style.position = 'fixed';
-  hostEl.style.top = `${top}px`;
-  hostEl.style.left = `${left}px`;
-  hostEl.style.zIndex = '2147483647';
+  hostEl.style.setProperty('position', 'fixed', 'important');
+  hostEl.style.setProperty('top', `${top}px`, 'important');
+  hostEl.style.setProperty('left', `${left}px`, 'important');
+  hostEl.style.setProperty('margin', '0', 'important');
+  hostEl.style.setProperty('padding', '0', 'important');
+  hostEl.style.setProperty('z-index', '2147483647', 'important');
 }
 
 function showPopover(rect: DOMRect, text: string): void {

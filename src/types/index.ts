@@ -24,6 +24,7 @@ export type ParseKind =
   | 'epoch-millis'
   | 'time-of-day'
   | 'datetime-no-tz'
+  | 'date-no-tz'
   | 'rfc-like'
   | 'offset'
   | 'named-offset';
