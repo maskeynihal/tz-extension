@@ -105,6 +105,9 @@
       .demo-time { font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
       .demo-off { font-size: 13px; color: var(--muted); }
       .demo-select { width: 100%; margin-top: 12px; font: inherit; font-size: 15px; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); cursor: pointer; }
+      .cta-card { padding: 40px; text-align: center; background: linear-gradient(180deg, var(--raised), var(--sunken)); }
+      .cta-h { font-size: clamp(24px, 3.4vw, 32px); font-weight: 800; max-width: 22ch; margin: 10px auto 14px; }
+      .cta-p { font-size: 17px; color: var(--body); max-width: 56ch; margin: 0 auto 24px; }
 
       /* FEATURES */
       .section { padding: 72px 0; border-top: 1px solid var(--border); }
@@ -138,7 +141,7 @@
       <div class="wrap nav-inner">
         <a class="brand" href="#top"><span class="dot">TZ</span> TZ Converter</a>
         <nav class="nav-links">
-          <a href="#demo">Try it</a>
+          <a href="./app.html">Converter</a>
           <a href="#features">Features</a>
           <a href="#install">Install</a>
           <a class="btn primary" href="#install">Add to browser</a>
@@ -158,7 +161,7 @@
           </p>
           <div class="hero-cta">
             <a class="btn primary" href="#install">Add to your browser</a>
-            <a class="btn" href="#demo">Try the live demo ↓</a>
+            <a class="btn" href="./app.html">Open the converter →</a>
           </div>
           <p class="hero-note">Free and open source · <a href="https://github.com/maskeynihal/tz-extension">View on GitHub</a></p>
         </div>
@@ -166,9 +169,13 @@
 
       <section class="demo-section" id="demo">
         <div class="wrap">
-          <p class="demo-label">Live demo — the real conversion engine the extension ships</p>
-          <div class="demo-card">
-            <div id="demo-app"></div>
+          <div class="demo-card cta-card">
+            <div class="cta-copy">
+              <p class="demo-label">Prefer a web app? No install needed.</p>
+              <h2 class="cta-h">A full timezone converter, right in your browser.</h2>
+              <p class="cta-p">Paste an epoch, an ISO string, or a written date and read it across every zone — powered by the exact engine the extension ships.</p>
+              <a class="btn primary" href="./app.html">Open the converter →</a>
+            </div>
           </div>
         </div>
       </section>
@@ -231,6 +238,5 @@
       </div>
     </footer>
 
-    <script type="module" src="./demo.js"></script>
   </body>
 </html>

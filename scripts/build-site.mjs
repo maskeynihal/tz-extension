@@ -25,7 +25,8 @@ await build({
 });
 
 copyFileSync(resolve(siteDir, 'index.html'), resolve(outDir, 'index.html'));
+copyFileSync(resolve(siteDir, 'app.html'), resolve(outDir, 'app.html'));
 // GitHub Pages: skip Jekyll so files/underscores are served verbatim.
 writeFileSync(resolve(outDir, '.nojekyll'), '');
 
-console.log('[site] built to docs/ (index.html + demo.js)');
+console.log('[site] built to docs/ (index.html + app.html + demo.js)');
