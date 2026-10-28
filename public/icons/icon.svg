@@ -1,0 +1,35 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TZ Converter icon">
+  <!-- Brand tile: indigo, near-square with a soft radius (Atlas language). -->
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#1313ba"/>
+  <!-- Subtle top highlight for a flat-but-not-dead surface. -->
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#sheen)"/>
+
+  <!-- Clock face: a single clean dial, the product's core metaphor. -->
+  <circle cx="64" cy="64" r="37" fill="#ffffff"/>
+
+  <!-- Hour ticks at 12/3/6/9 — enough structure to read as a clock, not noise. -->
+  <g fill="#cacaf0">
+    <rect x="62" y="31" width="4" height="9" rx="2"/>
+    <rect x="88" y="62" width="9" height="4" rx="2"/>
+    <rect x="62" y="88" width="4" height="9" rx="2"/>
+    <rect x="31" y="62" width="9" height="4" rx="2"/>
+  </g>
+
+  <!-- Hands: hour to ~10, minute to ~2, forming the recognizable "V" of the
+       original mark but balanced and readable down to 16px. -->
+  <g stroke="#1313ba" stroke-linecap="round" fill="none">
+    <!-- hour hand -->
+    <line x1="64" y1="64" x2="47" y2="52" stroke-width="7"/>
+    <!-- minute hand -->
+    <line x1="64" y1="64" x2="82" y2="50" stroke-width="7"/>
+  </g>
+  <!-- Center cap. -->
+  <circle cx="64" cy="64" r="5.5" fill="#1313ba"/>
+
+  <defs>
+    <linearGradient id="sheen" x1="64" y1="4" x2="64" y2="124" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+</svg>
