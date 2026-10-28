@@ -106,3 +106,44 @@ AMO requires source for add-ons built with a bundler/minifier. Point the "source
 code" field at the public repo (https://github.com/maskeynihal/tz-extension) or
 upload a source zip. Build command: `npm ci && npm run zip:firefox` produces
 `tz-extension-firefox.zip`.
+
+## Source-code submission answer (build tools)
+
+AMO asks: do you use code generators/minifiers, file-combining tools (webpack),
+template engines, or any processing that generates the shipped code? **Yes.**
+
+Tools used:
+- **Vite 5.4.11** + **@crxjs/vite-plugin 2.0.0** — bundles the TypeScript/React
+  source and CSS into the shipped `assets/*.js` and `.css` files (file combiner,
+  like webpack).
+- **esbuild 0.21.5** — Vite's default minifier; minifies the JavaScript.
+- **TypeScript 5.6.3** — compiles `.ts`/`.tsx` to JavaScript (code generator).
+- **@vitejs/plugin-react 4.3.3** — transforms JSX to JavaScript.
+- No HTML/CSS template engine. CSS is plain CSS (with a design-token file),
+  concatenated by the bundler.
+
+Build instructions to paste in AMO's "how to build" field:
+
+```
+Requirements: Node.js 20+ (package.json engines: node >=20; built with 20.x /
+24.x) and npm. A package-lock.json is committed for exact dependency versions.
+
+1. Unzip the source archive, or clone:
+   git clone https://github.com/maskeynihal/tz-extension
+2. Install the exact dependencies:
+   npm ci
+3. Build the Firefox add-on:
+   npm run zip:firefox
+
+This runs, in order: a TypeScript type-check (tsc --noEmit), a Vite production
+build with TARGET=firefox, then scripts/firefox-manifest.mjs (which rewrites the
+manifest into Firefox MV3 shape: background.scripts, the gecko id and
+strict_min_version, data_collection_permissions "none", and strips the
+Chrome-only use_dynamic_url key), then zips dist-firefox/ into
+tz-extension-firefox.zip (source maps and dotfiles excluded).
+
+All build configuration lives in the repository: package.json, vite.config.ts,
+src/manifest.ts, and scripts/firefox-manifest.mjs. No build step fetches remote
+code; everything comes from the pinned npm dependencies.
+```
+

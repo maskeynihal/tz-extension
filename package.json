@@ -4,6 +4,9 @@
   "description": "Browser extension for timezone conversion: select-to-convert, full converter, epoch converter.",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/maskeynihal/tz-extension"
