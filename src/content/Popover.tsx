@@ -11,6 +11,10 @@ export interface PopoverProps {
   readonly pinned: boolean;
   /** Compact pinned card: only the converted rows, no header text / add box. */
   readonly compact?: boolean;
+  /** This pin's number (1-based) — shown as a colored badge tying card to highlight. */
+  readonly pinNumber?: number;
+  /** This pin's highlight color (the dot/badge color matching the on-page mark). */
+  readonly pinDot?: string;
   /** Pin a transient card normally. Absent on an already-pinned card. */
   readonly onPin?: () => void;
   /** Pin a transient card in compact mode. Absent on an already-pinned card. */
@@ -54,6 +58,7 @@ const STYLE = `
 .tzx-title { font-weight: 600; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: #898c96; display: flex; align-items: center; gap: 6px; }
 .tzx-grip { color: #b4b6be; font-size: 12px; }
 .tzx-pindot { color: #1313ba; font-size: 11px; }
+.tzx-pinbadge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; color: #fff; font-size: 12px; font-weight: 800; line-height: 1; }
 .tzx-actions { display: flex; align-items: center; gap: 2px; }
 .tzx-btn {
   border: none; background: transparent; cursor: pointer;
@@ -122,6 +127,8 @@ export function Popover({
   prefs,
   pinned,
   compact = false,
+  pinNumber,
+  pinDot,
   onPin,
   onPinCompact,
   onClose,
@@ -167,7 +174,15 @@ export function Popover({
         <span className="tzx-title">
           <span className="tzx-grip" aria-hidden>⋮⋮</span>
           TZ{compact ? '' : ' Converter'}
-          {pinned && <span className="tzx-pindot" title="Pinned">📌</span>}
+          {pinned && pinNumber !== undefined && (
+            <span
+              className="tzx-pinbadge"
+              title={`Pin #${pinNumber} — matches the highlight of the same color on the page`}
+              style={pinDot ? { background: pinDot } : undefined}
+            >
+              {pinNumber}
+            </span>
+          )}
         </span>
         <div className="tzx-actions">
           {!pinned && onPin && (

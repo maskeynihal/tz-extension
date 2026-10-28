@@ -26,17 +26,39 @@ interface Pin {
   /** Document-space anchor (page coords, not viewport) so it scrolls with content. */
   readonly pageX: number;
   readonly pageY: number;
+  /** Highlight slot index (color + number) this pin owns. */
+  readonly slot: number;
+  /** The highlighted range for this pin, so it can be restored/cleared. */
+  readonly range: Range | null;
 }
 const pins = new Set<Pin>();
+/** Which pin slots are currently in use (one highlight color each). */
+const usedSlots = new Set<number>();
+function nextSlot(): number {
+  let i = 0;
+  while (usedSlots.has(i)) i++;
+  usedSlots.add(i);
+  return i;
+}
 
-// --- Selection highlight --------------------------------------------------
-// Draw a persistent highlight on the matched range using the CSS Custom
-// Highlight API, so the text stays visibly marked even after the native
-// selection is lost (clicking the popover, focus change). No-op where the API
-// or a static stylesheet injection is unavailable.
-const HIGHLIGHT_NAME = 'tz-extension-match';
+// --- Selection highlights -------------------------------------------------
+// Each open card keeps its OWN persistent highlight on its OWN selected text,
+// via the CSS Custom Highlight API. The transient popover uses the amber
+// "live" slot; pinning promotes that mark to a numbered, colored pin slot so
+// several pinned cards can each stay tied to their text. The card header shows
+// the matching number + color, so with many pins you can tell which card maps
+// to which highlight.
+const LIVE_HL = 'tz-extension-match';
+// Colored palette for pinned highlights (bg + readable ink). Index = pin number.
+const PIN_COLORS: ReadonlyArray<{ bg: string; ink: string; dot: string }> = [
+  { bg: 'rgba(250, 204, 21, 0.85)', ink: '#1a1a1a', dot: '#eab308' }, // amber
+  { bg: 'rgba(96, 165, 250, 0.80)', ink: '#0b1220', dot: '#3b82f6' }, // blue
+  { bg: 'rgba(52, 211, 153, 0.80)', ink: '#06231a', dot: '#10b981' }, // green
+  { bg: 'rgba(244, 114, 182, 0.80)', ink: '#2a0a1b', dot: '#ec4899' }, // pink
+  { bg: 'rgba(251, 146, 60, 0.85)', ink: '#2a1206', dot: '#f97316' }, // orange
+  { bg: 'rgba(167, 139, 250, 0.82)', ink: '#160a2e', dot: '#8b5cf6' }, // violet
+];
 let highlightStyleInjected = false;
-let highlightRange: Range | null = null;
 
 interface HighlightRegistry {
   set(name: string, hl: unknown): void;
@@ -50,14 +72,23 @@ function HighlightCtor(): (new (range: Range) => unknown) | null {
   return (globalThis as unknown as { Highlight?: new (r: Range) => unknown }).Highlight ?? null;
 }
 
+/** The color for a given pin slot index (wraps if there are more pins than colors). */
+export function pinColor(slot: number): { bg: string; ink: string; dot: string } {
+  return PIN_COLORS[slot % PIN_COLORS.length] as { bg: string; ink: string; dot: string };
+}
+
 function ensureHighlightStyle(): void {
   if (highlightStyleInjected) return;
   try {
     const style = document.createElement('style');
     style.id = 'tz-extension-highlight-style';
-    // Strong amber marker so it reads on any background once the native
-    // selection is collapsed.
-    style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: rgba(250, 204, 21, 0.85); color: #1a1a1a; }`;
+    // Live (transient) slot = amber; one rule per pin slot in its palette color.
+    const rules = [`::highlight(${LIVE_HL}) { background-color: rgba(250,204,21,0.85); color: #1a1a1a; }`];
+    for (let i = 0; i < PIN_COLORS.length; i++) {
+      const c = PIN_COLORS[i] as { bg: string; ink: string };
+      rules.push(`::highlight(tz-pin-${i}) { background-color: ${c.bg}; color: ${c.ink}; }`);
+    }
+    style.textContent = rules.join('\n');
     (document.head ?? document.documentElement).appendChild(style);
     highlightStyleInjected = true;
   } catch {
@@ -120,17 +151,19 @@ function narrowRangeToToken(range: Range, token: string): Range {
   return range;
 }
 
-function setHighlight(range: Range, token: string): void {
+/** The live (transient) popover's highlight on its selected token. */
+let liveRange: Range | null = null;
+
+function setLiveHighlight(range: Range, token: string): void {
   if (!prefs.keepSelection) return;
   const reg = highlightRegistry();
   const Ctor = HighlightCtor();
   if (!reg || !Ctor) return;
   try {
     ensureHighlightStyle();
-    highlightRange = narrowRangeToToken(range, token).cloneRange();
-    reg.set(HIGHLIGHT_NAME, new Ctor(highlightRange));
-    // Collapse the native selection so our amber marker is the visible one.
-    // Deferred so the current mouseup/selection event finishes first.
+    liveRange = narrowRangeToToken(range, token).cloneRange();
+    reg.set(LIVE_HL, new Ctor(liveRange));
+    // Collapse the native selection so our marker is the visible one.
     window.setTimeout(() => {
       try {
         window.getSelection()?.removeAllRanges();
@@ -139,20 +172,44 @@ function setHighlight(range: Range, token: string): void {
       }
     }, 0);
   } catch {
-    highlightRange = null;
+    liveRange = null;
   }
 }
 
-function clearHighlight(): void {
+function clearLiveHighlight(): void {
   const reg = highlightRegistry();
   if (reg) {
     try {
-      reg.delete(HIGHLIGHT_NAME);
+      reg.delete(LIVE_HL);
     } catch {
       /* ignore */
     }
   }
-  highlightRange = null;
+  liveRange = null;
+}
+
+/** Promote the live range into a numbered pin slot's own colored highlight. */
+function setPinHighlight(slot: number, range: Range | null): void {
+  const reg = highlightRegistry();
+  const Ctor = HighlightCtor();
+  if (!reg || !Ctor || !range) return;
+  try {
+    ensureHighlightStyle();
+    reg.set(`tz-pin-${slot % PIN_COLORS.length}`, new Ctor(range.cloneRange()));
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearPinHighlight(slot: number): void {
+  const reg = highlightRegistry();
+  if (reg) {
+    try {
+      reg.delete(`tz-pin-${slot % PIN_COLORS.length}`);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 void loadPreferences().then((p) => {
@@ -247,9 +304,9 @@ function teardownTransient(): void {
   document.removeEventListener('scroll', onScroll, true);
 }
 
-/** User-facing dismissal: also clears the match highlight. */
+/** User-facing dismissal: also clears the live (transient) highlight. */
 function dismissTransient(): void {
-  clearHighlight();
+  clearLiveHighlight();
   teardownTransient();
 }
 
@@ -327,16 +384,38 @@ function pinCard(
   compact: boolean,
 ): void {
   try {
+    // Allocate this pin's own highlight slot and promote the live highlight to
+    // it, so the selected text stays marked in the pin's own color.
+    const slot = nextSlot();
+    const range = liveRange ? liveRange.cloneRange() : null;
+    setPinHighlight(slot, range);
+    const color = pinColor(slot);
+
     const host = document.createElement('div');
     host.className = PIN_HOST_CLASS;
     const shadow = host.attachShadow({ mode: 'open' });
     const mount = document.createElement('div');
     shadow.appendChild(mount);
     document.body.appendChild(host);
-    positionAbsolute(host, pageX, pageY);
+    // If this pin would land on top of an existing one (values close together
+    // on the page), cascade it down-right so every pinned card stays visible.
+    let px = pageX;
+    let py = pageY;
+    let guard = 0;
+    const tooClose = (): boolean => {
+      for (const p of pins) {
+        if (Math.abs(p.pageX - px) < 48 && Math.abs(p.pageY - py) < 48) return true;
+      }
+      return false;
+    };
+    while (tooClose() && guard++ < 12) {
+      px += 36;
+      py += 36;
+    }
+    positionAbsolute(host, px, py);
 
     const root = createRoot(mount);
-    const pin: Pin = { host, root, pageX, pageY };
+    const pin: Pin = { host, root, pageX: px, pageY: py, slot, range };
     pins.add(pin);
 
     let isCompact = compact;
@@ -348,6 +427,8 @@ function pinCard(
           prefs,
           pinned: true,
           compact: isCompact,
+          pinNumber: slot + 1,
+          pinDot: color.dot,
           onClose: () => removePin(pin),
           onToggleCompact: () => {
             isCompact = !isCompact;
@@ -369,8 +450,9 @@ function pinCard(
     };
     renderPin(parsed, matchCount);
 
-    // The value is pinned; drop the transient card but KEEP the match highlight
-    // so the pinned value stays visibly marked on the page.
+    // The value is pinned in its own slot; drop the transient card and its live
+    // amber highlight (the pin's colored highlight has taken over).
+    clearLiveHighlight();
     teardownTransient();
   } catch {
     /* restricted page — ignore */
@@ -385,9 +467,9 @@ function removePin(pin: Pin): void {
   }
   if (pin.host.parentNode) pin.host.parentNode.removeChild(pin.host);
   pins.delete(pin);
-  // The highlight marks the pinned value; once no pin (and no transient) holds
-  // it, drop the mark so the page returns to normal.
-  if (pins.size === 0 && !tHost) clearHighlight();
+  // Free this pin's highlight slot and clear its colored mark.
+  clearPinHighlight(pin.slot);
+  usedSlots.delete(pin.slot);
 }
 
 // --- Selection handling ---------------------------------------------------
@@ -403,7 +485,7 @@ function showForSelection(rect: DOMRect, text: string, range: Range | null): voi
     teardownTransient();
     return;
   }
-  if (range) setHighlight(range, parsed.matchedText);
+  if (range) setLiveHighlight(range, parsed.matchedText);
   renderTransient(rect, parsed, matches.length, text);
 }
 
