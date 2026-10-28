@@ -1,0 +1,85 @@
+name: Release
+
+# On every merge to main: verify, bump the version from conventional commits,
+# tag, build both browser zips, write funny release notes, and publish a release.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Skip the bot's own release commit so we never loop.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    steps:
+      - name: Checkout (full history for tag/commit analysis)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify (typecheck, lint, test)
+        run: |
+          npm run typecheck
+          npm run lint
+          npm test
+
+      - name: Decide version bump
+        id: bump
+        run: node scripts/version-bump.mjs
+
+      - name: Stop if nothing to release
+        if: ${{ steps.bump.outputs.released != 'true' }}
+        run: echo "No releasable commits since the last tag — exiting."
+
+      - name: Configure git identity
+        if: ${{ steps.bump.outputs.released == 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit version bump and tag
+        if: ${{ steps.bump.outputs.released == 'true' }}
+        run: |
+          git add package.json
+          git commit -m "chore(release): ${{ steps.bump.outputs.tag }} [skip ci]"
+          git tag ${{ steps.bump.outputs.tag }}
+          git push origin HEAD:main
+          git push origin ${{ steps.bump.outputs.tag }}
+
+      - name: Build and package both targets
+        if: ${{ steps.bump.outputs.released == 'true' }}
+        run: |
+          npm run zip:chrome
+          npm run zip:firefox
+
+      - name: Generate funny release notes
+        if: ${{ steps.bump.outputs.released == 'true' }}
+        run: node scripts/release-notes.mjs "${{ steps.bump.outputs.version }}"
+
+      - name: Create GitHub release with both zips
+        if: ${{ steps.bump.outputs.released == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.bump.outputs.tag }}" \
+            tz-extension-chrome.zip \
+            tz-extension-firefox.zip \
+            --title "${{ steps.bump.outputs.tag }}" \
+            --notes-file RELEASE_NOTES.md
