@@ -1,0 +1,1 @@
+Built a browser extension that converts timezones right where you're reading — select any time on a page (epoch, ISO, or plain English) and see it in your zones, no tab-switching, no mental math. Pin cards to compare on one screen. Chrome + Firefox. 🕑
