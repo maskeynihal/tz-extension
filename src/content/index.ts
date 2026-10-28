@@ -55,8 +55,9 @@ function ensureHighlightStyle(): void {
   try {
     const style = document.createElement('style');
     style.id = 'tz-extension-highlight-style';
-    // ::highlight() paints under the normal selection; a soft amber marker.
-    style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: rgba(250, 204, 21, 0.4); color: inherit; }`;
+    // Strong amber marker so it reads on any background once the native
+    // selection is collapsed.
+    style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: rgba(250, 204, 21, 0.85); color: #1a1a1a; }`;
     (document.head ?? document.documentElement).appendChild(style);
     highlightStyleInjected = true;
   } catch {
@@ -64,15 +65,79 @@ function ensureHighlightStyle(): void {
   }
 }
 
-function setHighlight(range: Range): void {
+/**
+ * Narrow a selection range to the matched token. Triple-click selections span
+ * a whole block whose text lives across several child text nodes, so we walk
+ * the text nodes inside the range and anchor to the first one that contains the
+ * token. Falls back to the full range when it cannot be located contiguously.
+ */
+function narrowRangeToToken(range: Range, token: string): Range {
+  if (!token) return range;
+
+  // Fast path: selection is itself a single text node.
+  const sc = range.startContainer;
+  if (sc.nodeType === Node.TEXT_NODE && typeof (sc as Text).data === 'string') {
+    const idx = (sc as Text).data.indexOf(token);
+    if (idx >= 0) {
+      try {
+        const r = document.createRange();
+        r.setStart(sc, idx);
+        r.setEnd(sc, idx + token.length);
+        return r;
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+
+  // General path: walk text nodes intersecting the range.
+  const root =
+    range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+      ? range.commonAncestorContainer.parentNode
+      : range.commonAncestorContainer;
+  if (!root) return range;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) =>
+      range.intersectsNode(n) && (n as Text).data.includes(token)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_SKIP,
+  });
+  const hit = walker.nextNode() as Text | null;
+  if (hit) {
+    const idx = hit.data.indexOf(token);
+    if (idx >= 0) {
+      try {
+        const r = document.createRange();
+        r.setStart(hit, idx);
+        r.setEnd(hit, idx + token.length);
+        return r;
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+  return range;
+}
+
+function setHighlight(range: Range, token: string): void {
   if (!prefs.keepSelection) return;
   const reg = highlightRegistry();
   const Ctor = HighlightCtor();
   if (!reg || !Ctor) return;
   try {
     ensureHighlightStyle();
-    highlightRange = range.cloneRange();
+    highlightRange = narrowRangeToToken(range, token).cloneRange();
     reg.set(HIGHLIGHT_NAME, new Ctor(highlightRange));
+    // Collapse the native selection so our amber marker is the visible one.
+    // Deferred so the current mouseup/selection event finishes first.
+    window.setTimeout(() => {
+      try {
+        window.getSelection()?.removeAllRanges();
+      } catch {
+        /* ignore */
+      }
+    }, 0);
   } catch {
     highlightRange = null;
   }
@@ -334,7 +399,7 @@ function showForSelection(rect: DOMRect, text: string, range: Range | null): voi
     teardownTransient();
     return;
   }
-  if (range) setHighlight(range);
+  if (range) setHighlight(range, parsed.matchedText);
   renderTransient(rect, parsed, matches.length, text);
 }
 
