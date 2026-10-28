@@ -108,6 +108,9 @@
       .cta-card { padding: 40px; text-align: center; background: linear-gradient(180deg, var(--raised), var(--sunken)); }
       .cta-h { font-size: clamp(24px, 3.4vw, 32px); font-weight: 800; max-width: 22ch; margin: 10px auto 14px; }
       .cta-p { font-size: 17px; color: var(--body); max-width: 56ch; margin: 0 auto 24px; }
+      .video-section { padding: 8px 0 8px; }
+      .video-frame { border: 1px solid var(--border); border-radius: 16px; overflow: hidden; background: #000; box-shadow: 0 24px 60px -40px rgba(20,24,40,0.6); }
+      .video-frame video { display: block; width: 100%; height: auto; }
 
       /* FEATURES */
       .section { padding: 72px 0; border-top: 1px solid var(--border); }
@@ -164,6 +167,14 @@
             <a class="btn" href="./app.html">Open the converter →</a>
           </div>
           <p class="hero-note">Free and open source · <a href="https://github.com/maskeynihal/tz-extension">View on GitHub</a></p>
+        </div>
+      </section>
+
+      <section class="video-section">
+        <div class="wrap">
+          <div class="video-frame">
+            <video src="./assets/launch.mp4" controls playsinline preload="metadata" poster="./assets/select-to-convert.png" aria-label="TZ Converter launch video"></video>
+          </div>
         </div>
       </section>
 
