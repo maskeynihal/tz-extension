@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      :root {
+        --ground: #0f1115;
+        --ink: #f3f4f6;
+        --ink-body: #c9cbd2;
+        --muted: #898c96;
+        --accent: #6f6fe6;
+        --accent-strong: #9d9dea;
+        --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--ground); font-family: var(--font-display); -webkit-font-smoothing: antialiased; }
+      #root { width: 100%; height: 100%; position: relative; background: var(--ground); }
+      .scene { position: absolute; inset: 0; }
+      .center { display: flex; align-items: center; justify-content: center; flex-direction: column; }
+
+      /* real screenshots */
+      .shot { position: absolute; border-radius: 16px; box-shadow: 0 30px 80px rgba(0,0,0,0.6); }
+      .shot.framed { border: 1px solid #2a2c33; }
+
+      .kicker { font-size: 30px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+      .headline { font-size: 60px; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; text-align: center; line-height: 1.12; }
+      .headline .hl { color: var(--accent-strong); }
+      .sub { font-size: 34px; color: var(--ink-body); font-weight: 500; text-align: center; margin-top: 18px; }
+      .logo { font-size: 92px; font-weight: 800; color: var(--ink); letter-spacing: -0.03em; }
+      .logo .mark { color: var(--accent-strong); }
+      .tagline { font-size: 40px; color: var(--ink-body); font-weight: 500; margin-top: 18px; text-align: center; }
+      .install { font-size: 28px; color: var(--muted); margin-top: 34px; letter-spacing: 0.02em; }
+      .caption { position: absolute; left: 0; right: 0; bottom: 110px; text-align: center; }
+      .caption .big { font-size: 46px; font-weight: 800; color: var(--ink); letter-spacing: -0.01em; }
+      .caption .small { font-size: 28px; color: var(--muted); margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="20" data-width="1920" data-height="1080" data-track-kind="graphics">
+
+      <!-- SCENE 1 (0–5): the hook — real content popover on a page -->
+      <div class="scene" id="s1" data-track-index="0">
+        <img class="shot framed" id="s1shot" src="assets/shots/content-popover.png" style="left: 560px; top: 150px; width: 800px;" data-var-src="s1shot" alt="Select a timestamp, convert it on the page" />
+        <div class="caption">
+          <div class="big" id="s1cap">Convert any time — right on the page.</div>
+          <div class="small" id="s1sub">No tab-switching. No mental math.</div>
+        </div>
+      </div>
+
+      <!-- SCENE 2 (5–10): pin & compare — real two pinned cards -->
+      <div class="scene" id="s2" data-track-index="1">
+        <img class="shot framed" id="s2shot" src="assets/shots/content-two-pins.png" style="left: 310px; top: 120px; width: 1300px;" data-var-src="s2shot" alt="Two pinned conversion cards compared on one screen" />
+        <div class="caption">
+          <div class="big" id="s2cap">Pin times. Compare on one screen.</div>
+        </div>
+      </div>
+
+      <!-- SCENE 3 (10–14.5): the full converter popup (real) -->
+      <div class="scene center" id="s3" data-track-index="2">
+        <img class="shot framed" id="s3shot" src="assets/shots/popup-converter.png" style="width: 420px;" data-var-src="s3shot" alt="The TZ Converter popup with a Local source button" />
+        <div class="caption">
+          <div class="big" id="s3cap">A full converter in one click.</div>
+          <div class="small" id="s3sub">Pick a time, hit Local, read every zone.</div>
+        </div>
+      </div>
+
+      <!-- SCENE 4 (14.5–16.5): epoch tab (real) -->
+      <div class="scene center" id="s4" data-track-index="3">
+        <img class="shot framed" id="s4shot" src="assets/shots/popup-epoch.png" style="width: 420px;" data-var-src="s4shot" alt="Epoch converter: paste a Unix timestamp" />
+        <div class="caption">
+          <div class="big" id="s4cap">Epoch, ISO, or plain English.</div>
+        </div>
+      </div>
+
+      <!-- SCENE 5 (16.5–20): logo + install -->
+      <div class="scene center" id="s5" data-track-index="4">
+        <div class="logo" id="s5logo">TZ<span class="mark"> Converter</span></div>
+        <div class="tagline" id="s5tag">Timezones, solved without leaving the page.</div>
+        <div class="install" id="s5install">Chrome · Firefox · load unpacked</div>
+      </div>
+    </div>
+
+    <!-- Audio -->
+    <audio id="bed" class="clip" src="assets/music/bed.mp3" data-start="0" data-duration="20" data-track-index="7" data-track-kind="audio" data-volume="0.3" data-fade-out="1.6"></audio>
+    <audio id="sfxSnap" class="clip" src="assets/sfx/snap.ogg" data-start="0.8" data-duration="0.2" data-track-index="8" data-track-kind="audio" data-volume="0.5"></audio>
+    <audio id="sfxPin" class="clip" src="assets/sfx/pin.ogg" data-start="6.6" data-duration="0.12" data-track-index="8" data-track-kind="audio" data-volume="0.45"></audio>
+    <audio id="sfxChip" class="clip" src="assets/sfx/chip.ogg" data-start="10.8" data-duration="0.1" data-track-index="8" data-track-kind="audio" data-volume="0.4"></audio>
+
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      const set = gsap.set;
+
+      set(["#s2", "#s3", "#s4", "#s5"], { autoAlpha: 0 });
+      set("#s1", { autoAlpha: 1 });
+      set("#s1shot", { opacity: 0, scale: 0.94, y: 16, transformOrigin: "center center" });
+      set(["#s1cap", "#s1sub"], { opacity: 0, y: 18 });
+      set("#s2shot", { opacity: 0, scale: 0.96, y: 18 });
+      set("#s2cap", { opacity: 0, y: 18 });
+      set("#s3shot", { opacity: 0, scale: 0.94, y: 18 });
+      set(["#s3cap", "#s3sub"], { opacity: 0, y: 18 });
+      set("#s4shot", { opacity: 0, scale: 0.94, y: 18 });
+      set("#s4cap", { opacity: 0, y: 18 });
+      set(["#s5logo", "#s5tag", "#s5install"], { opacity: 0, y: 22 });
+
+      // SCENE 1 (0–5)
+      tl.to("#s1shot", { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" }, 0.3);
+      tl.to("#s1shot", { scale: 1.04, duration: 4.2, ease: "none" }, 0.8); // slow ken-burns
+      tl.to("#s1cap", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 1.0);
+      tl.to("#s1sub", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 1.5);
+      tl.to("#s1", { autoAlpha: 0, duration: 0.4, ease: "power2.inOut" }, 4.7);
+
+      // SCENE 2 (5–10)
+      tl.to("#s2", { autoAlpha: 1, duration: 0.3 }, 5.0);
+      tl.to("#s2shot", { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" }, 5.2);
+      tl.to("#s2cap", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 6.6);
+      tl.to("#s2", { autoAlpha: 0, duration: 0.4, ease: "power2.inOut" }, 9.7);
+
+      // SCENE 3 (10–14.5)
+      tl.to("#s3", { autoAlpha: 1, duration: 0.3 }, 10.0);
+      tl.to("#s3shot", { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" }, 10.2);
+      tl.to("#s3cap", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 10.9);
+      tl.to("#s3sub", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 11.4);
+      tl.to("#s3", { autoAlpha: 0, duration: 0.4, ease: "power2.inOut" }, 14.2);
+
+      // SCENE 4 (14.5–16.5)
+      tl.to("#s4", { autoAlpha: 1, duration: 0.3 }, 14.5);
+      tl.to("#s4shot", { opacity: 1, scale: 1, y: 0, duration: 0.45, ease: "power3.out" }, 14.7);
+      tl.to("#s4cap", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 15.1);
+      tl.to("#s4", { autoAlpha: 0, duration: 0.4, ease: "power2.inOut" }, 16.4);
+
+      // SCENE 5 (16.6–20)
+      tl.to("#s5", { autoAlpha: 1, duration: 0.3 }, 16.6);
+      tl.to("#s5logo", { opacity: 1, y: 0, duration: 0.5, ease: "power4.out" }, 16.8);
+      tl.to("#s5tag", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 17.4);
+      tl.to("#s5install", { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 17.9);
+
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

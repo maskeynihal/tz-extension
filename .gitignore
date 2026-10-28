@@ -9,3 +9,7 @@ playwright-report
 test-results
 .vite
 RELEASE_NOTES.md
+
+# Hyperframes (brag video) build artifacts — keep source + final render, drop caches
+brag-output-*/composition/.hyperframes/
+brag-output-*/composition/node_modules/
