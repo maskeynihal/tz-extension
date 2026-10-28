@@ -19,5 +19,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["chrome", "node", "vitest/globals", "@testing-library/jest-dom"]
   },
-  "include": ["src", "tests", "e2e", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "site", "tests", "e2e", "vite.config.ts", "vitest.config.ts"]
 }
