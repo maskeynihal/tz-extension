@@ -369,8 +369,9 @@ function pinCard(
     };
     renderPin(parsed, matchCount);
 
-    // The value is pinned; drop the transient card and its match highlight.
-    dismissTransient();
+    // The value is pinned; drop the transient card but KEEP the match highlight
+    // so the pinned value stays visibly marked on the page.
+    teardownTransient();
   } catch {
     /* restricted page — ignore */
   }
@@ -384,6 +385,9 @@ function removePin(pin: Pin): void {
   }
   if (pin.host.parentNode) pin.host.parentNode.removeChild(pin.host);
   pins.delete(pin);
+  // The highlight marks the pinned value; once no pin (and no transient) holds
+  // it, drop the mark so the page returns to normal.
+  if (pins.size === 0 && !tHost) clearHighlight();
 }
 
 // --- Selection handling ---------------------------------------------------
