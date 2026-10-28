@@ -1,0 +1,111 @@
+/**
+ * Design tokens — derived from the Atlas reference UI.
+ * https://atlas-typeui-9d2bedec.vercel.app/marketing
+ *
+ * The Atlas language: Inter, an indigo brand ramp, FLAT surfaces (no shadows,
+ * borders instead), near-square corners, and indigo-tinted neutrals.
+ * This file is the single source of truth; components reference these vars.
+ */
+
+:root {
+  /* Brand ramp (indigo) */
+  --tz-brand: #1313ba;
+  --tz-brand-strong: #0e0e8c;
+  --tz-brand-medium: #8989dd;
+  --tz-brand-soft: #cacaf0;
+  --tz-brand-softer: #e8e8f8;
+  --tz-lime: #edff45; /* reserved accent */
+
+  /* Ink / neutrals (indigo-tinted) */
+  --tz-dark-strong: #0c0c2e;
+  --tz-dark: #16164a;
+  --tz-heading: #1313ba;
+  --tz-body: #16164a;
+  --tz-body-subtle: #6363c6;
+  --tz-muted: #9090ce;
+
+  /* Surfaces & borders */
+  --tz-surface: #ffffff;
+  --tz-surface-raised: #f4f4fc;
+  --tz-surface-sunken: #f0f0fa;
+  --tz-border: #e8e8f8;
+  --tz-border-medium: #e0e0f2;
+  --tz-border-brand: #cacaf0;
+
+  /* Semantic */
+  --tz-success: #15a34a;
+  --tz-success-soft: #ecfdf3;
+  --tz-danger: #be123c;
+  --tz-danger-soft: #fff1f2;
+  --tz-warning: #f97316;
+  --tz-warning-soft: #fffaeb;
+
+  /* Typography */
+  --tz-font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --tz-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --tz-fs-xs: 0.6875rem;
+  --tz-fs-sm: 0.75rem;
+  --tz-fs-md: 0.8125rem;
+  --tz-fs-lg: 0.875rem;
+  --tz-fs-xl: 1.125rem;
+  --tz-fs-2xl: 1.5rem;
+  --tz-fw-normal: 400;
+  --tz-fw-medium: 500;
+  --tz-fw-semibold: 600;
+  --tz-fw-bold: 700;
+  --tz-lh-body: 1.5;
+  --tz-lh-heading: 1.3;
+
+  /* Shape — Atlas is near-square. We soften very slightly for a control feel. */
+  --tz-radius-sm: 4px;
+  --tz-radius-md: 6px;
+  --tz-radius-lg: 8px;
+  --tz-radius-full: 9999px;
+
+  /* Flat: no drop shadows, borders carry separation. One subtle lift for popovers. */
+  --tz-shadow-none: none;
+  --tz-shadow-pop: 0 10px 30px rgba(19, 19, 186, 0.12);
+
+  /* Focus ring (brand) */
+  --tz-focus: 0 0 0 3px color-mix(in srgb, var(--tz-brand) 35%, transparent);
+
+  /* Spacing scale */
+  --tz-space-1: 4px;
+  --tz-space-2: 6px;
+  --tz-space-3: 8px;
+  --tz-space-4: 10px;
+  --tz-space-5: 12px;
+  --tz-space-6: 16px;
+  --tz-space-7: 20px;
+  --tz-space-8: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tz-surface: #0c0c2e;
+    --tz-surface-raised: #16164a;
+    --tz-surface-sunken: #121238;
+    --tz-border: #26265e;
+    --tz-border-medium: #2e2e6e;
+    --tz-border-brand: #3a3a86;
+
+    --tz-heading: #c7c7f5;
+    --tz-body: #e8e8fb;
+    --tz-body-subtle: #a9a9e0;
+    --tz-muted: #8080c0;
+
+    --tz-brand: #8989dd;
+    --tz-brand-strong: #a9a9ec;
+    --tz-brand-soft: #2e2e6e;
+    --tz-brand-softer: #1a1a52;
+
+    --tz-success: #4ade80;
+    --tz-success-soft: #0f2a1a;
+    --tz-danger: #fb7185;
+    --tz-danger-soft: #2a1115;
+    --tz-warning: #fb923c;
+    --tz-warning-soft: #2a1e0f;
+
+    --tz-shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5);
+  }
+}
