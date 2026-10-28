@@ -6,6 +6,16 @@ A Manifest V3 browser extension for timezone conversion. Works in Chromium (Chro
 
 No install needed to try it — the [online converter](https://maskeynihal.github.io/tz-extension/app.html) runs the same engine the extension ships.
 
+## Demo
+
+https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/launch.mp4
+
+<sub>A 20-second tour. If the player doesn't load, [download the MP4](https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/launch.mp4).</sub>
+
+| Select to convert | Full converter |
+|---|---|
+| ![Selecting a timestamp on a page shows a conversion card](docs/assets/select-to-convert.png) | ![The popup converter across several timezones](docs/assets/popup.png) |
+
 ## Features
 
 1. **Select to convert.** Select any text on a page. If it parses as a date/time, a small popover appears next to your selection showing that time in your chosen timezones. Renders in an isolated Shadow DOM, clamps to the viewport, and stays silent when the selection is not a time.
