@@ -52,23 +52,69 @@ permission is local storage, used to remember your preferences.
 Free and open source: https://github.com/maskeynihal/tz-extension
 ```
 
-## Permission justifications
+## Privacy practices tab — required fields (copy/paste)
 
-(Chrome asks you to justify each permission on submission.)
+The Chrome Web Store "Privacy practices" tab requires all of the following before
+you can publish. Paste each verbatim.
 
-- **storage** — persists the user's preferences (home zone, target zones, clock
-  format, theme, custom formats) locally. No data leaves the device.
-- **Host permissions / content script (`<all_urls>`)** — the select-to-convert
-  feature must read the user's text selection and render a popover on whatever
-  page they are reading. It only reads the selected text to parse a time; it
-  does not collect page content or make network requests.
+### Single purpose description
 
-## Privacy
+```
+TZ Converter converts timezones for date and time values the user selects on a
+web page or enters in the extension. It parses the selected or entered time and
+displays the equivalent time in the user's chosen timezones.
+```
 
-- Single purpose: convert timezones for times the user selects or enters.
-- Data collected: none. No analytics, no remote calls.
-- Privacy policy URL (if required): the GitHub repo's README documents that no
-  data is collected — https://github.com/maskeynihal/tz-extension
+### Permission justification — storage
+
+```
+The storage permission saves the user's preferences locally: their home
+timezone, target timezones, 12/24-hour clock, theme, date-handling policy, and
+any custom date formats. This data stays on the user's device and syncs only
+through the browser's own account sync. No preference data is sent to us or any
+third party.
+```
+
+### Permission justification — host permissions (content script on all sites)
+
+```
+The core feature is "select to convert": the user highlights a time on any web
+page and the extension shows it in their timezones in a small popover. To work
+on whatever page the user is reading, the content script must run on all sites.
+It only reads the text the user has actively selected, in order to parse a time,
+and injects a popover UI. It does not read, collect, or transmit page content,
+and makes no network requests.
+```
+
+### Remote code justification
+
+Answer "No" to "uses remote code" if asked. If a justification box is required:
+
+```
+This extension does not use remote code. All JavaScript is bundled into the
+package at build time (Vite + esbuild). There are no eval calls, no remotely
+hosted scripts, and no dynamically fetched or executed code. The extension makes
+no network requests of any kind.
+```
+
+### Data usage certification
+
+- Data collected: NONE — check no data categories.
+- Check "I do not sell or transfer user data to third parties, outside of the
+  approved use cases."
+- Check "I do not use or transfer user data for purposes unrelated to my item's
+  single purpose."
+- Check "I do not use or transfer user data to determine creditworthiness or for
+  lending purposes."
+- Tick the final "I certify that my data usage complies with the Developer
+  Program Policies."
+
+### Why Chrome flags "remote code" here
+
+It is a conservative flag triggered by the content script matching `<all_urls>`,
+not by any actual remote code. The manifest declares only `permissions:
+["storage"]`, an empty `host_permissions`, no custom CSP, and no `eval` — so the
+honest answer is that no remote code is used.
 
 ## Version notes (0.5.0)
 
