@@ -35,9 +35,9 @@ export function sanitize(input: unknown): Preferences {
     const valid = obj.targetZones.filter(
       (z): z is string => typeof z === 'string' && isValidZone(z),
     );
-    // De-dup, keep order.
+    // De-dup, keep order. An explicitly empty array is respected (the user
+    // cleared the list); only an absent/non-array field falls back to defaults.
     targetZones = Array.from(new Set(valid));
-    if (targetZones.length === 0) targetZones = base.targetZones;
   }
 
   const hour12 = typeof obj.hour12 === 'boolean' ? obj.hour12 : base.hour12;
