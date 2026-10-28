@@ -2,6 +2,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { createElement } from 'react';
 import { parseTimes } from '../lib/parse';
 import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
+import { resolveTheme } from '../lib/theme';
 import { DEFAULT_PREFERENCES, type DateOnlyPolicy, type ParsedTime, type Preferences } from '../types';
 import { Popover } from './Popover';
 
@@ -14,6 +15,19 @@ const EST_HEIGHT = 200;
 
 let prefs: Preferences = DEFAULT_PREFERENCES;
 let debounceTimer: number | undefined;
+
+/**
+ * Tag a popover's shadow host with the resolved theme so the shadow CSS can
+ * override the OS `prefers-color-scheme`. For `system` we leave the attribute
+ * off and let the media query decide.
+ */
+function applyHostTheme(hostEl: HTMLElement): void {
+  if (prefs.theme === 'light' || prefs.theme === 'dark') {
+    hostEl.setAttribute('data-tz-theme', resolveTheme(prefs.theme));
+  } else {
+    hostEl.removeAttribute('data-tz-theme');
+  }
+}
 
 // --- Transient popover (one at a time) ------------------------------------
 let tHost: HTMLDivElement | null = null;
@@ -333,6 +347,7 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, 
     tHost = document.createElement('div');
     tHost.id = TRANSIENT_HOST_ID;
     const shadow = tHost.attachShadow({ mode: 'open' });
+    applyHostTheme(tHost);
     const mount = document.createElement('div');
     shadow.appendChild(mount);
     document.body.appendChild(tHost);
@@ -394,6 +409,7 @@ function pinCard(
     const host = document.createElement('div');
     host.className = PIN_HOST_CLASS;
     const shadow = host.attachShadow({ mode: 'open' });
+    applyHostTheme(host);
     const mount = document.createElement('div');
     shadow.appendChild(mount);
     document.body.appendChild(host);

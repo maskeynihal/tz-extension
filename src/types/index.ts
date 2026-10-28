@@ -37,6 +37,13 @@ export type ParseKind =
 export type DateOnlyPolicy = 'midnight' | 'now';
 
 /**
+ * UI theme. `system` follows the OS `prefers-color-scheme`; `light` and `dark`
+ * force that theme everywhere (popup, options, and the in-page popover),
+ * overriding the OS preference.
+ */
+export type Theme = 'system' | 'light' | 'dark';
+
+/**
  * A user-defined custom format. Built from safe named tokens (NOT raw regex by
  * default) so a bad pattern cannot hang the page. `advanced` switches `pattern`
  * to a raw regex with named capture groups; it runs under a length guard.
@@ -68,6 +75,8 @@ export interface Preferences {
   readonly dateOnlyPolicy: DateOnlyPolicy;
   /** Keep the page text selected (highlighted) while a popover is open. */
   readonly keepSelection: boolean;
+  /** UI theme: follow the OS, or force light/dark everywhere. */
+  readonly theme: Theme;
   /** User-defined custom formats, tried in addition to the built-ins. */
   readonly customFormats: readonly CustomFormat[];
 }
@@ -78,6 +87,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   hour12: true,
   dateOnlyPolicy: 'midnight',
   keepSelection: true,
+  theme: 'system',
   customFormats: [],
 };
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_PREFERENCES, type Preferences } from '../types';
 import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
+import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { getBuildInfo } from '../lib/build-info';
 import { Converter } from './Converter';
 import { EpochTab } from './EpochTab';
@@ -30,6 +31,13 @@ export function App(): JSX.Element {
       unsub();
     };
   }, []);
+
+  // Paint the chosen theme; when following the OS, re-apply on OS flips.
+  useEffect(() => {
+    applyThemeToDocument(prefs.theme);
+    if (prefs.theme !== 'system') return;
+    return watchSystemTheme(() => applyThemeToDocument('system'));
+  }, [prefs.theme]);
 
   function toggleHour12(): void {
     const next: Preferences = { ...prefs, hour12: !prefs.hour12 };
