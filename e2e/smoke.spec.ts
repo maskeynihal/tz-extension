@@ -63,8 +63,6 @@ test.describe('tz-extension smoke', () => {
   });
 
   test('select-to-convert popover shows a pinnable card that persists', async () => {
-    const [sw] = context.serviceWorkers();
-    const extId = new URL(sw!.url()).host;
     const page = await context.newPage();
 
     // Serve a real page (content scripts do not run on about:blank). Two epoch
