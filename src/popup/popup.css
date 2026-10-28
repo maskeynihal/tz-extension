@@ -141,6 +141,11 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 }
 .tzx-foot-sep { opacity: 0.5; }
 .tzx-foot-commit { font-family: var(--tz-font-mono); }
+.tzx-foot-link {
+  color: var(--tz-body-subtle); text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.tzx-foot-link:hover { color: var(--tz-brand); border-bottom-color: var(--tz-brand); }
 
 .tzx-select {
   font: inherit; font-size: var(--tz-fs-lg); font-family: var(--tz-font);

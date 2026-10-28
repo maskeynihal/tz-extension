@@ -99,9 +99,47 @@ export function App(): JSX.Element {
       )}
 
       <footer className="tzx-foot" title={BUILD.builtAt ? `Built ${BUILD.builtAt}` : undefined}>
-        <span>v{BUILD.version}</span>
+        {BUILD.releaseUrl ? (
+          <a
+            className="tzx-foot-link"
+            href={BUILD.releaseUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Release v${BUILD.version} on GitHub`}
+          >
+            v{BUILD.version}
+          </a>
+        ) : (
+          <span>v{BUILD.version}</span>
+        )}
         <span className="tzx-foot-sep">·</span>
-        <span className="tzx-foot-commit">{BUILD.commit}</span>
+        {BUILD.commitUrl ? (
+          <a
+            className="tzx-foot-link tzx-foot-commit"
+            href={BUILD.commitUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View this commit on GitHub"
+          >
+            {BUILD.commit}
+          </a>
+        ) : (
+          <span className="tzx-foot-commit">{BUILD.commit}</span>
+        )}
+        {BUILD.repoUrl && (
+          <>
+            <span className="tzx-foot-sep">·</span>
+            <a
+              className="tzx-foot-link"
+              href={BUILD.repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open the repository on GitHub"
+            >
+              GitHub
+            </a>
+          </>
+        )}
       </footer>
     </div>
   );
