@@ -37,6 +37,11 @@ export function App(): JSX.Element {
     void savePreferences(next);
   }
 
+  function updatePrefs(next: Preferences): void {
+    setPrefs(next);
+    void savePreferences(next);
+  }
+
   function openOptions(): void {
     if (typeof chrome !== 'undefined' && chrome.runtime?.openOptionsPage) {
       chrome.runtime.openOptionsPage();
@@ -88,7 +93,7 @@ export function App(): JSX.Element {
       {!loaded ? (
         <p className="tzx-loading">Loading…</p>
       ) : tab === 'converter' ? (
-        <Converter prefs={prefs} />
+        <Converter prefs={prefs} onPrefsChange={updatePrefs} />
       ) : (
         <EpochTab prefs={prefs} />
       )}

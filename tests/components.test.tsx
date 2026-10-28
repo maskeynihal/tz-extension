@@ -47,7 +47,7 @@ describe('EpochTab', () => {
 
 describe('Converter', () => {
   it('renders a result card per target zone', () => {
-    render(<Converter prefs={prefs} />);
+    render(<Converter prefs={prefs} onPrefsChange={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Date & time'), {
       target: { value: '2024-01-02T12:00' },
     });
@@ -56,7 +56,7 @@ describe('Converter', () => {
   });
 
   it('shows an error when the datetime is cleared', () => {
-    render(<Converter prefs={prefs} />);
+    render(<Converter prefs={prefs} onPrefsChange={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Date & time'), { target: { value: '' } });
     expect(screen.getByRole('alert')).toBeInTheDocument();
   });
@@ -224,5 +224,21 @@ describe('Popover compact mode', () => {
     fireEvent.click(screen.getByLabelText('Pin compact'));
     expect(onPinCompact).toHaveBeenCalled();
     expect(onPin).not.toHaveBeenCalled();
+  });
+});
+
+describe('Converter source + target editing', () => {
+  it('removes a target zone via its ✕ and persists', () => {
+    const onPrefsChange = vi.fn();
+    render(<Converter prefs={prefs} onPrefsChange={onPrefsChange} />);
+    fireEvent.click(screen.getByLabelText('Remove UTC'));
+    expect(onPrefsChange).toHaveBeenCalledWith(
+      expect.objectContaining({ targetZones: expect.not.arrayContaining(['UTC']) }),
+    );
+  });
+
+  it('offers a Local source button', () => {
+    render(<Converter prefs={prefs} onPrefsChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /local/i })).toBeInTheDocument();
   });
 });
