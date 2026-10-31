@@ -42,7 +42,8 @@ function scan(
   const out: Candidate[] = [];
   let guard = 0;
   let m: RegExpExecArray | null;
-  while (out.length < MAX_MATCHES && guard++ < 500 && (m = re.exec(src)) !== null) {
+  // Each failed attempt advances at least one character, so src.length bounds the loop.
+  while (out.length < MAX_MATCHES && guard++ <= src.length + 1 && (m = re.exec(src)) !== null) {
     if (m[0].length === 0) {
       re.lastIndex = m.index + 1;
       continue;
@@ -75,14 +76,19 @@ function fractionMs(frac: string | undefined): number | undefined {
 
 // --- Regexes ---------------------------------------------------------------
 
+/** A zone after a time: Z, ±hh:mm, GMT±h[:mm] / UTC±h[:mm], or an abbreviation. */
+const ZONE = String.raw`Z|[+-]\d{2}:?\d{2}|(?:GMT|UTC)[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5}`;
+
 const RE_EPOCH_S = /(?<![\w.-])(-?\d{10,11})(?![\w]|\.\d)/;
 const RE_EPOCH_MS = /(?<![\w.-])(-?\d{12,13})(?![\w]|\.\d)/;
 
 // Date is required; the time portion is optional. A bare calendar date
 // ("2024-01-02") follows the date-only policy. When a time is present a
 // zone/offset may follow it.
-const RE_ISO =
-  /\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?\s*(Z|[+-]\d{2}:?\d{2})?)?(?![\d])/;
+// The zone is either glued on ("Z", "+05:45") or a separate word ("UTC", "GMT+1").
+const RE_ISO = new RegExp(
+  String.raw`\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?(?:\s*(Z|[+-]\d{2}:?\d{2})(?![\w:])|[ \t]+((?:GMT|UTC)[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5})\b)?)?(?![\d])`,
+);
 
 const RE_DATE_SLASH = /\b(\d{4})\/(\d{2})\/(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\b/;
 
@@ -92,13 +98,32 @@ const RE_DATE_SLASH = /\b(\d{4})\/(\d{2})\/(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})
 const RE_LONG =
   /(?:\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?:,?\s+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[ \t]*([AaPp][Mm]))?)?(?:[ \t]+\(?(Z|[A-Za-z]{2,5}(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{2}:?\d{2})\)?)?/;
 
-// "2 Jan 2024 15:00", "Jan 2024" is not enough: a day is required on one side.
-const RE_DAY_MONTH =
-  /\b(?:(\d{1,2})\s+)?([A-Za-z]{3,9})\.?\s+(?:(\d{1,2})(?:,)?\s+)?(\d{4})(?:\s+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[ \t]*([AaPp][Mm]))?)?(?:[ \t]+\(?([A-Za-z]{2,5}|[+-]\d{2}:?\d{2})\)?)?/;
+// Day first: "2 Jan 2024 15:00", "28 February, 2024". Month-first dates belong
+// to RE_LONG, so switching either one off really switches that order off.
+const RE_DAY_MONTH = new RegExp(
+  String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?,?\s+(\d{4})(?:,?\s+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[ \t]*([AaPp][Mm]))?)?(?:[ \t]+\(?(${ZONE})\)?)?`,
+);
 
 // Bare time: "3pm", "15:04", "3:30 PM UTC", "9:00 +05:45".
-const RE_TIME =
-  /\b(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:[ \t]*([AaPp][Mm]))?(?:[ \t]+([A-Za-z]{2,5}|[+-]\d{2}:?\d{2}))?\b/;
+const RE_TIME = new RegExp(
+  String.raw`\b(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:[ \t]*([AaPp][Mm]))?(?:[ \t]+(${ZONE}))?\b`,
+);
+
+/**
+ * True when the text just before `index` looks like a date the enabled formats
+ * did not read ("31/12/2024 ", "2024/02/31 ", "24.12.2024 um ", "2 Jan 2024 ").
+ * A bare time there belongs to that date, so reading it as "today" would show
+ * a confident, wrong answer.
+ */
+const DATE_BEFORE = [
+  /\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}[T,]?\s*(?:[A-Za-z]{1,4}\.?\s+)?$/,
+  /\b\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\.?,?\s+\d{4},?\s*(?:[A-Za-z]{1,4}\s+)?$/,
+  /\b[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4},?\s*(?:[A-Za-z]{1,4}\s+)?$/,
+];
+function dateLikeBefore(src: string, index: number): boolean {
+  const before = src.slice(Math.max(0, index - 32), index);
+  return DATE_BEFORE.some((re) => re.test(before));
+}
 
 // --- Matchers --------------------------------------------------------------
 
@@ -143,29 +168,33 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
   {
     id: 'iso-8601',
     label: 'ISO 8601',
-    description: 'YYYY-MM-DD with an optional time, fraction and Z or ±hh:mm offset. Without an offset the time is read in your home zone.',
-    examples: ['2024-01-02T15:04:05Z', '2024-01-02 15:04', '2024-01-02'],
+    description:
+      'YYYY-MM-DD with an optional time, fraction and zone (Z, ±hh:mm, UTC, EST, GMT+1). Without a zone the time is read in your home zone.',
+    examples: ['2024-01-02T15:04:05Z', '2024-01-02 15:04 UTC', '2024-01-02'],
     regex: RE_ISO,
     match: (src, ctx) =>
       scan(RE_ISO, src, (m) => {
-        const [, y, mo, d, h, mi, s, frac, zoneTok] = m;
+        const [, y, mo, d, h, mi, s, frac, glued, word] = m;
+        const zoneTok = glued ?? word;
         const dateOnly = h === undefined;
+        // An unknown zone word (or an impossible offset) is not part of the
+        // timestamp: read the time without it rather than dropping the match.
         const zone = zoneTok ? resolveZoneToken(zoneTok) : null;
-        if (zoneTok && !zone) return null;
+        const text = trimUnresolvedZone(m[0], zoneTok, zone !== null);
         const t = dateOnly ? dateOnlyTime(ctx.dateOnlyPolicy, ctx.assumedZone) : { h: Number(h), mi: Number(mi), s: Number(s ?? 0) };
         const parsed = buildParsed(
           { y: Number(y), mo: Number(mo), d: Number(d), ...t, ms: dateOnly ? undefined : fractionMs(frac) },
           zone,
           ctx.assumedZone,
           {
-            matchedText: m[0],
+            matchedText: text,
             kind: dateOnly ? 'date-no-tz' : zone ? 'iso' : 'iso-no-tz',
             formatId: 'iso-8601',
             formatLabel: 'ISO 8601',
             dateOnly,
           },
         );
-        return parsed ? { parsed } : null;
+        return parsed ? { parsed, length: text.length } : null;
       }),
   },
   {
@@ -190,7 +219,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     id: 'long-form',
     label: 'Written date (month first)',
     description: 'An optional weekday, then month name, day and year, with an optional time and zone.',
-    examples: ['Wednesday, October 28, 2026, 04:24:09 UTC', 'Oct 28 2026 4:24 PM', 'Jan 1, 1970 (UTC)'],
+    examples: ['Wednesday, October 28, 2026, 04:24:09 UTC', 'Oct 28 2026 4:24 PM', 'Jan 2 2024 3:00 PM UTC', 'Jan 1, 1970 (UTC)'],
     regex: RE_LONG,
     match: (src, ctx) =>
       scan(RE_LONG, src, (m) => {
@@ -221,14 +250,13 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
   {
     id: 'day-month-name',
     label: 'Written date (day first)',
-    description: 'Day, month name and year (or month, day, year) with an optional time and zone.',
-    examples: ['2 Jan 2024 15:00', '28 February 2024', 'Jan 2 2024 3:00 PM UTC'],
+    description: 'Day, month name and year, with an optional time and zone.',
+    examples: ['2 Jan 2024 15:00', '28 February 2024', '5th May 2025 9:30 PM CET'],
     regex: RE_DAY_MONTH,
     match: (src, ctx) =>
       scan(RE_DAY_MONTH, src, (m) => {
-        const [, dayA, monTok, dayB, year, hh, mm, ss, ampm, zoneTok] = m;
+        const [, dayTok, monTok, year, hh, mm, ss, ampm, zoneTok] = m;
         const month = monthFromName(monTok);
-        const dayTok = dayA ?? dayB;
         if (month === undefined || !year || !dayTok) return null;
         const zone = resolveZoneToken(zoneTok);
         const text = trimUnresolvedZone(m[0], zoneTok, zone !== null);
@@ -254,12 +282,14 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
   {
     id: 'time-of-day',
     label: 'Time of day',
-    description: 'A time with a colon, am/pm or a zone, taken as today. A lone number like "5" is ignored.',
-    examples: ['3pm', '15:30', '9:00 UTC', '3:30 PM +05:45'],
+    description:
+      'A time with a colon, am/pm or a zone, taken as today. Ignored when it follows a date no format recognized, and a lone number like "5" is ignored.',
+    examples: ['3pm', '15:30', '9:00 UTC', '9:00 GMT+5:30', '3:30 PM +05:45'],
     regex: RE_TIME,
     match: (src, ctx) =>
       scan(RE_TIME, src, (m) => {
         const [, hTok, miTok, sTok, ampm, zoneTok] = m;
+        if (dateLikeBefore(src, m.index)) return null;
         const zone = resolveZoneToken(zoneTok);
         // Need an am/pm marker, a colon, or a real zone; "5" alone is not a time.
         if (!(ampm || miTok !== undefined || zone)) return null;

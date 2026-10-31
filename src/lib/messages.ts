@@ -10,9 +10,10 @@ export interface ConvertSelectionMessage {
   readonly text: string;
 }
 
-/** Content -> background: open the settings page. */
+/** Content -> background: open the settings page (optionally at a section). */
 export interface OpenOptionsMessage {
   readonly type: 'tzx/open-options';
+  readonly section?: 'formats';
 }
 
 export interface Ack {

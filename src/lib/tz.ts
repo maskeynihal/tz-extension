@@ -69,6 +69,23 @@ export function isValidZone(zone: string): boolean {
   }
 }
 
+/**
+ * The engine's canonical id for a zone, so aliases compare equal
+ * ("Asia/Katmandu" and "Asia/Kathmandu", "Asia/Calcutta" and "Asia/Kolkata").
+ */
+export function canonicalZone(zone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone;
+  } catch {
+    return zone;
+  }
+}
+
+/** True when two zone ids name the same zone (including aliases). */
+export function sameZone(a: string, b: string): boolean {
+  return a === b || canonicalZone(a) === canonicalZone(b);
+}
+
 export interface ZoneView {
   readonly zone: string;
   /** Formatted wall-clock date+time in the zone. */

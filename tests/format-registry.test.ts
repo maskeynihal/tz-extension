@@ -62,11 +62,18 @@ describe('disabling built-in formats', () => {
     expect(parseTimes('1700000000', { assumedZone: 'UTC', disabledFormats: ['epoch-seconds'] })).toHaveLength(0);
   });
 
-  it('lets another format take over when one is disabled', () => {
-    // "2024-01-02 15:04" with ISO off: only the bare time is left to match.
-    const [r] = parseTimes('2024-01-02 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601'] });
+  it('does not fall back to "today" for the time part of a disabled date format', () => {
+    // With ISO off, "15:04" belongs to a date nothing reads; showing it as
+    // today would be confidently wrong.
+    expect(parseTimes('2024-01-02 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601'] })).toHaveLength(0);
+    expect(parseTimes('2024/01/02 15:04', { assumedZone: 'UTC', disabledFormats: ['ymd-slash'] })).toHaveLength(0);
+    expect(parseTimes('2 Jan 2024 15:00', { assumedZone: 'UTC', disabledFormats: ['day-month-name'] })).toHaveLength(0);
+    expect(parseTimes('Oct 28 2026 4:24 PM', { assumedZone: 'UTC', disabledFormats: ['long-form'] })).toHaveLength(0);
+  });
+
+  it('lets another format take over for a different value', () => {
+    const [r] = parseTimes('2024-01-02 and later 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601'] });
     expect(r?.formatId).toBe('time-of-day');
-    expect(r?.matchedText).toBe('15:04');
   });
 
   it('ignores unknown ids', () => {
@@ -95,9 +102,14 @@ describe('overlap resolution', () => {
     expect(r?.formatId).toBe('iso-8601');
   });
 
-  it('returns separate values in document order', () => {
-    const rs = parseTimes('from 2024-01-02T10:00:00Z until 1700000000', 'UTC');
-    expect(rs.map((r) => r.formatId)).toEqual(['iso-8601', 'epoch-seconds']);
+  it('returns separate values in document order after the best one', () => {
+    const rs = parseTimes('at 9:00 from 2024-01-02T10:00:00Z until 1700000000', 'UTC');
+    expect(rs.map((r) => r.formatId)).toEqual(['iso-8601', 'time-of-day', 'epoch-seconds']);
+  });
+
+  it('leads with the most specific value, not the first one', () => {
+    const [r] = parseTimes('Starts 9:00, deadline 2024-01-02T15:00Z', 'UTC');
+    expect(r?.formatId).toBe('iso-8601');
   });
 
   it('a long-form date is not double-counted as a bare time', () => {
@@ -109,6 +121,17 @@ describe('overlap resolution', () => {
   it('only scans the first SCAN_LIMIT characters', () => {
     const text = `${'x '.repeat(SCAN_LIMIT)} 1700000000`;
     expect(parseTimes(text, 'UTC')).toHaveLength(0);
+  });
+
+  it('finds a time after many plain numbers in a long selection', () => {
+    const text = `${Array.from({ length: 600 }, (_, i) => String(i % 10)).join(' ')} 10:30`;
+    expect(parseTimes(text, 'UTC')[0]?.matchedText).toBe('10:30');
+  });
+
+  it('finds a timestamp at the end of a long article', () => {
+    const text = `${'lorem ipsum dolor sit amet '.repeat(500)}2024-12-31T10:30:00Z`;
+    expect(text.length).toBeGreaterThan(13_000);
+    expect(parseTimes(text, 'UTC')[0]?.matchedText).toBe('2024-12-31T10:30:00Z');
   });
 });
 
@@ -263,7 +286,11 @@ describe('hasNestedQuantifier', () => {
     ['([a-z]+)*', true],
     ['(a+)?', false],
     ['(a+){1}', false],
-    ['(\\d{2}:?)+', false],
+    ['(\\d{2}:)+', false],
+    ['(\\d{2}:?)+', true],
+    ['(?:\\d|\\d)+', true],
+    ['(a|b){2,}', true],
+    ['(?:am|pm)', false],
     ['\\d+-\\d+', false],
     ['[(+)]+', false],
     ['(?<y>\\d{4})-(?<mo>\\d{2})', false],
@@ -291,5 +318,131 @@ describe('time-token helpers', () => {
     const now = Date.UTC(2024, 0, 1, 23, 30);
     expect(todayIn('Asia/Tokyo', now)).toEqual({ y: 2024, mo: 1, d: 2 });
     expect(todayIn(-300, now)).toEqual({ y: 2024, mo: 1, d: 1 });
+  });
+});
+
+describe('QA regressions', () => {
+  it('reads a zone word after an ISO date-time', () => {
+    const [r] = parseTimes('2024-12-31 10:30 UTC', 'Asia/Kathmandu');
+    expect(r?.matchedText).toBe('2024-12-31 10:30 UTC');
+    expect(r?.assumed).toBe(false);
+    expect(iso(r!.epochMs)).toBe('2024-12-31T10:30:00.000Z');
+    const [e] = parseTimes('2024-12-31 10:30 EST', 'UTC');
+    expect(iso(e!.epochMs)).toBe('2024-12-31T15:30:00.000Z');
+    const [g] = parseTimes('2024-12-31 10:30 GMT+5:30', 'UTC');
+    expect(iso(g!.epochMs)).toBe('2024-12-31T05:00:00.000Z');
+  });
+
+  it('keeps an ISO reading when the trailing word or offset is not a zone', () => {
+    const [w] = parseTimes('2024-12-31 10:30 Meeting', 'UTC');
+    expect(w?.matchedText).toBe('2024-12-31 10:30');
+    const [o] = parseTimes('2024-01-02T10:00+1500', 'UTC');
+    expect(o?.matchedText).toBe('2024-01-02T10:00');
+    expect(o?.assumed).toBe(true);
+  });
+
+  it('reads GMT+h:mm / UTC+h:mm after a bare time', () => {
+    const now = Date.UTC(2026, 9, 31, 12);
+    const [r] = parseTimes('9:00 GMT+5:30', { assumedZone: 'UTC', nowMs: now });
+    expect(r?.matchedText).toBe('9:00 GMT+5:30');
+    expect(iso(r!.epochMs)).toBe('2026-10-31T03:30:00.000Z');
+    const [u] = parseTimes('9:00 UTC-8', { assumedZone: 'UTC', nowMs: now });
+    expect(iso(u!.epochMs)).toBe('2026-10-31T17:00:00.000Z');
+  });
+
+  it('knows common abbreviations outside the US and Europe', () => {
+    const now = Date.UTC(2026, 9, 31, 12);
+    expect(iso(parseTimes('10:00 ACST', { assumedZone: 'UTC', nowMs: now })[0]!.epochMs)).toBe('2026-10-31T00:30:00.000Z');
+    expect(iso(parseTimes('10:00 NPT', { assumedZone: 'UTC', nowMs: now })[0]!.epochMs)).toBe('2026-10-31T04:15:00.000Z');
+    expect(iso(parseTimes('10:00 AEDT', { assumedZone: 'UTC', nowMs: now })[0]!.epochMs)).toBe('2026-10-30T23:00:00.000Z');
+  });
+
+  it('does not show the time of an unrecognized date as today', () => {
+    for (const text of ['31/12/2024 10:30', '12/25/2024 3pm EST', '2024/02/31 10:00', '24.12.2024 um 18:30', '5 Foo 2024 10:00']) {
+      expect(parseTimes(text, 'UTC'), text).toHaveLength(0);
+    }
+  });
+
+  it('a custom format then reads those dates in full', () => {
+    const [r] = parseTimes('24.12.2024 um 18:30', {
+      assumedZone: 'UTC',
+      customFormats: [fmt('DD.MM.YYYY [um] HH:mm')],
+    });
+    expect(iso(r!.epochMs)).toBe('2024-12-24T18:30:00.000Z');
+  });
+
+  it('day-first dates accept ordinals and zones; month-first ones are the other format', () => {
+    const [r] = parseTimes('5th May 2025 9:30 PM CET', 'UTC');
+    expect(r?.formatId).toBe('day-month-name');
+    expect(iso(r!.epochMs)).toBe('2025-05-05T20:30:00.000Z');
+    expect(parseTimes('Oct 28 2026 4:24 PM', 'UTC')[0]?.formatId).toBe('long-form');
+  });
+});
+
+describe('ReDoS hardening', () => {
+  const time = (fn: () => unknown): number => {
+    const t0 = performance.now();
+    fn();
+    return performance.now() - t0;
+  };
+
+  it('token mode collapses bracketed whitespace into one \\s+', () => {
+    const r = compileTokenFormat('H[            ]mm');
+    expect(r.ok && r.regex.source.match(/\\s\+/g)?.length).toBe(1);
+    const f = fmt('H[            ]mm');
+    const ms = time(() => parseTimes(`1${' '.repeat(400)}x`, { assumedZone: 'UTC', customFormats: [f] }));
+    expect(ms).toBeLessThan(200);
+  });
+
+  it('rejects alternation inside a repeated group', () => {
+    const r = compileAdvancedFormat('(?<h>(?:\\d|\\d)+):(?<mi>\\d{2})');
+    expect(r.ok ? 'OK' : r.error).toMatch(/repeats a group/);
+  });
+
+  it('rejects many adjacent open-ended repeats', () => {
+    const r = compileAdvancedFormat('(?<h>\\d+)\\d*\\d*\\d*\\d*:(?<mi>\\d{2})');
+    expect(r.ok ? 'OK' : r.error).toMatch(/too many open-ended repeats/);
+  });
+
+  it('accepts a normal regex with a couple of open-ended repeats and stays fast on hostile text', () => {
+    const f = fmt('(?<h>\\d+):(?<mi>\\d{2})\\s*(?<ap>am|pm)', { advanced: true });
+    expect(compileAdvancedFormat(f.pattern).ok).toBe(true);
+    const hostile = `${'1'.repeat(300)}:${' '.repeat(150)}x`;
+    const ms = time(() => matchCustomFormat(hostile, f, ctx));
+    expect(ms).toBeLessThan(200);
+    expect(matchCustomFormat('at 10:30 pm', f, ctx)[0]?.parsed.matchedText).toBe('10:30 pm');
+  });
+
+  it('windowed matching still honours lookbehinds', () => {
+    const f = fmt('(?<!\\d)(?<d>\\d{2})\\.(?<mo>\\d{2})\\.(?<y>\\d{4})', { advanced: true });
+    expect(matchCustomFormat('x 102.01.2024', f, ctx)).toHaveLength(0);
+    expect(matchCustomFormat('x 02.01.2024', f, ctx)).toHaveLength(1);
+  });
+
+  it('built-in formats stay fast on hostile 20k-character selections', () => {
+    const inputs = [
+      '1'.repeat(20_000),
+      ' '.repeat(20_000),
+      '1 '.repeat(10_000),
+      '12:'.repeat(6_000),
+      'Jan '.repeat(5_000),
+      '2024-'.repeat(4_000),
+      'a'.repeat(20_000),
+    ];
+    for (const text of inputs) {
+      const ms = time(() => parseTimes(text, 'UTC'));
+      expect(ms, text.slice(0, 10)).toBeLessThan(300);
+    }
+  });
+});
+
+describe('token pattern warnings', () => {
+  it('warns about bare letters that will be matched literally', () => {
+    const r = compileTokenFormat('DD/MM/YYYY ZZ');
+    expect(r.ok && r.warnings[0]).toMatch(/Z is not a token.*use TZ/);
+  });
+  it('does not warn about the ISO T separator or bracketed text', () => {
+    const r = compileTokenFormat('YYYY-MM-DDTHH:mm [at]');
+    expect(r.ok && r.warnings).toEqual([]);
   });
 });

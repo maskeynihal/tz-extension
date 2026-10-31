@@ -45,6 +45,7 @@ function describeInstant(epochMs: number, prefs: Preferences): string {
 
 /** Live "what would happen if I selected this?" box, using every current setting. */
 function FormatTester({ prefs }: { readonly prefs: Preferences }): JSX.Element {
+  const testId = useId();
   const [text, setText] = useState('');
   const results = useMemo(
     () =>
@@ -60,10 +61,13 @@ function FormatTester({ prefs }: { readonly prefs: Preferences }): JSX.Element {
   );
   return (
     <div className="tzx-tester">
+      <label className="tzx-label" htmlFor={testId}>
+        Test text
+      </label>
       <input
+        id={testId}
         className="tzx-input"
-        aria-label="Test text"
-        placeholder="Try some text, e.g. 31/12/2024 10:30 or 1700000000"
+        placeholder="Try some text, e.g. 2024-12-31 10:30 UTC or 1700000000"
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
@@ -165,10 +169,18 @@ function FormatEditor({
   const ids = useId();
   const editing = draft.id !== null;
   const compiled = draft.pattern ? compileFormat(draft) : null;
-  const error = compiled && !compiled.ok ? compiled.error : null;
+  const duplicate = prefs.customFormats.find(
+    (f) => f.id !== draft.id && f.pattern === draft.pattern && f.advanced === draft.advanced,
+  );
+  const error = compiled && !compiled.ok
+    ? compiled.error
+    : duplicate
+      ? `You already have this format${duplicate.label && duplicate.label !== duplicate.pattern ? ` (“${duplicate.label}”)` : ''}.`
+      : null;
+  const warnings = compiled?.ok ? compiled.warnings : [];
 
   let preview: JSX.Element | null = null;
-  if (compiled?.ok && draft.sample.trim()) {
+  if (compiled?.ok && !duplicate && draft.sample.trim()) {
     const [hit] = matchCustomFormat(
       draft.sample,
       { id: 'preview', label: draft.label || draft.pattern, pattern: draft.pattern, advanced: draft.advanced, enabled: true },
@@ -184,7 +196,7 @@ function FormatEditor({
     );
   }
 
-  const canSave = Boolean(compiled?.ok) && (editing || !atLimit);
+  const canSave = Boolean(compiled?.ok) && !duplicate && (editing || !atLimit);
 
   function save(): void {
     if (!canSave) return;
@@ -226,12 +238,11 @@ function FormatEditor({
         </button>
       </div>
       <label className="tzx-label" htmlFor={`${ids}-pattern`}>
-        Pattern
+        Format pattern
       </label>
       <input
         id={`${ids}-pattern`}
         className="tzx-input tzx-mono"
-        aria-label="Format pattern"
         aria-invalid={error ? true : undefined}
         aria-describedby={`${ids}-status`}
         placeholder={draft.advanced ? '(?<d>\\d{2})\\.(?<mo>\\d{2})\\.(?<y>\\d{4})' : 'DD/MM/YYYY HH:mm'}
@@ -241,35 +252,38 @@ function FormatEditor({
         onChange={(e) => setDraft({ ...draft, pattern: e.target.value })}
       />
       <label className="tzx-label" htmlFor={`${ids}-label`}>
-        Name (optional)
+        Format name (optional)
       </label>
       <input
         id={`${ids}-label`}
         className="tzx-input"
-        aria-label="Format name"
         placeholder="e.g. European date"
         maxLength={MAX_LABEL}
         value={draft.label}
         onChange={(e) => setDraft({ ...draft, label: e.target.value })}
       />
       <label className="tzx-label" htmlFor={`${ids}-sample`}>
-        Test it
+        Sample text to test
       </label>
       <input
         id={`${ids}-sample`}
         className="tzx-input"
-        aria-label="Sample text to test"
         placeholder="Paste an example from a page, e.g. 31/12/2024 10:30"
         value={draft.sample}
         onChange={(e) => setDraft({ ...draft, sample: e.target.value })}
       />
-      <p className="tzx-hint" id={`${ids}-status`} role="status" aria-live="polite">
+      <p className="tzx-hint" id={`${ids}-status`} aria-live="polite">
         {error ? (
           <span className="tzx-bad">{error}</span>
         ) : compiled?.ok ? (
           preview ?? <span className="tzx-good">Valid pattern. Add test text to check it.</span>
         ) : null}
       </p>
+      {warnings.map((w) => (
+        <p className="tzx-hint tzx-warn" key={w}>
+          {w}
+        </p>
+      ))}
       {atLimit && !editing && (
         <p className="tzx-hint tzx-bad">You have {MAX_CUSTOM_FORMATS} custom formats, the maximum. Remove one to add another.</p>
       )}
@@ -289,8 +303,10 @@ function FormatEditor({
           <p className="tzx-hint">
             Name the parts with these groups: {KNOWN_GROUPS.map((g) => `(?<${g}>…)`).join(' ')}. You need a month
             (<code>mo</code> or <code>moName</code>) and a day (<code>d</code>), or an hour (<code>h</code>) for a
-            time-of-day format. Year is optional (defaults to this year). Regexes only scan the first 500 characters
-            of a selection, and repeated repeats such as <code>(a+)+</code> are rejected.
+            time-of-day format. Year is optional (defaults to this year). To keep pages responsive, a regex may not
+            repeat a group that itself repeats or branches (<code>(a+)+</code>, <code>(a|b)+</code>), may use only a
+            couple of open-ended repeats (<code>+</code>, <code>*</code>; prefer <code>\d{'{1,4}'}</code>), matches
+            at most 80 characters, and scans the first 500 characters of a selection.
           </p>
         ) : (
           <table className="tzx-ref-table">
@@ -401,7 +417,7 @@ export function FormatsSection({ prefs, update }: Props): JSX.Element {
   }
 
   return (
-    <section className="tzx-field" aria-labelledby="tzx-formats-h">
+    <section className="tzx-field" id="formats" aria-labelledby="tzx-formats-h">
       <h2 className="tzx-section-h" id="tzx-formats-h">
         Recognized formats
       </h2>

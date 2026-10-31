@@ -120,10 +120,20 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
   void convertInTab(tab.id, info.frameId ?? 0, info.selectionText ?? '');
 });
 
+/** Open settings; with a section, open a tab scrolled to it (openOptionsPage takes no anchor). */
+function openSettings(section: string | undefined): void {
+  const page = chrome.runtime.getManifest().options_page;
+  if (section && page && typeof chrome.tabs?.create === 'function') {
+    void chrome.tabs.create({ url: chrome.runtime.getURL(`${page}#${encodeURIComponent(section)}`) });
+    return;
+  }
+  void chrome.runtime.openOptionsPage();
+}
+
 chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   if (!fromThisExtension(sender) || !isOpenOptionsMessage(msg)) return;
   try {
-    void chrome.runtime.openOptionsPage();
+    openSettings(msg.section === 'formats' ? 'formats' : undefined);
     sendResponse({ ok: true } satisfies Ack);
   } catch {
     sendResponse({ ok: false } satisfies Ack);

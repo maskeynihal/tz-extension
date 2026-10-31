@@ -259,3 +259,4 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 .tzx-ref-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 .tzx-ref-table th, .tzx-ref-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .tzx-ref-table th { color: var(--muted); font-weight: var(--tz-fw-semibold); }
+.tzx-warn { color: var(--tz-warning); }

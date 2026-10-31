@@ -32,6 +32,44 @@ export const ABBREV_OFFSETS: Readonly<Record<string, number>> = {
   CEST: 2 * 60,
   IST: 5 * 60 + 30, // India (ambiguous with Israel/Irish)
   JST: 9 * 60,
+  // North America (beyond the contiguous US)
+  AKST: -9 * 60,
+  AKDT: -8 * 60,
+  HST: -10 * 60,
+  AST: -4 * 60, // Atlantic (ambiguous with Arabia +3)
+  ADT: -3 * 60,
+  NST: -(3 * 60 + 30),
+  NDT: -(2 * 60 + 30),
+  // South America
+  BRT: -3 * 60,
+  ART: -3 * 60,
+  // Europe / Africa
+  WET: 0,
+  WEST: 1 * 60,
+  EET: 2 * 60,
+  EEST: 3 * 60,
+  MSK: 3 * 60,
+  WAT: 1 * 60,
+  CAT: 2 * 60,
+  SAST: 2 * 60,
+  EAT: 3 * 60,
+  // Asia / Pacific
+  GST: 4 * 60, // Gulf (ambiguous with South Georgia)
+  PKT: 5 * 60,
+  NPT: 5 * 60 + 45,
+  ICT: 7 * 60,
+  WIB: 7 * 60,
+  SGT: 8 * 60,
+  HKT: 8 * 60,
+  PHT: 8 * 60,
+  AWST: 8 * 60,
+  KST: 9 * 60,
+  ACST: 9 * 60 + 30,
+  ACDT: 10 * 60 + 30,
+  AEST: 10 * 60,
+  AEDT: 11 * 60,
+  NZST: 12 * 60,
+  NZDT: 13 * 60,
 };
 
 export const MONTHS: Readonly<Record<string, number>> = {

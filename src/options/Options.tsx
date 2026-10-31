@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_PREFERENCES, type Preferences } from '../types';
-import { loadPreferences, onPreferencesChanged, savePreferences } from '../lib/storage';
+import { loadPreferences, onPreferencesChanged, sanitize, savePreferences } from '../lib/storage';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { viewInZone } from '../lib/tz';
 import { ZonePicker } from '../popup/ZonePicker';
@@ -11,8 +11,10 @@ export function Options(): JSX.Element {
   const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [saveError, setSaveError] = useState<string | null>(null);
-  // Our own writes echo back through storage.onChanged; ignore those echoes.
-  const pendingSaves = useRef(0);
+  // Our own writes echo back through storage.onChanged. Remember what we last
+  // wrote and ignore only that echo, so changes made elsewhere (the popup, the
+  // in-page card, another settings tab) still show up here.
+  const lastWritten = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -24,7 +26,8 @@ export function Options(): JSX.Element {
     });
     // Pick up changes made elsewhere (the popup, the in-page card, another tab).
     const unsub = onPreferencesChanged((p) => {
-      if (alive && pendingSaves.current === 0) setPrefs(p);
+      if (!alive || JSON.stringify(p) === lastWritten.current) return;
+      setPrefs(p);
     });
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => {
@@ -43,12 +46,26 @@ export function Options(): JSX.Element {
 
   function update(next: Preferences): void {
     setPrefs(next);
-    pendingSaves.current += 1;
+    lastWritten.current = JSON.stringify(sanitize(next));
     void savePreferences(next).then((r) => {
-      pendingSaves.current -= 1;
-      setSaveError(r.ok ? null : r.error);
+      if (r.ok) {
+        setSaveError(null);
+        return;
+      }
+      // Not saved: show why, and go back to what is actually stored so the
+      // page never claims a setting that the extension is not using.
+      setSaveError(r.error);
+      lastWritten.current = null;
+      void loadPreferences().then(setPrefs);
     });
   }
+
+  // Deep link from the in-page card: settings#formats.
+  useEffect(() => {
+    if (!loaded || typeof window === 'undefined') return;
+    const id = window.location.hash.replace(/^#/, '');
+    if (id) document.getElementById(id)?.scrollIntoView?.({ block: 'start' });
+  }, [loaded]);
 
   function addZone(zone: string): void {
     if (prefs.targetZones.includes(zone)) return;
@@ -83,9 +100,7 @@ export function Options(): JSX.Element {
       )}
 
       <section className="tzx-field">
-        <span className="tzx-field-label" id="tzx-s2c-label">
-          Convert when I select text
-        </span>
+        <span className="tzx-field-label">Convert when I select text</span>
         <Switch
           checked={prefs.selectToConvert}
           label="Convert when I select text"
@@ -171,7 +186,8 @@ export function Options(): JSX.Element {
           onChange={(v) => update({ ...prefs, keepSelection: v })}
         />
         <p className="tzx-hint">
-          Keep the page text selected while the conversion popover is open.
+          While a card is open, mark the matched text with a colored highlight. The browser's own selection is
+          cleared so the mark stays visible; turn this off to keep the normal selection (for example to copy it).
         </p>
       </section>
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { useMemo, useState, useRef, useEffect, useCallback, useId } from 'react';
 import { listTimeZones } from '../lib/tz';
 
 export interface ZonePickerProps {
@@ -18,6 +18,12 @@ export function ZonePicker({
   label,
 }: ZonePickerProps): JSX.Element {
   const allZones = useMemo(() => listTimeZones(), []);
+  // Unique per instance: two pickers on one page must not share ids, or the
+  // second input gets the first one's label.
+  const uid = useId();
+  const inputId = `${uid}-input`;
+  const listId = `${uid}-listbox`;
+  const optId = (i: number): string => `${uid}-opt-${i}`;
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -37,6 +43,13 @@ export function ZonePicker({
   useEffect(() => {
     setActive(0);
   }, [query]);
+
+  // Keep the keyboard-highlighted option visible in the scrolling list.
+  useEffect(() => {
+    if (!open) return;
+    const el = document.getElementById(`${uid}-opt-${active}`);
+    el?.scrollIntoView?.({ block: 'nearest' });
+  }, [active, open, uid]);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent): void {
@@ -81,16 +94,25 @@ export function ZonePicker({
   );
 
   return (
-    <div className="tzx-picker" ref={containerRef}>
-      <label className="tzx-sr-only" htmlFor="tzx-zone-input">
+    <div
+      className="tzx-picker"
+      ref={containerRef}
+      onBlur={(e) => {
+        // Close when keyboard focus leaves the picker (Tab away).
+        const next = e.relatedTarget;
+        if (!(next instanceof Node) || !containerRef.current?.contains(next)) setOpen(false);
+      }}
+    >
+      <label className="tzx-sr-only" htmlFor={inputId}>
         {label}
       </label>
       <input
-        id="tzx-zone-input"
+        id={inputId}
         type="text"
         role="combobox"
-        aria-expanded={open}
-        aria-controls="tzx-zone-listbox"
+        aria-expanded={open && matches.length > 0}
+        aria-controls={listId}
+        aria-activedescendant={open && matches[active] ? optId(active) : undefined}
         aria-autocomplete="list"
         autoComplete="off"
         value={query}
@@ -103,10 +125,11 @@ export function ZonePicker({
         onKeyDown={onKeyDown}
       />
       {open && matches.length > 0 && (
-        <ul className="tzx-listbox" id="tzx-zone-listbox" role="listbox">
+        <ul className="tzx-listbox" id={listId} role="listbox" aria-label={label} tabIndex={-1}>
           {matches.map((zone, i) => (
             <li
               key={zone}
+              id={optId(i)}
               role="option"
               aria-selected={i === active}
               className={i === active ? 'tzx-opt tzx-opt-active' : 'tzx-opt'}
@@ -122,8 +145,8 @@ export function ZonePicker({
         </ul>
       )}
       {open && query.trim().length > 0 && matches.length === 0 && (
-        <ul className="tzx-listbox" role="listbox">
-          <li className="tzx-opt tzx-opt-empty" aria-disabled="true">
+        <ul className="tzx-listbox" role="listbox" aria-label={label} tabIndex={-1}>
+          <li className="tzx-opt tzx-opt-empty" role="option" aria-selected={false} aria-disabled="true">
             No matching timezone
           </li>
         </ul>

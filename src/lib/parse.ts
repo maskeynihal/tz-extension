@@ -2,8 +2,12 @@ import type { CustomFormat, DateOnlyPolicy, ParsedTime } from '../types';
 import { BUILTIN_FORMATS } from './builtin-formats';
 import { matchCustomFormat, type Candidate, type MatchContext } from './custom-formats';
 
-/** Only this many characters of a selection are scanned (keeps select-all fast). */
-export const SCAN_LIMIT = 2000;
+/**
+ * Only this many characters of a selection are scanned. Built-in and token
+ * regexes are linear, so this covers a select-all of a long article while
+ * keeping each mouseup to a few milliseconds.
+ */
+export const SCAN_LIMIT = 20_000;
 
 /** Options controlling how ambiguous values are interpreted. */
 export interface ParseOptions {
@@ -29,8 +33,8 @@ function overlaps(a: Candidate, b: Candidate): boolean {
 }
 
 /**
- * Parse a free-text string into recognized times, in document order. The
- * caller typically shows the first.
+ * Parse a free-text string into recognized times: the best match first, then
+ * the others in document order. The caller typically shows the first.
  *
  * Every enabled format (custom and built-in) proposes its matches. Where
  * matches overlap, the longest wins; on equal length a custom format beats a
@@ -73,12 +77,17 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
   for (const c of ranked) {
     if (!chosen.some((k) => overlaps(k, c))) chosen.push(c);
   }
-  chosen.sort((a, b) => a.index - b.index);
+  // The best match leads (it is what the popover shows); the rest follow in
+  // document order. So "Starts 9:00, deadline 2024-01-02T15:00Z" leads with
+  // the full timestamp, not the bare time that happens to come first.
+  const [best, ...others] = chosen;
+  others.sort((a, b) => a.index - b.index);
+  const ordered = best ? [best, ...others] : [];
 
   // De-duplicate by (epochMs, matchedText).
   const seen = new Set<string>();
   const out: ParsedTime[] = [];
-  for (const c of chosen) {
+  for (const c of ordered) {
     const key = `${c.parsed.epochMs}:${c.parsed.matchedText}`;
     if (seen.has(key)) continue;
     seen.add(key);

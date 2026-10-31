@@ -212,15 +212,56 @@ test.describe('formats, context menu, select-to-convert', () => {
     await expect(popover(page)).toBeVisible({ timeout: 5000 });
     await expect(popover(page)).toContainText('format: German date');
 
-    // Switch it off from settings: the page stops converting it as one value.
+    // Switch it off from settings: the page stops converting it, and the
+    // trailing "10:30" is not passed off as today's time either.
     await custom.getByRole('switch', { name: 'German date format' }).click();
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
     await selectText(page, '#t');
-    await expect(popover(page)).toBeVisible({ timeout: 5000 });
-    await expect(popover(page)).not.toContainText('German date');
+    await page.waitForTimeout(600);
+    await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
     await page.close();
     await opt.close();
+  });
+
+  test('a card near the bottom of the viewport stays fully visible', async () => {
+    const page = await openPage('<div style="height:2000px"></div><p id="t">2024-12-31 10:30 UTC</p>');
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.locator('#t').scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollBy(0, -10));
+    await selectText(page, '#t');
+    await expect(popover(page)).toBeVisible({ timeout: 5000 });
+    await expect(popover(page)).toContainText('read as UTC');
+    await page.waitForTimeout(100);
+    const box = await page.locator('#tz-extension-popover-host').boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(700);
+    await page.close();
+  });
+
+  test('keyboard selection (Shift+Home in a text field) opens the converter', async () => {
+    const page = await openPage('<textarea id="t">1700000000</textarea>');
+    await page.locator('#t').focus();
+    await page.keyboard.press('End');
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('Home');
+    await page.keyboard.up('Shift');
+    await expect(popover(page)).toBeVisible({ timeout: 5000 });
+    await page.close();
+  });
+
+  test('"Open format settings" lands on the formats section', async () => {
+    const page = await openPage('<p id="t">not a date</p>');
+    await selectText(page, '#t');
+    await menuConvert('not a date');
+    const opened = context.waitForEvent('page');
+    await page.locator('#tz-extension-popover-host .tzx-nomatch').getByRole('button', { name: 'Open format settings' }).click();
+    const opt = await opened;
+    expect(opt.url()).toMatch(/#formats$/);
+    await expect(opt.getByRole('heading', { name: 'Recognized formats' })).toBeInViewport();
+    await opt.close();
+    await page.close();
   });
 
   test('settings: the select-to-convert switch persists', async () => {

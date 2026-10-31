@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DateOnlyPolicy, ParsedTime, Preferences } from '../types';
 import { resolveLocalZone } from '../types';
-import { viewInZone, listTimeZones, isValidZone } from '../lib/tz';
+import { viewInZone, listTimeZones, isValidZone, sameZone } from '../lib/tz';
 
 export interface PopoverProps {
   readonly parsed: ParsedTime;
@@ -168,8 +168,10 @@ export function Popover({
   const ref = useRef<HTMLDivElement>(null);
 
   const [zones, setZones] = useState<string[]>(() => {
-    const base = [...prefs.targetZones];
-    if (isValidZone(LOCAL_ZONE) && !base.includes(LOCAL_ZONE)) base.unshift(LOCAL_ZONE);
+    // Drop aliases of zones already listed (e.g. Asia/Katmandu vs Asia/Kathmandu).
+    const base: string[] = [];
+    for (const z of prefs.targetZones) if (!base.some((b) => sameZone(b, z))) base.push(z);
+    if (isValidZone(LOCAL_ZONE) && !base.some((z) => sameZone(z, LOCAL_ZONE))) base.unshift(LOCAL_ZONE);
     return base;
   });
   const allZones = useMemo(() => listTimeZones(), []);
@@ -184,7 +186,7 @@ export function Popover({
 
   function addZone(zone: string): void {
     if (!zone || !isValidZone(zone)) return;
-    setZones((prev) => (prev.includes(zone) ? prev : [...prev, zone]));
+    setZones((prev) => (prev.some((z) => sameZone(z, zone)) ? prev : [...prev, zone]));
   }
   function removeZone(zone: string): void {
     setZones((prev) => prev.filter((z) => z !== zone));
@@ -279,7 +281,7 @@ export function Popover({
 
       {zones.map((zone) => {
         const v = viewInZone(parsed.epochMs, zone, prefs.hour12);
-        const isLocal = zone === LOCAL_ZONE;
+        const isLocal = sameZone(zone, LOCAL_ZONE);
         return (
           <div className={`tzx-row${isLocal ? ' local' : ''}`} key={zone}>
             <div className="tzx-zonewrap">

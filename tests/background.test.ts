@@ -125,6 +125,21 @@ describe('background: context menu', () => {
     expect(sent.text.length).toBe(MAX_MESSAGE_TEXT);
   });
 
+  it('opens settings at the formats section when asked', async () => {
+    const h = await loadWorker();
+    const create = vi.fn(async () => ({}));
+    const c = (globalThis as unknown as { chrome: Record<string, Record<string, unknown>> }).chrome;
+    c.tabs = { ...c.tabs, create };
+    c.runtime = {
+      ...c.runtime,
+      getManifest: () => ({ options_page: 'src/options/index.html' }),
+      getURL: (p: string) => `chrome-extension://ext-id/${p}`,
+    };
+    h.messages.forEach((l) => l({ type: 'tzx/open-options', section: 'formats' }, { id: 'ext-id' }, vi.fn()));
+    expect(create).toHaveBeenCalledWith({ url: 'chrome-extension://ext-id/src/options/index.html#formats' });
+    expect(h.openOptionsPage).not.toHaveBeenCalled();
+  });
+
   it('opens settings only for messages from this extension', async () => {
     const h = await loadWorker();
     const respond = vi.fn();

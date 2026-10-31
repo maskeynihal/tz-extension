@@ -22,6 +22,8 @@ const EST_HEIGHT = 200;
 let prefs: Preferences = DEFAULT_PREFERENCES;
 /** Until stored prefs arrive we do not know whether select-to-convert is on. */
 let prefsLoaded = false;
+/** Resolves once stored prefs are in `prefs` (menu clicks wait for it). */
+let prefsReady: Promise<void> = Promise.resolve();
 let debounceTimer: number | undefined;
 /** Where the last right-click happened (viewport coords), to anchor menu cards. */
 let lastContextPoint: { x: number; y: number } | null = null;
@@ -268,6 +270,34 @@ function positionFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
   applyBox(hostEl, 'fixed', top, left);
 }
 
+/**
+ * Once the card has rendered, use its real height: flip it above the
+ * selection when it would run off the bottom, else clamp it into view. React
+ * commits asynchronously and fonts can change the size, so refit whenever the
+ * card resizes during its first second.
+ */
+function refitFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
+  const fit = (): void => {
+    if (!hostEl.isConnected) return;
+    const h = hostEl.getBoundingClientRect().height;
+    if (!h) return;
+    const vh = window.innerHeight;
+    let top = rect.bottom + MARGIN;
+    if (top + h > vh - MARGIN) {
+      const above = rect.top - MARGIN - h;
+      top = above >= MARGIN ? above : Math.max(MARGIN, vh - h - MARGIN);
+    }
+    hostEl.style.setProperty('top', `${top}px`, 'important');
+  };
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(fit);
+    ro.observe(hostEl);
+    window.setTimeout(() => ro.disconnect(), 1000);
+  } else {
+    window.setTimeout(fit, 50);
+  }
+}
+
 /** Place a pinned card at a document-space point (scrolls with the page). */
 function positionAbsolute(hostEl: HTMLDivElement, pageX: number, pageY: number): void {
   // Clamp horizontally within the document width so it never overflows off-screen.
@@ -391,6 +421,7 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, 
         },
       }),
     );
+    refitFixed(hostEl, rect);
     document.addEventListener('scroll', onScroll, true);
   } catch {
     teardownTransient();
@@ -532,7 +563,7 @@ function renderNoMatch(rect: DOMRect, text: string): void {
         onClose: dismissTransient,
         onDragStart: (e) => startDrag(hostEl, e, true),
         onOpenSettings: () => {
-          const msg: OpenOptionsMessage = { type: 'tzx/open-options' };
+          const msg: OpenOptionsMessage = { type: 'tzx/open-options', section: 'formats' };
           try {
             void chrome.runtime.sendMessage(msg).catch(() => undefined);
           } catch {
@@ -542,6 +573,7 @@ function renderNoMatch(rect: DOMRect, text: string): void {
         },
       }),
     );
+    refitFixed(hostEl, rect);
     document.addEventListener('scroll', onScroll, true);
   } catch {
     teardownTransient();
@@ -642,7 +674,9 @@ function onMouseUp(e: MouseEvent): void {
 }
 
 function onKeyUp(e: KeyboardEvent): void {
-  if (e.shiftKey || e.key === 'Escape') handleSelectionChange();
+  // Keyboard selection: Shift+Arrow/Home/End. Releasing Shift itself reports
+  // shiftKey=false, so check the key too.
+  if (e.shiftKey || e.key === 'Shift' || e.key === 'Escape') handleSelectionChange();
 }
 
 function onContextMenu(e: MouseEvent): void {
@@ -653,11 +687,15 @@ function onRuntimeMessage(
   msg: unknown,
   sender: chrome.runtime.MessageSender,
   sendResponse: (r: Ack) => void,
-): void {
-  if (!fromThisExtension(sender) || !isConvertSelectionMessage(msg)) return;
-  // Only the top frame or the frame the menu targeted receives this.
-  convertFromMenu(msg.text);
-  sendResponse({ ok: true });
+): boolean | undefined {
+  if (!fromThisExtension(sender) || !isConvertSelectionMessage(msg)) return undefined;
+  // A freshly injected copy may still be loading preferences; converting now
+  // would use the default zones and ignore the user's formats.
+  void prefsReady.then(() => {
+    convertFromMenu(msg.text);
+    sendResponse({ ok: true });
+  });
+  return true; // respond asynchronously
 }
 
 // --- Install (once per page, survives re-injection) ------------------------
@@ -679,7 +717,7 @@ function extensionAlive(): boolean {
 }
 
 function install(): ContentInstance {
-  void loadPreferences().then((p) => {
+  prefsReady = loadPreferences().then((p) => {
     prefs = p;
     prefsLoaded = true;
   });

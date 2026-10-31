@@ -12,13 +12,14 @@ import {
  * Compiles user-defined custom formats into matchers and runs them against text.
  *
  * Two modes:
- *  - token mode (default, SAFE): the pattern uses named tokens like YYYY/MM/DD
- *    HH:mm:ss. Each token becomes a bounded regex fragment and every literal
- *    character is escaped, so a user can never express a catastrophic-
- *    backtracking pattern.
+ *  - token mode (default): the pattern uses named tokens like YYYY/MM/DD
+ *    HH:mm:ss. Each token becomes a bounded regex fragment, every literal
+ *    character is escaped, and whitespace runs collapse into one \s+, so the
+ *    compiled regex has no competing open-ended repeats.
  *  - advanced mode: the pattern is a raw JS regex with named groups. It must
  *    compile, use only known group names, not match empty text, and not nest
- *    unbounded repeats (a best-effort ReDoS guard). It also only ever sees the
+ *    nest repeats, and stay under a backtracking-cost estimate (see
+ *    analyzeRegex). It runs on short windows (ADVANCED_MATCH_WINDOW) over the
  *    first ADVANCED_SCAN_LIMIT characters of a selection.
  */
 
@@ -96,7 +97,13 @@ const FIELD_OF: Readonly<Record<Field, string>> = {
 };
 
 export type CompileResult =
-  | { readonly ok: true; readonly regex: RegExp; readonly groups: ReadonlySet<Field> }
+  | {
+      readonly ok: true;
+      readonly regex: RegExp;
+      readonly groups: ReadonlySet<Field>;
+      /** Non-blocking advice, e.g. letters that will be matched literally. */
+      readonly warnings: readonly string[];
+    }
   | { readonly ok: false; readonly error: string };
 
 function escapeLiteral(ch: string): string {
@@ -109,7 +116,9 @@ function checkFields(groups: ReadonlySet<Field>, twelveHourTokens: boolean): str
   const hasMonth = has('mo') || has('moName');
   const hasDate = hasMonth || has('d') || has('y') || has('yy');
   const hasTime = has('h') || has('mi') || has('s') || has('ms');
-  if (!hasDate && !hasTime) return 'The pattern needs date or time tokens (for example DD/MM/YYYY or HH:mm).';
+  if (!hasDate && !hasTime) {
+    return 'The pattern needs date or time tokens (for example DD/MM/YYYY or HH:mm). Literal words go in [ ].';
+  }
   if (hasDate && !(hasMonth && has('d'))) {
     return 'A date needs both a month (MM, M, MMM or MMMM) and a day (DD, D or Do).';
   }
@@ -117,7 +126,9 @@ function checkFields(groups: ReadonlySet<Field>, twelveHourTokens: boolean): str
   if (has('s') && !has('mi')) return 'Seconds (ss) need minutes (mm).';
   if (has('ms') && !has('s')) return 'Milliseconds (SSS) need seconds (ss).';
   if (has('ap') && !has('h')) return 'AM/PM (A) needs an hour token (hh or h).';
-  if (twelveHourTokens && !has('ap')) return 'hh and h are 12-hour clock tokens. Add A for AM/PM, or use HH or H.';
+  if (twelveHourTokens && !has('ap')) {
+    return 'hh and h are 12-hour clock tokens. Add A for AM/PM, or use HH or H. To match letters literally, wrap them in [ ].';
+  }
   return null;
 }
 
@@ -131,6 +142,7 @@ export function compileTokenFormat(pattern: string): CompileResult {
   const groups = new Set<Field>();
   const seenField = new Map<string, string>();
   let twelveHour = false;
+  const literalLetters = new Set<string>();
   let i = 0;
   while (i < pattern.length) {
     const ch = pattern[i] ?? '';
@@ -165,62 +177,135 @@ export function compileTokenFormat(pattern: string): CompileResult {
       pieces.push({ kind: 'literal', src: '\\s+' });
       continue;
     }
+    // "T" is the usual ISO date/time separator; any other bare letter is
+    // probably a mistyped token, so say how it will be read.
+    if (/[A-Za-z]/.test(ch) && ch !== 'T') literalLetters.add(ch);
     pieces.push({ kind: 'literal', src: escapeLiteral(ch) });
     i += 1;
   }
   const fieldError = checkFields(groups, twelveHour);
   if (fieldError) return { ok: false, error: fieldError };
 
+  // Collapse adjacent whitespace pieces (e.g. "[   ]" or "[at ] HH") into a
+  // single \s+. Two \s+ in a row backtrack quadratically; a dozen hang a page.
+  const merged: typeof pieces = [];
+  for (const p of pieces) {
+    const prev = merged[merged.length - 1];
+    if (p.src === '\\s+' && prev?.src === '\\s+') continue;
+    merged.push(p);
+  }
+
   // Do not start or end a match in the middle of a number or word.
-  const first = pieces[0];
-  const last = pieces[pieces.length - 1];
+  const first = merged[0];
+  const last = merged[merged.length - 1];
   const src =
     (first?.kind === 'token' ? '(?<![A-Za-z0-9])' : '') +
-    pieces.map((p) => p.src).join('') +
+    merged.map((p) => p.src).join('') +
     (last?.kind === 'token' ? '(?![A-Za-z0-9])' : '');
+  const warnings: string[] = [];
+  if (literalLetters.size > 0) {
+    const list = Array.from(literalLetters).join(', ');
+    warnings.push(
+      `${list} ${literalLetters.size === 1 ? 'is not a token and is' : 'are not tokens and are'} matched literally. Wrap literal text in [ ] to make that explicit${literalLetters.has('Z') ? '; use TZ to read a zone' : ''}.`,
+    );
+  }
   try {
-    return { ok: true, regex: new RegExp(src, 'g'), groups };
+    return { ok: true, regex: new RegExp(src, 'g'), groups, warnings };
   } catch (e) {
     return { ok: false, error: `The pattern could not be compiled: ${(e as Error).message}` };
   }
 }
 
 /**
- * Best-effort ReDoS guard: true when a group containing an unbounded repeat
- * (+, *, {n,}) is itself repeated, e.g. (a+)+ or (\d+:?)*.
+ * Longest text an advanced regex may match. Advanced regexes run on windows of
+ * this many characters, so an open-ended repeat (+, *, {n,}) can never scan
+ * more than this from one start position.
  */
-export function hasNestedQuantifier(src: string): boolean {
-  // One flag per open group: does it contain an unbounded repeat?
-  const stack: boolean[] = [];
-  const rest = (j: number): string => src.slice(j);
-  const isUnbounded = (j: number): boolean =>
-    src[j] === '+' || src[j] === '*' || (src[j] === '{' && /^\{\d+,\}/.test(rest(j)));
-  // Any quantifier that allows more than one repetition.
-  const isRepeat = (j: number): boolean => {
-    if (src[j] === '+' || src[j] === '*') return true;
-    if (src[j] !== '{') return false;
-    const m = /^\{(\d+)(,(\d*))?\}/.exec(rest(j));
-    if (!m) return false;
-    if (m[2] === undefined) return Number(m[1]) > 1;
-    return m[3] === '' || Number(m[3]) > 1;
+export const ADVANCED_MATCH_WINDOW = 80;
+/** Upper bound on the estimated backtracking work per start position. */
+const MAX_REGEX_COST = 10_000;
+
+export interface RegexRisk {
+  /** A repeated group contains a repeat or an alternation: exponential. */
+  readonly nested: boolean;
+  /** Product of the choices every quantifier allows (unbounded = window). */
+  readonly cost: number;
+}
+
+/**
+ * Static ReDoS analysis for user regexes. Catastrophic backtracking needs
+ * either a repeated group that can match the same text several ways (nested
+ * repeats such as (a+)+, or alternation such as (a|a)+) or many adjacent
+ * repeats competing for the same characters (\d+\d*\d*). The first is
+ * rejected outright. The second is bounded by estimating the work as the
+ * product of each quantifier's range, with unbounded ones capped at the match
+ * window. The estimate over-counts for repeats that cannot overlap, which errs
+ * on the safe side.
+ */
+export function analyzeRegex(src: string): RegexRisk {
+  interface Frame {
+    /** Contains a variable-length repeat (?, *, +, {m,n} with m < n). */
+    hasRepeat: boolean;
+    hasAlt: boolean;
+    cost: number;
+  }
+  const stack: Frame[] = [{ hasRepeat: false, hasAlt: false, cost: 1 }];
+  const top = (): Frame => stack[stack.length - 1] as Frame;
+  let nested = false;
+
+  /** Parse a quantifier at j: its range and length, or null. */
+  const quantAt = (j: number): { min: number; max: number; len: number } | null => {
+    const c = src[j];
+    let q: { min: number; max: number; len: number } | null = null;
+    if (c === '*') q = { min: 0, max: Infinity, len: 1 };
+    else if (c === '+') q = { min: 1, max: Infinity, len: 1 };
+    else if (c === '?') q = { min: 0, max: 1, len: 1 };
+    else if (c === '{') {
+      const m = /^\{(\d+)(,(\d*))?\}/.exec(src.slice(j));
+      if (m) {
+        const min = Number(m[1]);
+        const max = m[2] === undefined ? min : m[3] === '' ? Infinity : Number(m[3]);
+        q = { min, max, len: m[0].length };
+      }
+    }
+    if (q && src[j + q.len] === '?') q = { ...q, len: q.len + 1 }; // lazy
+    return q;
   };
-  const markTop = (): void => {
-    if (stack.length > 0) stack[stack.length - 1] = true;
-  };
+  const factor = (q: { min: number; max: number }): number =>
+    q.max === Infinity ? ADVANCED_MATCH_WINDOW : Math.max(1, Math.min(q.max, ADVANCED_MATCH_WINDOW) - q.min + 1);
+
   let i = 0;
   while (i < src.length) {
     const c = src[i];
     if (c === '(') {
-      stack.push(false);
+      stack.push({ hasRepeat: false, hasAlt: false, cost: 1 });
       i++;
+      // Skip group syntax such as ?: ?= ?! ?<= ?<! ?<name>
+      if (src[i] === '?') {
+        const m = /^\?(?::|=|!|<=|<!|<[A-Za-z_$][\w$]*>)/.exec(src.slice(i));
+        if (m) i += m[0].length;
+      }
       continue;
     }
     if (c === ')') {
-      const inner = stack.pop() ?? false;
-      const next = i + 1;
-      if (inner && isRepeat(next)) return true;
-      if (inner || isUnbounded(next)) markTop();
-      i = next;
+      const inner = stack.length > 1 ? (stack.pop() as Frame) : { hasRepeat: false, hasAlt: false, cost: 1 };
+      i++;
+      const q = quantAt(i);
+      const parent = top();
+      if (q) {
+        i += q.len;
+        if (q.max > 1 && (inner.hasRepeat || inner.hasAlt)) nested = true;
+        parent.cost *= inner.cost * factor(q);
+        if (q.max > q.min) parent.hasRepeat = true;
+      } else {
+        parent.cost *= inner.cost;
+      }
+      if (inner.hasRepeat) parent.hasRepeat = true;
+      continue;
+    }
+    if (c === '|') {
+      top().hasAlt = true;
+      i++;
       continue;
     }
     let atomEnd: number;
@@ -235,10 +320,24 @@ export function hasNestedQuantifier(src: string): boolean {
     } else {
       atomEnd = i + 1;
     }
-    if (isUnbounded(atomEnd)) markTop();
-    i = atomEnd;
+    const q = quantAt(atomEnd);
+    if (q) {
+      top().cost *= factor(q);
+      // A fixed count like \d{2} matches one way; only variable repeats are ambiguous.
+      if (q.max > q.min) top().hasRepeat = true;
+      i = atomEnd + q.len;
+    } else {
+      i = atomEnd;
+    }
   }
-  return false;
+  let cost = 1;
+  for (const f of stack) cost *= f.cost;
+  return { nested, cost };
+}
+
+/** True when a repeated group contains a repeat or an alternation, e.g. (a+)+ or (a|b)*. */
+export function hasNestedQuantifier(src: string): boolean {
+  return analyzeRegex(src).nested;
 }
 
 /** Compile an advanced raw-regex pattern, or explain why it cannot be used. */
@@ -251,7 +350,9 @@ export function compileAdvancedFormat(pattern: string): CompileResult {
   try {
     regex = new RegExp(pattern, 'g');
   } catch (e) {
-    return { ok: false, error: `Invalid regular expression: ${(e as Error).message}` };
+    // Engines already prefix "Invalid regular expression: /src/: ...".
+    const msg = (e as Error).message.replace(/^Invalid regular expression:\s*/i, '');
+    return { ok: false, error: `Invalid regular expression: ${msg}` };
   }
   const names = Array.from(pattern.matchAll(/\(\?<([A-Za-z_$][\w$]*)>/g), (m) => m[1] ?? '');
   if (names.length === 0) {
@@ -276,10 +377,19 @@ export function compileAdvancedFormat(pattern: string): CompileResult {
   }
   const fieldError = checkFields(groups, false);
   if (fieldError) return { ok: false, error: fieldError };
-  if (hasNestedQuantifier(pattern)) {
+  const risk = analyzeRegex(pattern);
+  if (risk.nested) {
     return {
       ok: false,
-      error: 'This regex repeats a group that already repeats, like (a+)+. That can freeze the page, so it is not allowed.',
+      error:
+        'This regex repeats a group that contains a repeat or a choice, like (a+)+ or (a|b)+. That can freeze the page, so it is not allowed.',
+    };
+  }
+  if (risk.cost > MAX_REGEX_COST) {
+    return {
+      ok: false,
+      error:
+        'This regex has too many open-ended repeats (+, *, {n,}) to run safely on every page. Use bounded repeats such as \\d{1,4} or \\s{0,3}.',
     };
   }
   try {
@@ -288,7 +398,7 @@ export function compileAdvancedFormat(pattern: string): CompileResult {
   } catch {
     /* compiled above */
   }
-  return { ok: true, regex, groups };
+  return { ok: true, regex, groups, warnings: [] };
 }
 
 /** Compile either mode. */
@@ -416,13 +526,29 @@ export function matchCustomFormat(
   if (!fmt.enabled) return [];
   const compiled = compiledFor(fmt);
   if (!compiled.ok) return [];
-  const src = fmt.advanced ? text.slice(0, ADVANCED_SCAN_LIMIT) : text;
+  return fmt.advanced
+    ? matchWindowed(text.slice(0, ADVANCED_SCAN_LIMIT), compiled.regex.source, fmt, ctx)
+    : matchGlobal(text, compiled.regex.source, fmt, ctx);
+}
+
+function toCandidate(
+  m: RegExpExecArray,
+  index: number,
+  fmt: CustomFormat,
+  ctx: MatchContext,
+): Candidate | null {
+  const parsed = fromGroups((m.groups ?? {}) as Record<string, string | undefined>, m[0], fmt, ctx);
+  return parsed ? { parsed, index, length: m[0].length } : null;
+}
+
+/** Token patterns: bounded fragments, so one global scan is safe. */
+function matchGlobal(src: string, source: string, fmt: CustomFormat, ctx: MatchContext): Candidate[] {
   // Fresh regex per call: the cached one is shared and `g` regexes are stateful.
-  const re = new RegExp(compiled.regex.source, 'g');
+  const re = new RegExp(source, 'g');
   const out: Candidate[] = [];
   let guard = 0;
   let m: RegExpExecArray | null;
-  while (out.length < MAX_MATCHES_PER_FORMAT && guard++ < 200) {
+  while (out.length < MAX_MATCHES_PER_FORMAT && guard++ <= src.length + 1) {
     try {
       m = re.exec(src);
     } catch {
@@ -433,18 +559,48 @@ export function matchCustomFormat(
       re.lastIndex = m.index + 1;
       continue;
     }
-    const parsed = fromGroups(
-      (m.groups ?? {}) as Record<string, string | undefined>,
-      m[0],
-      fmt,
-      ctx,
-    );
-    if (parsed) {
-      out.push({ parsed, index: m.index, length: m[0].length });
-    } else {
-      // Invalid values here; a valid match may still start inside this one.
-      re.lastIndex = m.index + 1;
+    const c = toCandidate(m, m.index, fmt, ctx);
+    if (c) out.push(c);
+    // On invalid values a valid match may still start inside this one.
+    else re.lastIndex = m.index + 1;
+  }
+  return out;
+}
+
+/**
+ * Advanced regexes: try each start position on a short window with a sticky
+ * regex, so backtracking never sees more than ADVANCED_MATCH_WINDOW characters.
+ * A few characters before the start stay visible for lookbehinds.
+ */
+function matchWindowed(src: string, source: string, fmt: CustomFormat, ctx: MatchContext): Candidate[] {
+  let re: RegExp;
+  try {
+    re = new RegExp(source, 'y');
+  } catch {
+    return [];
+  }
+  const LOOKBEHIND = 8;
+  const out: Candidate[] = [];
+  let i = 0;
+  while (i < src.length && out.length < MAX_MATCHES_PER_FORMAT) {
+    const base = Math.max(0, i - LOOKBEHIND);
+    const win = src.slice(base, i + ADVANCED_MATCH_WINDOW);
+    re.lastIndex = i - base;
+    let m: RegExpExecArray | null = null;
+    try {
+      m = re.exec(win);
+    } catch {
+      return out;
     }
+    if (m && m[0].length > 0) {
+      const c = toCandidate(m, i, fmt, ctx);
+      if (c) {
+        out.push(c);
+        i += m[0].length;
+        continue;
+      }
+    }
+    i++;
   }
   return out;
 }
