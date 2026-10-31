@@ -224,6 +224,12 @@ export function compileTokenFormat(pattern: string): CompileResult {
 export const ADVANCED_MATCH_WINDOW = 80;
 /** Upper bound on the estimated backtracking work per start position. */
 const MAX_REGEX_COST = 20_000;
+/**
+ * Upper bound on cost × width: roughly the characters one attempt can
+ * examine across all its backtracking. Bounds a single exec, which the
+ * wall-clock budget cannot interrupt.
+ */
+const MAX_REGEX_WORK = 5_000_000;
 /** Longest text a lookbehind may inspect (it runs on every attempt). */
 const MAX_LOOKBEHIND_WIDTH = 32;
 /**
@@ -239,6 +245,11 @@ export interface RegexRisk {
   readonly cost: number;
   /** Widest text any lookbehind can inspect (unbounded = Infinity). */
   readonly lookbehindWidth: number;
+  /**
+   * Characters one attempt can examine, counting lookahead bodies (each one
+   * re-scans) and capping open-ended repeats at the match window.
+   */
+  readonly width: number;
 }
 
 /**
@@ -334,7 +345,7 @@ export function analyzeRegex(src: string): RegexRisk {
         parent.cost *= innerCost * factor(q);
         if (q.max > q.min) parent.hasRepeat = true;
         if (inner.lookbehind && q.max > 1) lookbehindWidth = Infinity;
-        parent.width += inner.lookbehind ? 0 : innerWidth * q.max;
+        parent.width += inner.lookbehind ? 0 : innerWidth * Math.min(q.max, ADVANCED_MATCH_WINDOW);
       } else {
         parent.cost *= innerCost;
         // Lookarounds match no text of their own.
@@ -374,7 +385,7 @@ export function analyzeRegex(src: string): RegexRisk {
       top().cost *= factor(q);
       // A fixed count like \d{2} matches one way; only variable repeats are ambiguous.
       if (q.max > q.min) top().hasRepeat = true;
-      if (!zeroWidth) top().width += q.max;
+      if (!zeroWidth) top().width += Math.min(q.max, ADVANCED_MATCH_WINDOW);
       i = atomEnd + q.len;
     } else {
       if (!zeroWidth) top().width += 1;
@@ -383,7 +394,8 @@ export function analyzeRegex(src: string): RegexRisk {
   }
   let cost = 1;
   for (const f of stack) cost *= f.cost * f.branches;
-  return { nested, cost, lookbehindWidth };
+  const width = stack.reduce((w, f) => w + widthOf(f), 0) + (Number.isFinite(lookbehindWidth) ? lookbehindWidth : 0);
+  return { nested, cost, lookbehindWidth, width };
 }
 
 /** True when a repeated group contains a repeat or an alternation, e.g. (a+)+ or (a|b)*. */
@@ -447,7 +459,7 @@ export function compileAdvancedFormat(pattern: string): CompileResult {
       error: `Lookbehinds may look back at most ${MAX_LOOKBEHIND_WIDTH} characters, with fixed or bounded repeats only.`,
     };
   }
-  if (risk.cost > MAX_REGEX_COST) {
+  if (risk.cost > MAX_REGEX_COST || risk.cost * Math.max(1, risk.width) > MAX_REGEX_WORK) {
     return {
       ok: false,
       error:

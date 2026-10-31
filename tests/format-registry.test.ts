@@ -643,3 +643,35 @@ describe('round-3 review and QA fixes', () => {
     expect(iso(at('10:00 utc-5')[0]!.epochMs)).toBe('2026-10-31T15:00:00.000Z');
   });
 });
+
+describe('round-4 fixes', () => {
+  const time = (fn: () => unknown): number => {
+    const t0 = performance.now();
+    fn();
+    return performance.now() - t0;
+  };
+  it('rejects patterns whose single attempt would scan too much (stacked lookaheads)', () => {
+    const p = `(?<h>\\d${'\\d?'.repeat(14)}${'(?=\\d{66})'.repeat(22)}\\d):(?<mi>\\d{2})`;
+    const r = compileAdvancedFormat(p);
+    expect(r.ok ? 'OK' : r.error).toMatch(/too many open-ended repeats/);
+  });
+  it('still accepts realistic regexes', () => {
+    for (const p of [
+      '(?<h>\\d+):(?<mi>\\d{2})\\s*(?<ap>am|pm)',
+      '(?<h>\\d{1,2})[:h.]?(?<mi>\\d{2})?\\s?(?<ap>[ap]\\.?m\\.?)?',
+      '(?<d>\\d{2})\\.(?<mo>\\d{2})\\.(?<y>\\d{4})(?: (?<h>\\d{2}):(?<mi>\\d{2}))?',
+      '(?<=at )(?<h>\\d{2}):(?<mi>\\d{2})',
+    ]) {
+      expect(compileAdvancedFormat(p).ok, p).toBe(true);
+    }
+  });
+  it('a first, cold parse with the worst accepted pattern stays fast', () => {
+    const p = `(?<h>\\d)${'\\d?'.repeat(13)}\\d{14}:(?<mi>\\d{2})`;
+    if (!compileAdvancedFormat(p).ok) return;
+    const f = fmt(`${p}(?:)`, { advanced: true }); // new source: no regex cache
+    expect(time(() => parseTimes('1'.repeat(500), { assumedZone: 'UTC', customFormats: [f] }))).toBeLessThan(150);
+  });
+  it('an impossible offset after a bare time yields nothing', () => {
+    expect(parseTimes('10:00 +15:00', 'UTC')).toHaveLength(0);
+  });
+});

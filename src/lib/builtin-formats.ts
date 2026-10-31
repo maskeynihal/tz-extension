@@ -344,7 +344,8 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
       scan(RE_TIME, src, (m) => {
         const [, hTok, miTok, sTok, ampm, zoneTok] = m;
         if (dateLikeBefore(src, m.index)) return null;
-        if (badOffset(zoneTok)) return null;
+        // "10:00 +15:00": refuse the whole span so "15:00" is not read next.
+        if (badOffset(zoneTok)) return VETO;
         const zone = resolveZoneToken(zoneTok);
         // Need an am/pm marker, a colon, or a real zone; "5" alone is not a
         // time. A bare number before a two-letter name ("3 CT scans",

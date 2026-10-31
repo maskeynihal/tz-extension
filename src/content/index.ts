@@ -727,10 +727,14 @@ function onKeyDownSelect(e: KeyboardEvent): void {
     keyboardSelecting = true;
     return;
   }
+  // Moving the caret without Shift collapses the selection: the next one is a
+  // fresh gesture, even if it selects the same text again.
+  if (!e.shiftKey && SELECT_KEYS.has(e.key)) dismissedKey = null;
   // Select all (Cmd/Ctrl+A). Use the physical key so non-Latin layouts work,
   // and keydown because macOS does not send keyup for keys held with Cmd. The
   // selection changes after this event, so read it on the next tick.
   if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === 'KeyA') {
+    dismissedKey = null; // an explicit select-all is a fresh gesture
     window.setTimeout(handleSelectionChange, 0);
     return;
   }
