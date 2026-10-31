@@ -28,6 +28,16 @@ interface Ranked extends Candidate {
   readonly priority: number;
 }
 
+/**
+ * How much a match pins down: a calendar date, a time of day, and an explicit
+ * zone each count. An epoch is a full instant.
+ */
+function specificity(p: ParsedTime): number {
+  if (p.kind === 'epoch-seconds' || p.kind === 'epoch-millis') return 4;
+  const hasDate = p.kind !== 'time-of-day' && p.kind !== 'offset' && !p.timeOnly;
+  return (hasDate ? 2 : 0) + (p.dateOnly ? 0 : 1) + (p.assumed ? 0 : 1);
+}
+
 function overlaps(a: Candidate, b: Candidate): boolean {
   return a.index < b.index + b.length && b.index < a.index + a.length;
 }
@@ -77,12 +87,15 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
   for (const c of ranked) {
     if (!chosen.some((k) => overlaps(k, c))) chosen.push(c);
   }
-  // The best match leads (it is what the popover shows); the rest follow in
-  // document order. So "Starts 9:00, deadline 2024-01-02T15:00Z" leads with
-  // the full timestamp, not the bare time that happens to come first.
-  const [best, ...others] = chosen;
-  others.sort((a, b) => a.index - b.index);
-  const ordered = best ? [best, ...others] : [];
+  // The most specific match leads (it is what the popover shows); the rest
+  // follow in document order. "Starts 9:00, deadline 2024-01-02T15:00Z" leads
+  // with the timestamp; "Standup 9:00, demo 16:30" leads with 9:00.
+  chosen.sort((a, b) => a.index - b.index);
+  let lead = 0;
+  for (let i = 1; i < chosen.length; i++) {
+    if (specificity(chosen[i]!.parsed) > specificity(chosen[lead]!.parsed)) lead = i;
+  }
+  const ordered = chosen.length ? [chosen[lead]!, ...chosen.filter((_, i) => i !== lead)] : [];
 
   // De-duplicate by (epochMs, matchedText).
   const seen = new Set<string>();

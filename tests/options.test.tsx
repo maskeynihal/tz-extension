@@ -223,3 +223,68 @@ describe('settings robustness', () => {
     expect(home).toHaveAttribute('aria-expanded', 'false');
   });
 });
+
+describe('settings robustness, round 2', () => {
+  const chromeMock = (): {
+    storage: {
+      sync: { set: ReturnType<typeof vi.fn> };
+      onChanged: { addListener: ReturnType<typeof vi.fn> };
+    };
+  } =>
+    (globalThis as unknown as {
+      chrome: {
+        storage: { sync: { set: ReturnType<typeof vi.fn> }; onChanged: { addListener: ReturnType<typeof vi.fn> } };
+      };
+    }).chrome;
+
+  it('two quick local changes end on the second, even when echoes arrive late', async () => {
+    render(<Options />);
+    const sw = await screen.findByRole('switch', { name: 'Convert when I select text' });
+    const onChanged = chromeMock().storage.onChanged.addListener.mock.calls.at(-1)?.[0] as (
+      c: Record<string, { newValue: unknown }>,
+      a: string,
+    ) => void;
+    fireEvent.click(sw); // A1: off
+    fireEvent.click(sw); // A2: on
+    await waitFor(() => expect(chromeMock().storage.sync.set.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const calls = chromeMock().storage.sync.set.mock.calls.map((c) => c[0]['tz-extension-prefs']);
+    // Echo A1, then A2.
+    onChanged({ 'tz-extension-prefs': { newValue: calls.at(-2) } }, 'sync');
+    onChanged({ 'tz-extension-prefs': { newValue: calls.at(-1) } }, 'sync');
+    expect(sw).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('treats patterns that differ only in spacing as duplicates', () => {
+    render(
+      <Harness
+        initial={{ ...base, customFormats: [{ id: 'x', label: 'EU', pattern: 'DD/MM/YYYY HH:mm', advanced: false, enabled: true }] }}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Format pattern'), { target: { value: '  DD/MM/YYYY   HH:mm ' } });
+    expect(screen.getByText(/You already have this format/)).toBeInTheDocument();
+  });
+
+  it('says when the layout matches but the values are impossible', () => {
+    render(<Harness initial={base} />);
+    fireEvent.change(screen.getByLabelText('Format pattern'), { target: { value: 'DD/MM/YYYY' } });
+    fireEvent.change(screen.getByLabelText('Sample text to test'), { target: { value: '31/02/2024' } });
+    expect(screen.getByText(/layout matches, but the values are not a real date/)).toBeInTheDocument();
+  });
+
+  it('blocks a format that would not fit in browser sync storage', () => {
+    const big = Array.from({ length: 25 }, (_, i) => ({
+      id: `f${i}`,
+      label: 'x'.repeat(60),
+      pattern: `(?<d>\\d{2})\\.(?<mo>\\d{2})\\.(?<y>\\d{4})${'[a-z]{0,1}'.repeat(25)}${i}`,
+      advanced: true,
+      enabled: true,
+    }));
+    render(<Harness initial={{ ...base, customFormats: big }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Regular expression' }));
+    fireEvent.change(screen.getByLabelText('Format pattern'), {
+      target: { value: '(?<d>\\d{2})-(?<mo>\\d{2})-(?<y>\\d{4})' },
+    });
+    expect(screen.getByText(/Not enough room in browser sync storage/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add format' })).toBeDisabled();
+  });
+});

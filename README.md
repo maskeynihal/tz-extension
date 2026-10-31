@@ -40,6 +40,8 @@ Settings also cover: home zone, target zones (add, reorder, remove), 12/24-hour 
 | `DD` / `D` / `Do` | day 01-31 / 1-31 / 5th | `A` | AM/PM, any case, `a.m.` too |
 | `TZ` | `UTC`, `EST`, `+05:45`, `GMT+1` | `[text]` | literal text, e.g. `[at]` |
 
+Zones after a time can be `Z`, an offset (`+05:45`), `GMT+5:30` / `UTC-8`, or an abbreviation written in capitals (`EST`, `CET`, `IST`, `AEST`, `NPT`…; `UTC`/`GMT` in any case). `ET`, `CT`, `MT` and `PT` follow US daylight saving. Lower-case words are never read as zones, so "12:30 eat" stays in your home zone.
+
 A format needs a month and a day, or just a time (it then means today). The year is optional (defaults to this year). When formats overlap, the longest match wins; on a tie, custom formats beat built-ins. Raw regexes must use the groups `y yy mo moName d h mi s ms ap zone`. To keep every page responsive they may not repeat a group that itself repeats or branches (`(a+)+`, `(a|b)+`), may use only a couple of open-ended repeats (`+`, `*`; prefer bounded ones like `\d{1,4}`), match at most 80 characters, and scan the first 500 characters of a selection. A time right after a date that no enabled format reads is not shown as "today"; add a custom format for that date instead.
 
 ## Install

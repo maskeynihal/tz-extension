@@ -3,7 +3,7 @@ import type { CustomFormat, Preferences } from '../types';
 import { BUILTIN_FORMATS } from '../lib/builtin-formats';
 import { compileFormat, matchCustomFormat, TOKEN_REFERENCE, KNOWN_GROUPS } from '../lib/custom-formats';
 import { parseTimes } from '../lib/parse';
-import { MAX_CUSTOM_FORMATS, MAX_LABEL, newFormatId } from '../lib/storage';
+import { MAX_CUSTOM_FORMATS, MAX_LABEL, SYNC_ITEM_LIMIT, newFormatId, syncItemBytes } from '../lib/storage';
 import { toIsoUtc, viewInZone } from '../lib/tz';
 
 interface Props {
@@ -151,6 +151,11 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { id: null, label: '', pattern: '', advanced: false, sample: '' };
 
+/** Patterns that differ only in surrounding or repeated spaces are the same format. */
+export function normalizePattern(pattern: string, advanced: boolean): string {
+  return advanced ? pattern.trim() : pattern.trim().replace(/\s+/g, ' ');
+}
+
 function FormatEditor({
   prefs,
   draft,
@@ -168,9 +173,11 @@ function FormatEditor({
 }): JSX.Element {
   const ids = useId();
   const editing = draft.id !== null;
-  const compiled = draft.pattern ? compileFormat(draft) : null;
+  const pattern = normalizePattern(draft.pattern, draft.advanced);
+  const compiled = pattern ? compileFormat({ pattern, advanced: draft.advanced }) : null;
   const duplicate = prefs.customFormats.find(
-    (f) => f.id !== draft.id && f.pattern === draft.pattern && f.advanced === draft.advanced,
+    (f) =>
+      f.id !== draft.id && f.advanced === draft.advanced && normalizePattern(f.pattern, f.advanced) === pattern,
   );
   const error = compiled && !compiled.ok
     ? compiled.error
@@ -183,30 +190,48 @@ function FormatEditor({
   if (compiled?.ok && !duplicate && draft.sample.trim()) {
     const [hit] = matchCustomFormat(
       draft.sample,
-      { id: 'preview', label: draft.label || draft.pattern, pattern: draft.pattern, advanced: draft.advanced, enabled: true },
+      { id: 'preview', label: draft.label || pattern, pattern, advanced: draft.advanced, enabled: true },
       { assumedZone: prefs.homeZone, dateOnlyPolicy: prefs.dateOnlyPolicy },
     );
+    const layoutOnly = !hit && new RegExp(compiled.regex.source).test(draft.sample);
     preview = hit ? (
       <span className="tzx-good">
         Matches <code>{hit.parsed.matchedText}</code> → {describeInstant(hit.parsed.epochMs, prefs)}
         {hit.parsed.assumed && <> · read in your home zone</>}
+      </span>
+    ) : layoutOnly ? (
+      <span className="tzx-bad">
+        The layout matches, but the values are not a real date or time (for example 31 February, hour 25, or an
+        unknown zone).
       </span>
     ) : (
       <span className="tzx-bad">Valid pattern, but it does not match the test text.</span>
     );
   }
 
-  const canSave = Boolean(compiled?.ok) && !duplicate && (editing || !atLimit);
+  const candidate: CustomFormat = {
+    id: draft.id ?? 'pending',
+    label: (draft.label.trim() || pattern).slice(0, MAX_LABEL),
+    pattern,
+    advanced: draft.advanced,
+    enabled: editing ? prefs.customFormats.find((f) => f.id === draft.id)?.enabled ?? true : true,
+  };
+  // Settings sync as one browser-sync item with a hard size limit; check
+  // before saving rather than failing after.
+  const bytes = compiled?.ok
+    ? syncItemBytes({
+        ...prefs,
+        customFormats: editing
+          ? prefs.customFormats.map((f) => (f.id === draft.id ? candidate : f))
+          : [...prefs.customFormats, { ...candidate, id: 'fmt-000000000000' }],
+      })
+    : 0;
+  const tooBig = bytes > SYNC_ITEM_LIMIT;
+  const canSave = Boolean(compiled?.ok) && !duplicate && !tooBig && (editing || !atLimit);
 
   function save(): void {
     if (!canSave) return;
-    onSave({
-      id: draft.id ?? newFormatId(),
-      label: (draft.label.trim() || draft.pattern).slice(0, MAX_LABEL),
-      pattern: draft.pattern,
-      advanced: draft.advanced,
-      enabled: editing ? prefs.customFormats.find((f) => f.id === draft.id)?.enabled ?? true : true,
-    });
+    onSave({ ...candidate, id: draft.id ?? newFormatId() });
   }
 
   return (
@@ -284,6 +309,12 @@ function FormatEditor({
           {w}
         </p>
       ))}
+      {tooBig && (
+        <p className="tzx-hint tzx-bad">
+          Not enough room in browser sync storage for this ({bytes.toLocaleString('en-US')} of{' '}
+          {SYNC_ITEM_LIMIT.toLocaleString('en-US')} bytes). Shorten patterns or names, or remove a format.
+        </p>
+      )}
       {atLimit && !editing && (
         <p className="tzx-hint tzx-bad">You have {MAX_CUSTOM_FORMATS} custom formats, the maximum. Remove one to add another.</p>
       )}

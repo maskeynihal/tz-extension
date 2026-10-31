@@ -33,6 +33,14 @@ export function newFormatId(): string {
   return `fmt-${rand}`;
 }
 
+/** chrome.storage.sync allows 8,192 bytes per item (key + JSON value). */
+export const SYNC_ITEM_LIMIT = 8192;
+
+/** Bytes these preferences take as one sync item, counted as UTF-8 to be safe. */
+export function syncItemBytes(prefs: Preferences): number {
+  return new TextEncoder().encode(KEY + JSON.stringify(sanitize(prefs))).length;
+}
+
 /** Outcome of a save, so settings UIs can tell the user when it did not stick. */
 export type SaveResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
 

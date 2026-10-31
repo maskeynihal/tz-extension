@@ -100,7 +100,11 @@ export function ZonePicker({
       onBlur={(e) => {
         // Close when keyboard focus leaves the picker (Tab away).
         const next = e.relatedTarget;
-        if (!(next instanceof Node) || !containerRef.current?.contains(next)) setOpen(false);
+        if (!(next instanceof Node) || !containerRef.current?.contains(next)) {
+          // Nothing was chosen: drop the half-typed search with the list.
+          setOpen(false);
+          setQuery('');
+        }
       }}
     >
       <label className="tzx-sr-only" htmlFor={inputId}>

@@ -223,7 +223,7 @@ export function compileTokenFormat(pattern: string): CompileResult {
  */
 export const ADVANCED_MATCH_WINDOW = 80;
 /** Upper bound on the estimated backtracking work per start position. */
-const MAX_REGEX_COST = 10_000;
+const MAX_REGEX_COST = 20_000;
 
 export interface RegexRisk {
   /** A repeated group contains a repeat or an alternation: exponential. */
@@ -246,10 +246,14 @@ export function analyzeRegex(src: string): RegexRisk {
   interface Frame {
     /** Contains a variable-length repeat (?, *, +, {m,n} with m < n). */
     hasRepeat: boolean;
+    /** Contains an alternation, here or in any nested group. */
     hasAlt: boolean;
+    /** Number of top-level branches in this group. */
+    branches: number;
     cost: number;
   }
-  const stack: Frame[] = [{ hasRepeat: false, hasAlt: false, cost: 1 }];
+  const frame = (): Frame => ({ hasRepeat: false, hasAlt: false, branches: 1, cost: 1 });
+  const stack: Frame[] = [frame()];
   const top = (): Frame => stack[stack.length - 1] as Frame;
   let nested = false;
 
@@ -278,7 +282,7 @@ export function analyzeRegex(src: string): RegexRisk {
   while (i < src.length) {
     const c = src[i];
     if (c === '(') {
-      stack.push({ hasRepeat: false, hasAlt: false, cost: 1 });
+      stack.push(frame());
       i++;
       // Skip group syntax such as ?: ?= ?! ?<= ?<! ?<name>
       if (src[i] === '?') {
@@ -288,23 +292,28 @@ export function analyzeRegex(src: string): RegexRisk {
       continue;
     }
     if (c === ')') {
-      const inner = stack.length > 1 ? (stack.pop() as Frame) : { hasRepeat: false, hasAlt: false, cost: 1 };
+      const inner = stack.length > 1 ? (stack.pop() as Frame) : frame();
+      // Each branch is another way to match: alternation multiplies the work.
+      const innerCost = inner.cost * inner.branches;
       i++;
       const q = quantAt(i);
       const parent = top();
       if (q) {
         i += q.len;
         if (q.max > 1 && (inner.hasRepeat || inner.hasAlt)) nested = true;
-        parent.cost *= inner.cost * factor(q);
+        parent.cost *= innerCost * factor(q);
         if (q.max > q.min) parent.hasRepeat = true;
       } else {
-        parent.cost *= inner.cost;
+        parent.cost *= innerCost;
       }
+      // Wrapping in a plain group must not hide what is inside it.
       if (inner.hasRepeat) parent.hasRepeat = true;
+      if (inner.hasAlt) parent.hasAlt = true;
       continue;
     }
     if (c === '|') {
       top().hasAlt = true;
+      top().branches += 1;
       i++;
       continue;
     }
@@ -312,9 +321,10 @@ export function analyzeRegex(src: string): RegexRisk {
     if (c === '\\') {
       atomEnd = i + 2;
     } else if (c === '[') {
+      // In JavaScript (unlike PCRE) a "]" right after "[" or "[^" closes the
+      // class: [] matches nothing and [^] matches any character.
       let j = i + 1;
       if (src[j] === '^') j++;
-      if (src[j] === ']') j++;
       while (j < src.length && src[j] !== ']') j += src[j] === '\\' ? 2 : 1;
       atomEnd = j + 1;
     } else {
@@ -331,7 +341,7 @@ export function analyzeRegex(src: string): RegexRisk {
     }
   }
   let cost = 1;
-  for (const f of stack) cost *= f.cost;
+  for (const f of stack) cost *= f.cost * f.branches;
   return { nested, cost };
 }
 
@@ -348,11 +358,16 @@ export function compileAdvancedFormat(pattern: string): CompileResult {
   }
   let regex: RegExp;
   try {
+    // Compile once without flags so the engine's message shows the user's text.
+    new RegExp(pattern);
     regex = new RegExp(pattern, 'g');
   } catch (e) {
     // Engines already prefix "Invalid regular expression: /src/: ...".
     const msg = (e as Error).message.replace(/^Invalid regular expression:\s*/i, '');
     return { ok: false, error: `Invalid regular expression: ${msg}` };
+  }
+  if (/\\[1-9]|\\k</.test(pattern.replace(/\\\\/g, ''))) {
+    return { ok: false, error: 'Backreferences (\\1, \\k<name>) are not supported in custom formats.' };
   }
   const names = Array.from(pattern.matchAll(/\(\?<([A-Za-z_$][\w$]*)>/g), (m) => m[1] ?? '');
   if (names.length === 0) {
@@ -470,7 +485,7 @@ function fromGroups(
   const hasTime = g.h !== undefined;
   if (!hasDate && !hasTime) return null;
   const now = ctx.nowMs ?? Date.now();
-  const today = todayIn(zone ? zone.minutes : ctx.assumedZone, now);
+  const today = todayIn(zone ? zone.today : ctx.assumedZone, now);
 
   let year: number | undefined = num(g.y);
   if (year === undefined && g.yy !== undefined) {
@@ -514,6 +529,7 @@ function fromGroups(
     formatId: fmt.id,
     formatLabel: fmt.label || fmt.pattern,
     dateOnly,
+    timeOnly: !hasDate,
   });
 }
 
@@ -568,9 +584,10 @@ function matchGlobal(src: string, source: string, fmt: CustomFormat, ctx: MatchC
 }
 
 /**
- * Advanced regexes: try each start position on a short window with a sticky
- * regex, so backtracking never sees more than ADVANCED_MATCH_WINDOW characters.
- * A few characters before the start stay visible for lookbehinds.
+ * Advanced regexes: try each start position with a sticky regex on text cut
+ * ADVANCED_MATCH_WINDOW characters past it, so a match (and its backtracking)
+ * never runs past the window. Text before the start stays visible for
+ * lookbehinds.
  */
 function matchWindowed(src: string, source: string, fmt: CustomFormat, ctx: MatchContext): Candidate[] {
   let re: RegExp;
@@ -579,13 +596,13 @@ function matchWindowed(src: string, source: string, fmt: CustomFormat, ctx: Matc
   } catch {
     return [];
   }
-  const LOOKBEHIND = 8;
   const out: Candidate[] = [];
   let i = 0;
   while (i < src.length && out.length < MAX_MATCHES_PER_FORMAT) {
-    const base = Math.max(0, i - LOOKBEHIND);
-    const win = src.slice(base, i + ADVANCED_MATCH_WINDOW);
-    re.lastIndex = i - base;
+    // Everything before i stays visible for lookbehinds; only the text after
+    // i is cut to the window.
+    const win = src.slice(0, i + ADVANCED_MATCH_WINDOW);
+    re.lastIndex = i;
     let m: RegExpExecArray | null = null;
     try {
       m = re.exec(win);

@@ -15,6 +15,8 @@ export interface ParsedTime {
   readonly assumed: boolean;
   /** True when the source had a date but no time and we filled one in. */
   readonly dateOnly?: boolean;
+  /** True when the source had a time but no date (taken as today). */
+  readonly timeOnly?: boolean;
   /** How confident / what kind of match produced this. */
   readonly kind: ParseKind;
   /**

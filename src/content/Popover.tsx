@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DateOnlyPolicy, ParsedTime, Preferences } from '../types';
 import { resolveLocalZone } from '../types';
 import { viewInZone, listTimeZones, isValidZone, sameZone } from '../lib/tz';
+import { SCAN_LIMIT } from '../lib/parse';
 
 export interface PopoverProps {
   readonly parsed: ParsedTime;
@@ -379,6 +380,9 @@ export function NoMatchCard({ text, onClose, onOpenSettings, onDragStart }: NoMa
       <p>
         No date or time recognized in <span className="tzx-quote">“{quote}”</span>.
       </p>
+      {text.length > SCAN_LIMIT && (
+        <p>Only the first {SCAN_LIMIT.toLocaleString('en-US')} characters of a selection are checked.</p>
+      )}
       <p>If this is a format your sites use, add it as a custom format.</p>
       <button type="button" className="tzx-linkbtn" onClick={onOpenSettings}>
         Open format settings

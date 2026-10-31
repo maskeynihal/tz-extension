@@ -6,27 +6,42 @@ import { viewInZone } from '../lib/tz';
 import { ZonePicker } from '../popup/ZonePicker';
 import { FormatsSection, Switch } from './Formats';
 
+/** How long to wait for our own write to echo back before giving up on it. */
+const ECHO_TTL_MS = 10_000;
+
 export function Options(): JSX.Element {
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [saveError, setSaveError] = useState<string | null>(null);
-  // Our own writes echo back through storage.onChanged. Remember what we last
-  // wrote and ignore only that echo, so changes made elsewhere (the popup, the
-  // in-page card, another settings tab) still show up here.
-  const lastWritten = useRef<string | null>(null);
+  // Our own writes echo back through storage.onChanged. Keep the writes that
+  // have not echoed yet, in order, and skip exactly those echoes; anything else
+  // is a change made elsewhere (the popup, the in-page card, another settings
+  // tab) and is applied. Entries expire in case the browser drops an echo.
+  const inFlight = useRef<Array<{ key: string; at: number }>>([]);
+  const prefsKey = useRef<string>('');
 
   useEffect(() => {
     let alive = true;
     void loadPreferences().then((p) => {
       if (alive) {
+        prefsKey.current = JSON.stringify(p);
         setPrefs(p);
         setLoaded(true);
       }
     });
     // Pick up changes made elsewhere (the popup, the in-page card, another tab).
     const unsub = onPreferencesChanged((p) => {
-      if (!alive || JSON.stringify(p) === lastWritten.current) return;
+      if (!alive) return;
+      const key = JSON.stringify(p);
+      const now = Date.now();
+      inFlight.current = inFlight.current.filter((w) => now - w.at < ECHO_TTL_MS);
+      const i = inFlight.current.findIndex((w) => w.key === key);
+      if (i >= 0) {
+        inFlight.current.splice(0, i + 1);
+        return;
+      }
+      prefsKey.current = key;
       setPrefs(p);
     });
     const t = window.setInterval(() => setNow(Date.now()), 1000);
@@ -45,8 +60,11 @@ export function Options(): JSX.Element {
   }, [prefs.theme]);
 
   function update(next: Preferences): void {
+    const key = JSON.stringify(sanitize(next));
     setPrefs(next);
-    lastWritten.current = JSON.stringify(sanitize(next));
+    // The browser only reports real changes, so an unchanged write never echoes.
+    if (key !== prefsKey.current) inFlight.current.push({ key, at: Date.now() });
+    prefsKey.current = key;
     void savePreferences(next).then((r) => {
       if (r.ok) {
         setSaveError(null);
@@ -55,8 +73,11 @@ export function Options(): JSX.Element {
       // Not saved: show why, and go back to what is actually stored so the
       // page never claims a setting that the extension is not using.
       setSaveError(r.error);
-      lastWritten.current = null;
-      void loadPreferences().then(setPrefs);
+      inFlight.current = inFlight.current.filter((w) => w.key !== key);
+      void loadPreferences().then((p) => {
+        prefsKey.current = JSON.stringify(p);
+        setPrefs(p);
+      });
     });
   }
 

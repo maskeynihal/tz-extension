@@ -278,7 +278,8 @@ function positionFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
  */
 function refitFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
   const fit = (): void => {
-    if (!hostEl.isConnected) return;
+    // Once the user drags the card, its position is theirs.
+    if (!hostEl.isConnected || hostEl.dataset.tzxDragged === '1') return;
     const h = hostEl.getBoundingClientRect().height;
     if (!h) return;
     const vh = window.innerHeight;
@@ -330,6 +331,7 @@ function startDrag(
   fixedPos: boolean,
 ): void {
   const native = 'nativeEvent' in startEvent ? startEvent.nativeEvent : startEvent;
+  hostEl.dataset.tzxDragged = '1';
   const rect = hostEl.getBoundingClientRect();
   const grabX = native.clientX - rect.left;
   const grabY = native.clientY - rect.top;
@@ -673,10 +675,24 @@ function onMouseUp(e: MouseEvent): void {
   handleSelectionChange();
 }
 
+/** Keys that extend a selection when held with Shift. */
+const SELECT_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
+/** Set while the user is extending a selection from the keyboard. */
+let keyboardSelecting = false;
+
+function onKeyDownSelect(e: KeyboardEvent): void {
+  if (e.shiftKey && SELECT_KEYS.has(e.key)) keyboardSelecting = true;
+  else if (e.key !== 'Shift') keyboardSelecting = false;
+}
+
 function onKeyUp(e: KeyboardEvent): void {
-  // Keyboard selection: Shift+Arrow/Home/End. Releasing Shift itself reports
-  // shiftKey=false, so check the key too.
-  if (e.shiftKey || e.key === 'Shift' || e.key === 'Escape') handleSelectionChange();
+  // Shift+Arrow/Home/End, then Shift released (that keyup has shiftKey=false).
+  // A plain Shift press (Shift+Tab, Shift+click) is not a selection.
+  const selectAll = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a';
+  if ((e.key === 'Shift' && keyboardSelecting) || (e.shiftKey && SELECT_KEYS.has(e.key)) || selectAll || e.key === 'Escape') {
+    if (e.key === 'Shift') keyboardSelecting = false;
+    handleSelectionChange();
+  }
 }
 
 function onContextMenu(e: MouseEvent): void {
@@ -691,10 +707,12 @@ function onRuntimeMessage(
   if (!fromThisExtension(sender) || !isConvertSelectionMessage(msg)) return undefined;
   // A freshly injected copy may still be loading preferences; converting now
   // would use the default zones and ignore the user's formats.
-  void prefsReady.then(() => {
-    convertFromMenu(msg.text);
-    sendResponse({ ok: true });
-  });
+  void prefsReady
+    .then(() => {
+      convertFromMenu(msg.text);
+      sendResponse({ ok: true });
+    })
+    .catch(() => sendResponse({ ok: false }));
   return true; // respond asynchronously
 }
 
@@ -729,6 +747,7 @@ function install(): ContentInstance {
 
   document.addEventListener('mouseup', onMouseUp);
   document.addEventListener('keyup', onKeyUp);
+  document.addEventListener('keydown', onKeyDownSelect, true);
   document.addEventListener('mousedown', onDocMouseDown, true);
   document.addEventListener('keydown', onKeyDown, true);
   document.addEventListener('contextmenu', onContextMenu, true);
@@ -748,6 +767,7 @@ function install(): ContentInstance {
       }
       document.removeEventListener('mouseup', onMouseUp);
       document.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('keydown', onKeyDownSelect, true);
       document.removeEventListener('mousedown', onDocMouseDown, true);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('contextmenu', onContextMenu, true);

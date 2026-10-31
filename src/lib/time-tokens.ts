@@ -42,17 +42,14 @@ export const ABBREV_OFFSETS: Readonly<Record<string, number>> = {
   NDT: -(2 * 60 + 30),
   // South America
   BRT: -3 * 60,
-  ART: -3 * 60,
-  // Europe / Africa
-  WET: 0,
-  WEST: 1 * 60,
+  // Europe / Africa. (WET, WEST, CAT, EAT and ART are left out: they are
+  // everyday words, and reading "12:30 eat" as East Africa Time is worse than
+  // not knowing the abbreviation.)
   EET: 2 * 60,
   EEST: 3 * 60,
   MSK: 3 * 60,
   WAT: 1 * 60,
-  CAT: 2 * 60,
   SAST: 2 * 60,
-  EAT: 3 * 60,
   // Asia / Pacific
   GST: 4 * 60, // Gulf (ambiguous with South Georgia)
   PKT: 5 * 60,
@@ -89,6 +86,29 @@ export function monthFromName(name: string | undefined): number | undefined {
   return MONTHS[name.replace(/\.$/, '').toLowerCase()];
 }
 
+/**
+ * US generic zone names ("3 PM ET") follow daylight saving, so they map to a
+ * real zone rather than a fixed offset.
+ */
+export const GENERIC_ZONES: Readonly<Record<string, string>> = {
+  ET: 'America/New_York',
+  CT: 'America/Chicago',
+  MT: 'America/Denver',
+  PT: 'America/Los_Angeles',
+};
+
+/** A zone read from text: a fixed offset, or an IANA zone for DST-aware names. */
+export interface ResolvedZone {
+  /** "+05:45"; absent for an IANA zone. */
+  readonly offsetIso?: string;
+  /** IANA id for DST-aware names (ET, PT...). */
+  readonly iana?: string;
+  /** How the popover labels the source zone. */
+  readonly label: string;
+  /** Minutes east of UTC for fixed offsets, or the IANA id: what todayIn() takes. */
+  readonly today: string | number;
+}
+
 export function offsetMinutesToIso(mins: number): string {
   const sign = mins < 0 ? '-' : '+';
   const h = Math.floor(Math.abs(mins) / 60);
@@ -114,36 +134,42 @@ function offsetIsoToMinutes(iso: string): number {
 }
 
 /**
- * Resolve a zone token ("Z", "UTC", "EST", "+05:45", "GMT+5:30", "UTC-8") to a
- * fixed offset. Returns null for tokens we do not recognize.
+ * Resolve a zone token ("Z", "UTC", "EST", "+05:45", "GMT+5:30", "UTC-8",
+ * "ET") to a zone. Returns null for tokens we do not recognize.
+ *
+ * Letter abbreviations must be written in capitals (UTC and GMT in any case):
+ * text is full of short words, and "3pm Art class" is not Argentina time.
  */
-export function resolveZoneToken(
-  tok: string | undefined,
-): { offsetIso: string; label: string; minutes: number } | null {
+export function resolveZoneToken(tok: string | undefined): ResolvedZone | null {
   if (!tok) return null;
-  if (tok === 'Z' || tok === 'z') return { offsetIso: '+00:00', label: 'UTC', minutes: 0 };
+  if (tok === 'Z' || tok === 'z') return { offsetIso: '+00:00', label: 'UTC', today: 0 };
   const off = normalizeOffsetToken(tok);
-  if (off) return { offsetIso: off, label: off, minutes: offsetIsoToMinutes(off) };
+  if (off) return { offsetIso: off, label: off, today: offsetIsoToMinutes(off) };
 
   // "GMT+5:30", "UTC-8", "GMT+1" — a base abbrev with a signed offset suffix.
-  const based = /^([A-Za-z]{2,4})([+-]\d{1,2})(?::?(\d{2}))?$/.exec(tok);
-  if (based && based[1] && (based[1].toUpperCase() === 'GMT' || based[1].toUpperCase() === 'UTC')) {
+  const based = /^(GMT|UTC)([+-]\d{1,2})(?::?(\d{2}))?$/i.exec(tok);
+  if (based && based[1] && based[2]) {
     const h = Number(based[2]);
     const m = based[3] ? Number(based[3]) : 0;
     if (Math.abs(h) > 14 || m > 59) return null;
-    const mins = h * 60 + (h < 0 || based[2]?.startsWith('-') ? -m : m);
-    const iso = offsetMinutesToIso(mins);
+    const mins = h * 60 + (based[2].startsWith('-') ? -m : m);
     return {
-      offsetIso: iso,
+      offsetIso: offsetMinutesToIso(mins),
       label: `${based[1].toUpperCase()}${based[2]}${based[3] ? `:${based[3]}` : ''}`,
-      minutes: mins,
+      today: mins,
     };
   }
 
   const upper = tok.toUpperCase();
+  if (upper === 'UTC' || upper === 'GMT' || upper === 'UT') return { offsetIso: '+00:00', label: upper, today: 0 };
+  if (tok !== upper) return null;
+  if (upper in GENERIC_ZONES) {
+    const iana = GENERIC_ZONES[upper] as string;
+    return { iana, label: `${upper} (${iana})`, today: iana };
+  }
   if (upper in ABBREV_OFFSETS) {
     const mins = ABBREV_OFFSETS[upper] as number;
-    return { offsetIso: offsetMinutesToIso(mins), label: upper, minutes: mins };
+    return { offsetIso: offsetMinutesToIso(mins), label: upper, today: mins };
   }
   return null;
 }
@@ -230,6 +256,7 @@ export interface MatchMeta {
   readonly formatId: string;
   readonly formatLabel: string;
   readonly dateOnly?: boolean;
+  readonly timeOnly?: boolean;
 }
 
 function isoLocal(w: WallClock): string {
@@ -243,7 +270,7 @@ function isoLocal(w: WallClock): string {
  */
 export function buildParsed(
   w: WallClock,
-  zone: { offsetIso: string; label: string } | null,
+  zone: ResolvedZone | null,
   assumedZone: string,
   meta: MatchMeta,
 ): ParsedTime | null {
@@ -253,9 +280,8 @@ export function buildParsed(
   const extraMs = w.ms !== undefined && Number.isFinite(w.ms) ? w.ms : 0;
   let epochMs: number;
   try {
-    epochMs = zone
-      ? Date.parse(`${isoLocal(w)}${zone.offsetIso}`)
-      : fromZonedTime(isoLocal(w), assumedZone).getTime();
+    if (zone?.offsetIso) epochMs = Date.parse(`${isoLocal(w)}${zone.offsetIso}`);
+    else epochMs = fromZonedTime(isoLocal(w), zone?.iana ?? assumedZone).getTime();
   } catch {
     return null;
   }
@@ -270,5 +296,7 @@ export function buildParsed(
     formatId: meta.formatId,
     formatLabel: meta.formatLabel,
   };
-  return meta.dateOnly ? { ...base, dateOnly: true } : base;
+  if (meta.dateOnly) return { ...base, dateOnly: true };
+  if (meta.timeOnly) return { ...base, timeOnly: true };
+  return base;
 }
