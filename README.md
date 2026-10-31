@@ -1,8 +1,10 @@
 # TZ Converter — Timezone Tools
 
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/cokhjgalkhboifkgoomlbaigocjpmhkk?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk) [![Firefox Add-ons](https://img.shields.io/amo/v/tz-converter-timezone-tools?label=Firefox%20Add-ons)](https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/)
+
 A Manifest V3 browser extension for timezone conversion. Works in Chromium (Chrome, Edge, Brave) and Firefox.
 
-**[Website](https://maskeynihal.github.io/tz-extension/)** · **[Live converter](https://maskeynihal.github.io/tz-extension/app.html)** · **[Latest release](https://github.com/maskeynihal/tz-extension/releases/latest)** · **[Privacy](https://maskeynihal.github.io/tz-extension/privacy.html)**
+**[Chrome Web Store](https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk)** · **[Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/)** · **[Website](https://maskeynihal.github.io/tz-extension/)** · **[Live converter](https://maskeynihal.github.io/tz-extension/app.html)** · **[Latest release](https://github.com/maskeynihal/tz-extension/releases/latest)** · **[Privacy](https://maskeynihal.github.io/tz-extension/privacy.html)**
 
 No install needed to try it — the [online converter](https://maskeynihal.github.io/tz-extension/app.html) runs the same engine the extension ships.
 
@@ -26,21 +28,28 @@ https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/demo-real.mp4
 
 Zones are managed on the options page (add, reorder, remove) and persisted via `chrome.storage`.
 
-## Install (unpacked)
+## Install
 
-### Chrome / Edge
+- **Chrome, Edge, Brave and other Chromium browsers:** [Chrome Web Store](https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk)
+- **Firefox:** [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/)
+
+Store updates follow each GitHub release once the store review passes.
+
+### From source (unpacked)
+
+#### Chrome / Edge
 
 1. `npm run build:chrome` → produces `dist/`
 2. Open `chrome://extensions`, enable **Developer mode**.
 3. **Load unpacked** → select `dist/`.
 
-### Firefox
+#### Firefox
 
 1. `npm run build:firefox` → produces `dist-firefox/`
 2. Open `about:debugging` → **This Firefox** → **Load Temporary Add-on**.
 3. Select `dist-firefox/manifest.json`.
 
-> The Firefox add-on id is a placeholder (`tz-converter@maskeynihal`). Change it in `scripts/firefox-manifest.mjs` before submitting to addons.mozilla.org.
+Prebuilt `tz-extension-chrome.zip` and `tz-extension-firefox.zip` are attached to every [release](https://github.com/maskeynihal/tz-extension/releases/latest); unzip one and load the folder the same way.
 
 ## Development
 
@@ -60,8 +69,13 @@ npm run dev:firefox  # Vite dev server (Firefox manifest)
 | `npm run zip:chrome` | `tz-extension-chrome.zip` |
 | `npm run zip:firefox` | `tz-extension-firefox.zip` |
 | `npm run zip:all` | both zips |
+| `npm run zip:source` | `tz-extension-source.zip` (tracked files, for AMO review) |
 
 Zips contain the extension at the top level (manifest at root), source maps stripped — ready for the Chrome Web Store and AMO.
+
+## Releasing
+
+Every merge to `main` bumps the version from Conventional Commits, tags it, attaches both zips to a GitHub release, and submits the new version to the Chrome Web Store and Firefox Add-ons. Store credentials, local dry runs, and re-publishing a tag are covered in [PUBLISHING.md](PUBLISHING.md).
 
 ## Quality gate
 
@@ -95,6 +109,9 @@ src/
   types/        shared types
 scripts/
   firefox-manifest.mjs   rewrites the manifest to Firefox MV3 shape
+  publish-chrome.mjs     uploads + submits a zip to the Chrome Web Store (API v2)
+  publish-firefox.mjs    submits a zip + source archive to AMO via web-ext sign
+  source-archive.mjs     builds tz-extension-source.zip with git archive
 ```
 
 ## License

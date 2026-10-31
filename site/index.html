@@ -147,7 +147,7 @@
           <a href="./app.html">Converter</a>
           <a href="#features">Features</a>
           <a href="#install">Install</a>
-          <a class="btn primary" href="#install">Add to browser</a>
+          <a class="btn primary" id="nav-add" href="#install">Add to browser</a>
         </nav>
       </div>
     </header>
@@ -163,10 +163,11 @@
             right there. No tab-switching. No mental math.
           </p>
           <div class="hero-cta">
-            <a class="btn primary" href="#install">Add to your browser</a>
+            <a class="btn primary" href="https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk">Add to Chrome</a>
+            <a class="btn primary" href="https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/">Add to Firefox</a>
             <a class="btn" href="./app.html">Open the converter →</a>
           </div>
-          <p class="hero-note">Free and open source · <a href="https://github.com/maskeynihal/tz-extension">View on GitHub</a></p>
+          <p class="hero-note">Edge and Brave install from the Chrome Web Store · Free and open source · <a href="https://github.com/maskeynihal/tz-extension">View on GitHub</a></p>
         </div>
       </section>
 
@@ -220,22 +221,26 @@
       <section class="section" id="install">
         <div class="wrap">
           <h2>Install in a minute.</h2>
-          <p class="sub">Grab the latest release, then load it unpacked. Store listings coming soon.</p>
+          <p class="sub">Get it from your browser's add-on store. Edge, Brave and other Chromium browsers install it from the Chrome Web Store.</p>
+          <div class="hero-cta" style="margin-bottom:28px">
+            <a class="btn primary" href="https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk">Add to Chrome</a>
+            <a class="btn primary" href="https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/">Add to Firefox</a>
+          </div>
           <div class="steps">
             <div class="step">
-              <h3>Download</h3>
-              <p>Get <span class="inline-code">tz-extension-chrome.zip</span> or <span class="inline-code">tz-extension-firefox.zip</span> from the <a href="https://github.com/maskeynihal/tz-extension/releases/latest">latest release</a> and unzip it.</p>
+              <h3>Add it</h3>
+              <p>Open the <a href="https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk">Chrome Web Store</a> or <a href="https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/">Firefox Add-ons</a> page and click <strong>Add</strong>. Updates arrive automatically.</p>
             </div>
             <div class="step">
-              <h3>Load it</h3>
-              <p><strong>Chrome/Edge:</strong> <span class="inline-code">chrome://extensions</span> → Developer mode → Load unpacked.<br /><strong>Firefox:</strong> <span class="inline-code">about:debugging</span> → Load Temporary Add-on → pick <span class="inline-code">manifest.json</span>.</p>
+              <h3>Pin it</h3>
+              <p>Pin the <span class="inline-code">TZ</span> icon from your browser's extensions menu so the converter is one click away.</p>
             </div>
             <div class="step">
               <h3>Use it</h3>
               <p>Select any time on a page, or click the toolbar icon for the full converter. That's it.</p>
             </div>
           </div>
-          <p style="margin-top:28px"><a class="btn primary" href="https://github.com/maskeynihal/tz-extension/releases/latest">Download the latest release</a></p>
+          <p class="hero-note" style="margin-top:28px">Or load it unpacked from the <a href="https://github.com/maskeynihal/tz-extension/releases/latest">latest release</a>: unzip <span class="inline-code">tz-extension-chrome.zip</span> and use <span class="inline-code">chrome://extensions</span> → Developer mode → Load unpacked, or unzip <span class="inline-code">tz-extension-firefox.zip</span> and use <span class="inline-code">about:debugging</span> → Load Temporary Add-on → pick <span class="inline-code">manifest.json</span>.</p>
         </div>
       </section>
     </main>
@@ -252,5 +257,20 @@
       </div>
     </footer>
 
+    <script>
+      // Point the nav button straight at the right store when the browser is known.
+      (function () {
+        var a = document.getElementById('nav-add');
+        if (!a) return;
+        var ua = navigator.userAgent;
+        if (/Firefox\//.test(ua)) {
+          a.href = 'https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/';
+          a.textContent = 'Add to Firefox';
+        } else if (/Chrome\//.test(ua)) {
+          a.href = 'https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk';
+          a.textContent = 'Add to Chrome';
+        }
+      })();
+    </script>
   </body>
 </html>
