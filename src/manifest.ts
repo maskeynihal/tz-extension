@@ -37,6 +37,10 @@ export default defineManifest({
       run_at: 'document_idle',
     },
   ],
-  permissions: ['storage'],
+  // storage: preferences. contextMenus: the right-click "Convert" item.
+  // activeTab + scripting: when that item is clicked in a tab that has no
+  // content script yet (opened before install/update, or a Firefox site
+  // without granted access), inject it into that one tab on demand.
+  permissions: ['storage', 'contextMenus', 'activeTab', 'scripting'],
   host_permissions: [],
 });

@@ -15,6 +15,8 @@ const prefs: Preferences = {
   keepSelection: true,
   theme: 'system',
   customFormats: [],
+  disabledFormats: [],
+  selectToConvert: true,
 };
 
 describe('EpochTab', () => {

@@ -17,6 +17,13 @@ export interface ParsedTime {
   readonly dateOnly?: boolean;
   /** How confident / what kind of match produced this. */
   readonly kind: ParseKind;
+  /**
+   * Id of the format that matched: a built-in id (see BUILTIN_FORMATS) or a
+   * custom format's id. Absent only on values built outside the parser.
+   */
+  readonly formatId?: string;
+  /** Human-readable name of the format that matched, shown in the popover. */
+  readonly formatLabel?: string;
 }
 
 export type ParseKind =
@@ -52,11 +59,13 @@ export interface CustomFormat {
   readonly id: string;
   readonly label: string;
   /**
-   * Token pattern using: YYYY, YY, MM, M, DD, D, HH, H, mm, ss, A (am/pm),
-   * MON (Jan), MONTH (January), TZ (zone/offset). Literal characters match
-   * themselves. Example: "DD/MM/YYYY HH:mm".
+   * Token pattern (see TOKEN_REFERENCE in lib/custom-formats.ts): YYYY YY
+   * MMMM MMM MM M DD Do D HH H hh h mm ss SSS A TZ, plus the legacy MON and
+   * MONTH. `[text]` matches text literally; other characters match themselves.
+   * Example: "DD/MM/YYYY HH:mm".
    * In advanced mode this is a raw JS regex source with named groups
-   * (?<y>) (?<mo>) (?<d>) (?<h>) (?<mi>) (?<s>) (?<zone>).
+   * (?<y>) (?<yy>) (?<mo>) (?<moName>) (?<d>) (?<h>) (?<mi>) (?<s>) (?<ms>)
+   * (?<ap>) (?<zone>).
    */
   readonly pattern: string;
   readonly advanced: boolean;
@@ -79,6 +88,13 @@ export interface Preferences {
   readonly theme: Theme;
   /** User-defined custom formats, tried in addition to the built-ins. */
   readonly customFormats: readonly CustomFormat[];
+  /** Ids of built-in formats the user switched off (see BUILTIN_FORMATS). */
+  readonly disabledFormats: readonly string[];
+  /**
+   * Show the converter automatically when text is selected. When false, only
+   * the right-click "Convert" menu item opens it.
+   */
+  readonly selectToConvert: boolean;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -89,6 +105,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   keepSelection: true,
   theme: 'system',
   customFormats: [],
+  disabledFormats: [],
+  selectToConvert: true,
 };
 
 export function resolveLocalZone(): string {

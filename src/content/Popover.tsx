@@ -72,6 +72,11 @@ const STYLE = `
   word-break: break-word;
 }
 .tzx-assumed { color: #f97316; font-weight: 600; }
+.tzx-fmt { color: #898c96; }
+.tzx-nomatch p { margin: 0 0 8px; font-size: 12px; color: #5b5e68; word-break: break-word; }
+.tzx-nomatch .tzx-quote { color: #16181d; font-weight: 600; }
+.tzx-linkbtn { font: inherit; font-size: 12px; font-weight: 600; border: 1px solid #dcdee4; background: #fff; color: #1313ba; border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+.tzx-linkbtn:hover { border-color: #1313ba; }
 .tzx-dateonly { margin-top: 6px; display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .tzx-dateonly select { font: inherit; font-size: 11px; padding: 2px 5px; border-radius: 6px; border: 1px solid #dcdee4; background: #fff; color: #24262e; }
 
@@ -118,6 +123,9 @@ const STYLE = `
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-select, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-dateonly select { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-localtag { color: #c7c7f5; background: #2a2a5a; }
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-row.local .tzx-zone { text-decoration-color: #8989dd; color: #f3f4f6; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-nomatch p, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-fmt { color: #a0a3ac; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-nomatch .tzx-quote { color: #f3f4f6; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-linkbtn { background: #1b1d24; border-color: #33353d; color: #9d9dea; }
 }
 /* Explicit dark override (user chose Dark), independent of the OS setting. */
 :host([data-tz-theme='dark']) .tzx-card { color: #e7e8ec; background: #121318; border-color: #2a2c33; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
@@ -137,6 +145,9 @@ const STYLE = `
 :host([data-tz-theme='dark']) .tzx-select, :host([data-tz-theme='dark']) .tzx-dateonly select { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
 :host([data-tz-theme='dark']) .tzx-localtag { color: #c7c7f5; background: #2a2a5a; }
 :host([data-tz-theme='dark']) .tzx-row.local .tzx-zone { text-decoration-color: #8989dd; color: #f3f4f6; }
+:host([data-tz-theme='dark']) .tzx-nomatch p, :host([data-tz-theme='dark']) .tzx-fmt { color: #a0a3ac; }
+:host([data-tz-theme='dark']) .tzx-nomatch .tzx-quote { color: #f3f4f6; }
+:host([data-tz-theme='dark']) .tzx-linkbtn { background: #1b1d24; border-color: #33353d; color: #9d9dea; }
 `;
 
 export function Popover({
@@ -242,6 +253,14 @@ export function Popover({
             read as{' '}
             <span className={parsed.assumed ? 'tzx-assumed' : undefined}>{sourceLabel}</span>
           </span>
+          {parsed.formatLabel && (
+            <>
+              <br />
+              <span className="tzx-fmt" title="The format that recognized this text. You can switch formats off in Settings.">
+                format: {parsed.formatLabel}
+              </span>
+            </>
+          )}
           {parsed.dateOnly && onDateOnlyPolicy && (
             <div className="tzx-dateonly">
               <span>date only — time:</span>
@@ -316,6 +335,52 @@ export function Popover({
           </select>
         </div>
       )}
+    </div>
+  );
+}
+
+export interface NoMatchCardProps {
+  /** The selection the user asked to convert. */
+  readonly text: string;
+  readonly onClose: () => void;
+  readonly onOpenSettings: () => void;
+  readonly onDragStart?: (e: React.PointerEvent) => void;
+}
+
+const MAX_QUOTE = 80;
+
+/**
+ * Shown when the user explicitly asked to convert (right-click menu) but no
+ * enabled format recognized the selection.
+ */
+export function NoMatchCard({ text, onClose, onOpenSettings, onDragStart }: NoMatchCardProps): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null);
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  const quote = oneLine.length > MAX_QUOTE ? `${oneLine.slice(0, MAX_QUOTE - 1)}…` : oneLine;
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  return (
+    <div className="tzx-card tzx-nomatch" role="dialog" aria-label="No time recognized" tabIndex={-1} ref={ref}>
+      <style>{STYLE}</style>
+      <div className="tzx-head" onPointerDown={onDragStart} title="Drag to move">
+        <span className="tzx-title">
+          <span className="tzx-grip" aria-hidden>⋮⋮</span>
+          TZ Converter
+        </span>
+        <div className="tzx-actions">
+          <button className="tzx-btn" aria-label="Close" title="Close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+      </div>
+      <p>
+        No date or time recognized in <span className="tzx-quote">“{quote}”</span>.
+      </p>
+      <p>If this is a format your sites use, add it as a custom format.</p>
+      <button type="button" className="tzx-linkbtn" onClick={onOpenSettings}>
+        Open format settings
+      </button>
     </div>
   );
 }

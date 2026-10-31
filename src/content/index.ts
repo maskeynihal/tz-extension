@@ -3,8 +3,14 @@ import { createElement } from 'react';
 import { parseTimes } from '../lib/parse';
 import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
 import { resolveTheme } from '../lib/theme';
+import {
+  fromThisExtension,
+  isConvertSelectionMessage,
+  type Ack,
+  type OpenOptionsMessage,
+} from '../lib/messages';
 import { DEFAULT_PREFERENCES, type DateOnlyPolicy, type ParsedTime, type Preferences } from '../types';
-import { Popover } from './Popover';
+import { NoMatchCard, Popover } from './Popover';
 
 const TRANSIENT_HOST_ID = 'tz-extension-popover-host';
 const PIN_HOST_CLASS = 'tz-extension-pin-host';
@@ -14,7 +20,21 @@ const MARGIN = 8;
 const EST_HEIGHT = 200;
 
 let prefs: Preferences = DEFAULT_PREFERENCES;
+/** Until stored prefs arrive we do not know whether select-to-convert is on. */
+let prefsLoaded = false;
 let debounceTimer: number | undefined;
+/** Where the last right-click happened (viewport coords), to anchor menu cards. */
+let lastContextPoint: { x: number; y: number } | null = null;
+
+/** Parse with every current preference that affects matching. */
+function parseWithPrefs(text: string, policy: DateOnlyPolicy = prefs.dateOnlyPolicy): ParsedTime[] {
+  return parseTimes(text, {
+    assumedZone: prefs.homeZone,
+    dateOnlyPolicy: policy,
+    customFormats: prefs.customFormats,
+    disabledFormats: prefs.disabledFormats,
+  });
+}
 
 /**
  * Tag a popover's shadow host with the resolved theme so the shadow CSS can
@@ -226,13 +246,6 @@ function clearPinHighlight(slot: number): void {
   }
 }
 
-void loadPreferences().then((p) => {
-  prefs = p;
-});
-onPreferencesChanged((p) => {
-  prefs = p;
-});
-
 // --- Positioning ----------------------------------------------------------
 
 /** Clamp a viewport-space (fixed) card near a rect, flipping above if needed. */
@@ -373,11 +386,7 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, 
           // Persist as the global default, then re-parse this value with it.
           prefs = { ...prefs, dateOnlyPolicy: policy };
           void savePreferences(prefs);
-          const again = parseTimes(srcText, {
-            assumedZone: prefs.homeZone,
-            dateOnlyPolicy: policy,
-            customFormats: prefs.customFormats,
-          });
+          const again = parseWithPrefs(srcText, policy);
           if (again[0]) renderTransient(rect, again[0], again.length, srcText);
         },
       }),
@@ -454,11 +463,7 @@ function pinCard(
           onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
             prefs = { ...prefs, dateOnlyPolicy: policy };
             void savePreferences(prefs);
-            const again = parseTimes(srcText, {
-              assumedZone: prefs.homeZone,
-              dateOnlyPolicy: policy,
-              customFormats: prefs.customFormats,
-            });
+            const again = parseWithPrefs(srcText, policy);
             if (again[0]) renderPin(again[0], again.length);
           },
         }),
@@ -490,19 +495,57 @@ function removePin(pin: Pin): void {
 
 // --- Selection handling ---------------------------------------------------
 
-function showForSelection(rect: DOMRect, text: string, range: Range | null): void {
-  const matches = parseTimes(text, {
-    assumedZone: prefs.homeZone,
-    dateOnlyPolicy: prefs.dateOnlyPolicy,
-    customFormats: prefs.customFormats,
-  });
+/**
+ * Show the converter for a selection. From the right-click menu the user asked
+ * explicitly, so an unparseable selection gets a "no time recognized" card
+ * instead of silence.
+ */
+function showForSelection(rect: DOMRect, text: string, range: Range | null, fromMenu = false): void {
+  const matches = parseWithPrefs(text);
   const parsed = matches[0];
   if (!parsed) {
-    teardownTransient();
+    if (fromMenu) renderNoMatch(rect, text);
+    else teardownTransient();
     return;
   }
   if (range) setLiveHighlight(range, parsed.matchedText);
   renderTransient(rect, parsed, matches.length, text);
+}
+
+function renderNoMatch(rect: DOMRect, text: string): void {
+  clearLiveHighlight();
+  teardownTransient();
+  try {
+    tHost = document.createElement('div');
+    tHost.id = TRANSIENT_HOST_ID;
+    const shadow = tHost.attachShadow({ mode: 'open' });
+    applyHostTheme(tHost);
+    const mount = document.createElement('div');
+    shadow.appendChild(mount);
+    document.body.appendChild(tHost);
+    positionFixed(tHost, rect);
+    const hostEl = tHost;
+    tRoot = createRoot(mount);
+    tRoot.render(
+      createElement(NoMatchCard, {
+        text,
+        onClose: dismissTransient,
+        onDragStart: (e) => startDrag(hostEl, e, true),
+        onOpenSettings: () => {
+          const msg: OpenOptionsMessage = { type: 'tzx/open-options' };
+          try {
+            void chrome.runtime.sendMessage(msg).catch(() => undefined);
+          } catch {
+            /* extension context gone (updated); nothing to open */
+          }
+          dismissTransient();
+        },
+      }),
+    );
+    document.addEventListener('scroll', onScroll, true);
+  } catch {
+    teardownTransient();
+  }
 }
 
 /** Read the active selection from the page OR from an input/textarea. */
@@ -514,8 +557,15 @@ function readSelection(): { text: string; rect: DOMRect; range: Range | null } |
     active instanceof HTMLInputElement ||
     active instanceof HTMLTextAreaElement
   ) {
-    const start = active.selectionStart ?? 0;
-    const end = active.selectionEnd ?? 0;
+    let start = 0;
+    let end = 0;
+    try {
+      // Throws on input types without a text selection (email, number...).
+      start = active.selectionStart ?? 0;
+      end = active.selectionEnd ?? 0;
+    } catch {
+      return null;
+    }
     if (end > start) {
       const text = active.value.slice(start, end).trim();
       if (text.length > 0) {
@@ -555,16 +605,137 @@ function readSelection(): { text: string; rect: DOMRect; range: Range | null } |
 
 function handleSelectionChange(): void {
   window.clearTimeout(debounceTimer);
+  // Off (or not yet known): selecting text does nothing; the menu still works.
+  if (!prefsLoaded || !prefs.selectToConvert) return;
   debounceTimer = window.setTimeout(() => {
+    if (!prefs.selectToConvert) return;
     const got = readSelection();
     if (!got) return;
     showForSelection(got.rect, got.text, got.range);
   }, DEBOUNCE_MS);
 }
 
-document.addEventListener('mouseup', handleSelectionChange);
-document.addEventListener('keyup', (e) => {
+/** Anchor for a menu card when the live selection is gone (e.g. inside a frame). */
+function fallbackRect(): DOMRect {
+  if (lastContextPoint) return new DOMRect(lastContextPoint.x, lastContextPoint.y, 0, 0);
+  const x = Math.max(MARGIN, window.innerWidth / 2 - CARD_MAX_W / 2);
+  return new DOMRect(x, 64, 0, 0);
+}
+
+/** Right-click menu: convert the current selection, whatever the toggle says. */
+function convertFromMenu(menuText: string): void {
+  window.clearTimeout(debounceTimer);
+  const got = readSelection();
+  if (got) {
+    showForSelection(got.rect, got.text, got.range, true);
+    return;
+  }
+  const text = menuText.trim();
+  if (text.length === 0) return;
+  showForSelection(fallbackRect(), text, null, true);
+}
+
+function onMouseUp(e: MouseEvent): void {
+  // Right/middle clicks open menus; the menu item handles conversion then.
+  if (e.button !== 0) return;
+  handleSelectionChange();
+}
+
+function onKeyUp(e: KeyboardEvent): void {
   if (e.shiftKey || e.key === 'Escape') handleSelectionChange();
-});
-document.addEventListener('mousedown', onDocMouseDown, true);
-document.addEventListener('keydown', onKeyDown, true);
+}
+
+function onContextMenu(e: MouseEvent): void {
+  lastContextPoint = { x: e.clientX, y: e.clientY };
+}
+
+function onRuntimeMessage(
+  msg: unknown,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (r: Ack) => void,
+): void {
+  if (!fromThisExtension(sender) || !isConvertSelectionMessage(msg)) return;
+  // Only the top frame or the frame the menu targeted receives this.
+  convertFromMenu(msg.text);
+  sendResponse({ ok: true });
+}
+
+// --- Install (once per page, survives re-injection) ------------------------
+
+interface ContentInstance {
+  /** False once this copy's extension context is gone (extension updated). */
+  alive(): boolean;
+  dispose(): void;
+}
+
+const INSTANCE_KEY = '__tzExtensionContent__';
+
+function extensionAlive(): boolean {
+  try {
+    return typeof chrome !== 'undefined' && Boolean(chrome.runtime?.id);
+  } catch {
+    return false;
+  }
+}
+
+function install(): ContentInstance {
+  void loadPreferences().then((p) => {
+    prefs = p;
+    prefsLoaded = true;
+  });
+  const unsubscribe = onPreferencesChanged((p) => {
+    prefs = p;
+    prefsLoaded = true;
+    if (!p.selectToConvert) window.clearTimeout(debounceTimer);
+  });
+
+  document.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('keyup', onKeyUp);
+  document.addEventListener('mousedown', onDocMouseDown, true);
+  document.addEventListener('keydown', onKeyDown, true);
+  document.addEventListener('contextmenu', onContextMenu, true);
+  try {
+    chrome.runtime.onMessage.addListener(onRuntimeMessage);
+  } catch {
+    /* no runtime messaging (tests / restricted context) */
+  }
+
+  return {
+    alive: extensionAlive,
+    dispose: () => {
+      try {
+        unsubscribe();
+      } catch {
+        /* context already invalidated */
+      }
+      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('mousedown', onDocMouseDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('contextmenu', onContextMenu, true);
+      try {
+        chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+      } catch {
+        /* context already invalidated */
+      }
+      window.clearTimeout(debounceTimer);
+      dismissTransient();
+    },
+  };
+}
+
+// The background may inject this script on demand (right-click in a tab that
+// predates install/update). Keep one live copy: skip if a live one exists,
+// and retire a copy left behind by a previous version of the extension.
+{
+  const slot = window as unknown as Record<string, ContentInstance | undefined>;
+  const existing = slot[INSTANCE_KEY];
+  if (!existing || !existing.alive()) {
+    try {
+      existing?.dispose();
+    } catch {
+      /* stale copy already broken */
+    }
+    slot[INSTANCE_KEY] = install();
+  }
+}
