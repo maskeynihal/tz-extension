@@ -102,6 +102,8 @@ node --env-file=.env.store scripts/publish-firefox.mjs --dry-run
 To publish from your machine, drop `--dry-run`. Other options:
 
 - `publish-chrome.mjs --skip-publish` uploads a draft without submitting it for review.
+- `publish-chrome.mjs --cancel-pending` cancels a pending review of an older
+  version and submits this one instead (see [section 5](#5-what-happens-on-a-release)).
 - `--expect-version 1.2.3` (both scripts) fails if the zip holds a different version.
 - `--zip <path>` (both) and `--source <path>` (Firefox) pick other files.
 - `publish-chrome.mjs --timeout <seconds>` caps how long to wait for the store to process the upload (default 300).
@@ -117,38 +119,68 @@ To publish from your machine, drop `--dry-run`. Other options:
 2. Bump the version from Conventional Commits, commit, tag `vX.Y.Z`.
 3. Build `tz-extension-chrome.zip`, `tz-extension-firefox.zip`, and
    `tz-extension-source.zip` (a `git archive` of the release commit, for AMO reviewers).
-4. Create the GitHub release with the two extension zips, and save all three
-   zips as the `release-packages` workflow artifact.
+4. Create the GitHub release with all three zips attached, and save them as the
+   `release-packages` workflow artifact.
 5. Call `.github/workflows/publish-stores.yml`, which runs one job per store in
    the `store-publish` environment:
    - **Chrome:** `scripts/publish-chrome.mjs` exchanges the refresh token, uploads
      the zip, waits for processing, and submits it for review. The update goes
      live automatically once Google approves it.
    - **Firefox:** `scripts/publish-firefox.mjs` unpacks the zip and runs
-     `web-ext sign --channel=listed` (web-ext 10.8.0 via `npx`), attaching the
-     source archive and reviewer notes with the build steps
-     (`npm ci && npm run build:firefox`, Node 20+, output in `dist-firefox/`).
-     It does not wait for review; AMO publishes the version once a reviewer approves it.
+     `web-ext sign --channel=listed`, attaching the source archive and reviewer
+     notes with the build steps (`npm ci && npm run build:firefox`, Node 20+,
+     output in `dist-firefox/`). web-ext is an exact-pinned devDependency
+     (10.8.0), so the job runs `npm ci` and uses `node_modules/.bin/web-ext`;
+     web-ext gets only `PATH`, `HOME`, the temp dir, `LANG`/`CI` and the AMO
+     credentials from the environment. It does not wait for review; AMO
+     publishes the version once a reviewer approves it.
 
 The two store jobs are independent: one failing does not stop the other.
 Submissions to the same store never overlap (concurrency groups
-`store-publish-chrome` and `store-publish-firefox`).
+`store-publish-chrome` and `store-publish-firefox`). Only the release job is
+serialized per branch, so a publish job that is waiting for approval or for the
+store does not hold up the next release.
 
 Re-runs are safe. If the Chrome Web Store already has this version published or
 in review, or AMO says the version already exists, the job ends green with a notice.
+
+**Chrome review still pending for an older version.** With a release per merge,
+the previous version is often still in Chrome review when the next one is
+released. The store will not take a new package then, so the Chrome job uploads
+nothing and ends green with a warning naming the version under review. To get
+the new version in:
+
+- wait for the review to finish, then re-publish the tag (section 6) with
+  `store=chrome`; or
+- re-publish the tag with **cancel_pending** ticked. That cancels the pending
+  review (the API's `cancelSubmission`) and submits the new version instead,
+  which goes to the back of the review queue. You can also cancel the review by
+  hand in the Developer Dashboard and then re-publish.
+
+AMO has no such limit; each version is queued for review on its own.
 
 ## 6. Re-publish a tag
 
 Use this after adding secrets for an existing release, or to retry a failed submission.
 
 1. **Actions → Publish to stores → Run workflow** (on `main`).
-2. Enter the tag (e.g. `v0.6.3`) and pick `both`, `chrome` or `firefox`.
+2. Enter the tag and pick `both`, `chrome` or `firefox`. Any tag that has a
+   GitHub release works; `gh release list` shows them.
+3. Tick **cancel_pending** only if Chrome is still reviewing an older version
+   and you want this one submitted instead (see section 5).
 
-The job checks out the tag, runs `npm ci`, rebuilds the zip(s) (plus the source
-archive for Firefox), and publishes. From the CLI:
+The job does not rebuild anything. It downloads the zips attached to that tag's
+GitHub release, so the stores get the same bytes as the release. The publish
+scripts come from `main`, not from the tag, so tags made before the scripts
+existed work too. For Firefox, older releases without a
+`tz-extension-source.zip` asset get one generated from the tag with
+`git archive` (`scripts/source-archive.mjs --ref <tag>`). If the tag has no
+GitHub release, the job fails with an error saying so. From the CLI
+(replace `vX.Y.Z` with the tag):
 
 ```bash
-gh workflow run publish-stores.yml -f tag=v0.6.3 -f store=both
+gh workflow run publish-stores.yml -f tag=vX.Y.Z -f store=both
+gh workflow run publish-stores.yml -f tag=vX.Y.Z -f store=chrome -f cancel_pending=true
 ```
 
 A store only accepts a version higher than the one it already has, so
@@ -160,9 +192,11 @@ re-publishing an old tag is only useful for a version the store hasn't received 
 |---|---|
 | `token refresh: HTTP 400` / `invalid_grant` | Refresh token expired or revoked. Make sure the OAuth app is "In production" (step 1.3), get a new token (step 1.5), and update `CWS_REFRESH_TOKEN`. |
 | `fetchStatus: HTTP 403` / `404` | Wrong `CWS_PUBLISHER_ID`, or the token belongs to an account that doesn't own the item. |
-| `publish: HTTP 400` while a review is pending for an older version | Wait for that review, or cancel it in the Developer Dashboard, then re-run. |
+| Chrome warning "still reviewing vX … was NOT submitted" | An older version is in review. Re-publish the tag after that review finishes, or re-publish with `cancel_pending` (section 5). |
 | Chrome publish refuses because of visibility | If you changed visibility in the dashboard, publish once by hand there; after that the API works again. |
 | `upload still processing after 300s` | The store is slow. Check the dashboard, then re-run; the version check makes it safe. |
 | AMO `401` / `Unauthorized` | Regenerate the AMO API credentials and update both `AMO_*` secrets. |
-| AMO validation errors | Run `npx web-ext@10.8.0 lint --source-dir dist-firefox` locally and fix what it reports. |
+| AMO validation errors | Run `npm run build:firefox && npm exec web-ext -- lint --source-dir dist-firefox` locally (uses the pinned devDependency) and fix what it reports. |
+| `web-ext is not installed` | Run `npm ci` first; web-ext is a devDependency. |
+| `No GitHub release found for vX.Y.Z` | Manual re-publish needs a GitHub release for the tag. Check the tag name, or create the release with its zips first. |
 | A store step shows "publish skipped" | Its secrets aren't set in the `store-publish` environment. |

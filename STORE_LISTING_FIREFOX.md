@@ -52,8 +52,9 @@ FEATURES
 
 PRIVATE BY DESIGN
 Everything runs locally in your browser. The add-on makes no network requests,
-collects no data, and sends nothing off your device. It stores your
-preferences locally and adds one right-click menu item.
+collects no data, and sends nothing off your device. Your preferences are saved
+in the browser's own storage, and synced only by the browser's account sync if
+you have it turned on. It adds one right-click menu item.
 
 Free and open source: https://github.com/maskeynihal/tz-extension
 ```

@@ -6,7 +6,11 @@ name: Publish to stores
 #   passed in as a workflow artifact (so the stores get the exact files that
 #   are attached to the GitHub release).
 # - Run by hand (Actions > Publish to stores > Run workflow) to re-publish a
-#   tag: checks out the tag, rebuilds, and publishes.
+#   tag: downloads the zips attached to that tag's GitHub release and publishes
+#   them. Works for any tag that has a GitHub release.
+#
+# The publish scripts always come from the commit this workflow runs on (main),
+# never from the tag, so old tags that predate the scripts can be published.
 #
 # Each store is skipped with a warning when its secrets are missing, so
 # releases stay green before the secrets are configured. Secrets live in the
@@ -15,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish (e.g. v0.6.3)
+        description: Release tag to publish (must have a GitHub release, e.g. v0.6.3)
         required: true
         type: string
       store:
@@ -24,6 +28,11 @@ on:
         default: both
         type: choice
         options: [both, chrome, firefox]
+      cancel_pending:
+        description: Chrome only. If an older version is still in review, cancel that review and submit this one instead.
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       tag:
@@ -34,10 +43,14 @@ on:
         default: both
         type: string
       artifact:
-        description: Name of a workflow artifact holding the prebuilt zips. Empty = build from the tag.
+        description: Name of a workflow artifact holding the release zips. Empty = download them from the tag's GitHub release.
         required: false
         default: ''
         type: string
+      cancel_pending:
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -47,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: store-publish
     permissions:
-      contents: read
+      contents: read # checkout + gh release download
     timeout-minutes: 30
     strategy:
       # A Chrome failure must not cancel the Firefox submission (and vice versa).
@@ -102,11 +115,14 @@ jobs:
             echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout ${{ inputs.tag }}
+      # Tooling comes from this workflow's own commit, not the tag. Full history
+      # so tags are available to scripts/source-archive.mjs.
+      - name: Checkout publish tooling
         if: steps.creds.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node
@@ -114,23 +130,44 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: ${{ inputs.artifact == '' && 'npm' || '' }}
+          cache: ${{ matrix.store == 'firefox' && 'npm' || '' }}
 
-      - name: Download release packages
+      # Only Firefox needs dependencies (web-ext). The Chrome publisher has none.
+      - name: Install dependencies
+        if: steps.creds.outputs.ok == 'true' && matrix.store == 'firefox'
+        run: npm ci
+
+      - name: Download release packages (artifact)
         if: steps.creds.outputs.ok == 'true' && inputs.artifact != ''
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.artifact }}
           path: packages
 
-      - name: Build packages from the tag
+      - name: Download release packages (GitHub release)
         if: steps.creds.outputs.ok == 'true' && inputs.artifact == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          npm ci
-          npm run "zip:$STORE"
-          if [ "$STORE" = firefox ]; then npm run zip:source; fi
+          if ! err=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1 >/dev/null); then
+            echo "::error::No GitHub release found for $TAG in $GITHUB_REPOSITORY. Only tags with a GitHub release can be re-published. (gh: ${err//$'\n'/ })"
+            exit 1
+          fi
           mkdir -p "$PKG_DIR"
-          mv tz-extension-*.zip "$PKG_DIR/"
+          if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'tz-extension-*.zip' --dir "$PKG_DIR"; then
+            echo "::error::Could not download the tz-extension-*.zip assets of release $TAG (see the gh output above)."
+            exit 1
+          fi
+          want="$PKG_DIR/tz-extension-$STORE.zip"
+          if [ ! -f "$want" ]; then
+            echo "::error::Release $TAG has no $(basename "$want") asset."
+            exit 1
+          fi
+          if [ "$STORE" = firefox ] && [ ! -f "$PKG_DIR/tz-extension-source.zip" ]; then
+            echo "::notice::Release $TAG has no tz-extension-source.zip asset (older release); generating it from the tag."
+            node scripts/source-archive.mjs --ref "$TAG" --out "$PKG_DIR/tz-extension-source.zip"
+          fi
+          ls -l "$PKG_DIR"
 
       - name: Publish to Chrome Web Store
         if: steps.creds.outputs.ok == 'true' && matrix.store == 'chrome'
@@ -140,7 +177,11 @@ jobs:
           CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
           CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
           VERSION: ${{ steps.meta.outputs.version }}
-        run: node scripts/publish-chrome.mjs --zip "$PKG_DIR/tz-extension-chrome.zip" --expect-version "$VERSION"
+          CANCEL_PENDING: ${{ inputs.cancel_pending }}
+        run: |
+          extra=()
+          if [ "$CANCEL_PENDING" = true ]; then extra+=(--cancel-pending); fi
+          node scripts/publish-chrome.mjs --zip "$PKG_DIR/tz-extension-chrome.zip" --expect-version "$VERSION" "${extra[@]}"
 
       - name: Publish to Firefox Add-ons
         if: steps.creds.outputs.ok == 'true' && matrix.store == 'firefox'

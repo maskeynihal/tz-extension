@@ -9,6 +9,11 @@
  *
  * Env: AMO_JWT_ISSUER, AMO_JWT_SECRET  (https://addons.mozilla.org/developers/addon/api/key/)
  *
+ * Runs the locally installed web-ext (devDependency; `npm ci` first) with a
+ * minimal environment: PATH, HOME, temp dir and LANG/CI if set, plus the AMO
+ * credentials as WEB_EXT_API_KEY / WEB_EXT_API_SECRET. No other variables
+ * from this process reach web-ext, and secrets are redacted from its output.
+ *
  * The release zip is unpacked into a temp dir that becomes web-ext's
  * --source-dir, so AMO receives exactly the files of the GitHub release
  * (no source maps or dotfiles). The source archive is attached for review
@@ -22,7 +27,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { join, relative, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
@@ -37,8 +42,11 @@ import {
 } from './lib/store-common.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-// Exact pin: web-ext 10.8.0 requires Node >= 20 (matches package.json engines).
-export const WEB_EXT = 'web-ext@10.8.0';
+// web-ext is an exact-pinned devDependency (10.8.0, needs Node >= 20, matching
+// package.json engines). We run the locally installed binary from
+// package-lock.json rather than `npx web-ext@x`, so nothing is fetched at
+// publish time.
+export const WEB_EXT = join(root, 'node_modules', '.bin', 'web-ext');
 const GECKO_ID = 'tz-converter@maskeynihal';
 const AMO_EDIT_URL = 'https://addons.mozilla.org/developers/addon/tz-converter-timezone-tools/versions';
 
@@ -168,6 +176,29 @@ function run(cmd, args, env) {
   });
 }
 
+function requireWebExt() {
+  if (!existsSync(WEB_EXT)) {
+    throw new PublishError(`web-ext is not installed (${WEB_EXT} not found); run npm ci first`, { exitCode: 2 });
+  }
+}
+
+/**
+ * The environment web-ext gets: only what it needs to run, plus the AMO
+ * credentials. Everything else in process.env (other CI secrets, tokens) stays
+ * out of the child.
+ */
+function webExtEnv(env, parent = process.env) {
+  const out = {};
+  for (const k of ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'CI']) {
+    if (parent[k] !== undefined && parent[k] !== '') out[k] = parent[k];
+  }
+  out.npm_config_update_notifier = 'false';
+  // Equivalent to --api-key / --api-secret, but keeps the secret out of argv.
+  out.WEB_EXT_API_KEY = env.issuer;
+  out.WEB_EXT_API_SECRET = env.secret;
+  return out;
+}
+
 function commitOf(sourcePath) {
   // git archive stores the commit id in the zip comment; fall back to env/unknown.
   const buf = readFileSync(sourcePath);
@@ -182,10 +213,13 @@ await runMain('firefox', async (log) => {
   const env = readEnv(log);
   const commit = commitOf(args.source);
   const metadata = { version: { approval_notes: approvalNotes(version, commit) } };
+  requireWebExt();
 
   if (args.dryRun) {
     log.info(`approval notes (${metadata.version.approval_notes.length} chars) for commit ${commit.slice(0, 12)}`);
-    log.info(`dry run OK: env present, zips valid, would run npx ${WEB_EXT} sign --channel=listed for v${version}. No network calls made.`);
+    log.info(
+      `dry run OK: env present, zips valid, web-ext installed; would run ${relative(root, WEB_EXT)} sign --channel=listed for v${version}. No network calls made.`,
+    );
     return;
   }
 
@@ -197,20 +231,9 @@ await runMain('firefox', async (log) => {
     writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
     log.info(`unpacked ${files} entries to a temp source dir; submitting v${version} to AMO (listed channel)...`);
 
-    // Credentials go through web-ext's WEB_EXT_API_KEY / WEB_EXT_API_SECRET env
-    // vars, which are equivalent to --api-key / --api-secret but keep the
-    // secret out of the process argument list.
-    const childEnv = {
-      ...process.env,
-      WEB_EXT_API_KEY: env.issuer,
-      WEB_EXT_API_SECRET: env.secret,
-      npm_config_update_notifier: 'false',
-    };
     const { code, output } = await run(
-      'npx',
+      WEB_EXT,
       [
-        '--yes',
-        WEB_EXT,
         'sign',
         '--channel=listed',
         `--source-dir=${sourceDir}`,
@@ -221,7 +244,7 @@ await runMain('firefox', async (log) => {
         '--no-input',
         '--no-config-discovery',
       ],
-      childEnv,
+      webExtEnv(env),
     );
 
     if (code === 0) {

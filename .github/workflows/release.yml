@@ -10,15 +10,17 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   release:
     runs-on: ubuntu-latest
     # Skip the bot's own release commit so we never loop.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    # Serialize releases (version bump + tag) only. The publish job is left out
+    # so a store submission waiting for approval or polling the store does not
+    # hold up the next release; publish-stores.yml has its own per-store groups.
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write # push the version bump + tag, create the GitHub release
     outputs:
@@ -96,7 +98,9 @@ jobs:
         if: ${{ steps.bump.outputs.released == 'true' }}
         run: node scripts/release-notes.mjs "${{ steps.bump.outputs.version }}"
 
-      - name: Create GitHub release with both zips
+      # The source archive is attached too, so a manual re-publish to AMO
+      # (publish-stores.yml) can use the exact file from the release.
+      - name: Create GitHub release with the zips and source archive
         if: ${{ steps.bump.outputs.released == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -104,6 +108,7 @@ jobs:
           gh release create "${{ steps.bump.outputs.tag }}" \
             tz-extension-chrome.zip \
             tz-extension-firefox.zip \
+            tz-extension-source.zip \
             --title "${{ steps.bump.outputs.tag }}" \
             --notes-file RELEASE_NOTES.md
 

@@ -4,7 +4,7 @@
  * using the Chrome Web Store API v2. Zero dependencies (Node 20+, global fetch).
  *
  *   node scripts/publish-chrome.mjs [--zip tz-extension-chrome.zip]
- *                                   [--dry-run] [--skip-publish]
+ *                                   [--dry-run] [--skip-publish] [--cancel-pending]
  *                                   [--expect-version X.Y.Z] [--timeout 300]
  *
  * Env (required unless noted):
@@ -16,6 +16,11 @@
  * POST the zip to :upload; poll :fetchStatus while the upload is processing;
  * POST :publish. If the store already has this version published or under
  * review, exits 0 with a notice so re-runs are safe.
+ *
+ * If an OLDER version is still in review, the store will not take a new
+ * package, so the script uploads nothing and exits 0 with a warning. Pass
+ * --cancel-pending to cancel that review (:cancelSubmission) and submit this
+ * version instead.
  *
  * Exit codes: 0 success / nothing to do, 1 store or network failure,
  * 2 usage or configuration error.
@@ -49,7 +54,7 @@ const UPLOAD_IN_PROGRESS = new Set(['IN_PROGRESS', 'UPLOAD_IN_PROGRESS']);
 
 function usage(msg) {
   return new PublishError(
-    `${msg}\nusage: node scripts/publish-chrome.mjs [--zip <path>] [--dry-run] [--skip-publish] [--expect-version X.Y.Z] [--timeout <seconds>]`,
+    `${msg}\nusage: node scripts/publish-chrome.mjs [--zip <path>] [--dry-run] [--skip-publish] [--cancel-pending] [--expect-version X.Y.Z] [--timeout <seconds>]`,
     { exitCode: 2 },
   );
 }
@@ -62,6 +67,7 @@ function parseCli() {
         zip: { type: 'string', default: 'tz-extension-chrome.zip' },
         'dry-run': { type: 'boolean', default: false },
         'skip-publish': { type: 'boolean', default: false },
+        'cancel-pending': { type: 'boolean', default: false },
         'expect-version': { type: 'string' },
         timeout: { type: 'string', default: '300' },
         help: { type: 'boolean', short: 'h', default: false },
@@ -82,6 +88,7 @@ function parseCli() {
     zip: resolve(process.cwd(), values.zip),
     dryRun: values['dry-run'],
     skipPublish: values['skip-publish'],
+    cancelPending: values['cancel-pending'],
     expectVersion: values['expect-version'],
     timeoutMs: timeoutSec * 1000,
   };
@@ -261,7 +268,7 @@ await runMain('chrome', async (log) => {
 
   if (args.dryRun) {
     log.info(
-      `dry run OK: env present, zip valid, would upload v${version}${args.skipPublish ? ' (upload only)' : ' and publish'}. No network calls made.`,
+      `dry run OK: env present, zip valid, would ${args.cancelPending ? 'cancel any pending review of an older version, then ' : ''}upload v${version}${args.skipPublish ? ' (upload only)' : ' and publish'}. No network calls made.`,
     );
     return;
   }
@@ -287,7 +294,30 @@ await runMain('chrome', async (log) => {
     throw new PublishError(`store already has v${newer} published, newer than this zip's v${version}`, { exitCode: 2 });
   }
 
-  // 2. Upload.
+  // 2. Another version in review? The store will not accept a new package
+  //    until that review ends (alreadyHandled() covered our own version).
+  const sub = before.submittedItemRevisionStatus;
+  if (sub && IN_REVIEW_STATES.has(sub.state)) {
+    const pending = versionsOf(sub);
+    const pendingNewer = pending.find((v) => cmpVersion(v, version) > 0);
+    if (pendingNewer) {
+      throw new PublishError(`store is reviewing v${pendingNewer}, newer than this zip's v${version}`, { exitCode: 2 });
+    }
+    const pendingLabel = pending.length ? `v${pending.join(', v')}` : 'an earlier version';
+    if (!args.cancelPending) {
+      log.warn(
+        `the Chrome Web Store is still reviewing ${pendingLabel} (${sub.state}), so v${version} was NOT submitted. ` +
+          `To submit it later, re-run the "Publish to stores" workflow for tag v${version} once that review finishes, ` +
+          `or cancel the pending review (Developer Dashboard, or re-run with cancel_pending / --cancel-pending) and submit v${version} instead.`,
+      );
+      return;
+    }
+    log.info(`cancelling the pending review of ${pendingLabel} (${sub.state}) because --cancel-pending was given...`);
+    await request('cancelSubmission', `${API}/v2/${item}:cancelSubmission`, { method: 'POST', headers: auth });
+    log.notice(`cancelled the pending review of ${pendingLabel}; submitting v${version} instead.`);
+  }
+
+  // 3. Upload.
   log.info(`uploading v${version}...`);
   let upload;
   try {
@@ -306,7 +336,7 @@ await runMain('chrome', async (log) => {
   let state = upload.uploadState;
   log.info(`upload response: ${state}${upload.crxVersion ? ` v${upload.crxVersion}` : ''}`);
 
-  // 3. Poll while the store processes the package.
+  // 4. Poll while the store processes the package.
   if (UPLOAD_IN_PROGRESS.has(state)) {
     const deadline = Date.now() + args.timeoutMs;
     let delay = 2000;
@@ -344,7 +374,7 @@ await runMain('chrome', async (log) => {
     return;
   }
 
-  // 4. Submit for review / publish.
+  // 5. Submit for review / publish.
   let published;
   try {
     published = await request('publish', `${API}/v2/${item}:publish`, {
