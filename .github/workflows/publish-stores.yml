@@ -1,0 +1,155 @@
+name: Publish to stores
+
+# Submits a released version to the Chrome Web Store and/or Firefox Add-ons.
+#
+# - Called by release.yml after every release, with the release's own zips
+#   passed in as a workflow artifact (so the stores get the exact files that
+#   are attached to the GitHub release).
+# - Run by hand (Actions > Publish to stores > Run workflow) to re-publish a
+#   tag: checks out the tag, rebuilds, and publishes.
+#
+# Each store is skipped with a warning when its secrets are missing, so
+# releases stay green before the secrets are configured. Secrets live in the
+# `store-publish` environment; see PUBLISHING.md.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v0.6.3)
+        required: true
+        type: string
+      store:
+        description: Which store(s) to publish to
+        required: true
+        default: both
+        type: choice
+        options: [both, chrome, firefox]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      store:
+        required: false
+        default: both
+        type: string
+      artifact:
+        description: Name of a workflow artifact holding the prebuilt zips. Empty = build from the tag.
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    name: ${{ matrix.store }}
+    runs-on: ubuntu-latest
+    environment: store-publish
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      # A Chrome failure must not cancel the Firefox submission (and vice versa).
+      fail-fast: false
+      matrix:
+        store: ${{ fromJSON(inputs.store == 'both' && '["chrome","firefox"]' || format('["{0}"]', inputs.store)) }}
+    # Never run two submissions to the same store at once, across both the
+    # release-triggered and the manual path.
+    concurrency:
+      group: store-publish-${{ matrix.store }}
+      cancel-in-progress: false
+    env:
+      TAG: ${{ inputs.tag }}
+      STORE: ${{ matrix.store }}
+      PKG_DIR: ${{ github.workspace }}/packages
+    steps:
+      - name: Validate inputs
+        id: meta
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must look like v1.2.3 (got '$TAG')"
+            exit 1
+          fi
+          case "$STORE" in chrome|firefox) ;; *) echo "::error::unknown store '$STORE'"; exit 1 ;; esac
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check store credentials
+        id: creds
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          if [ "$STORE" = chrome ]; then
+            names="CWS_CLIENT_ID CWS_CLIENT_SECRET CWS_REFRESH_TOKEN CWS_PUBLISHER_ID"
+            label="Chrome Web Store"
+          else
+            names="AMO_JWT_ISSUER AMO_JWT_SECRET"
+            label="Firefox Add-ons"
+          fi
+          missing=""
+          for n in $names; do
+            if [ -z "${!n}" ]; then missing="$missing $n"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning title=$label publish skipped::Missing secrets:$missing. Add them to the store-publish environment (see PUBLISHING.md) and re-run with the 'Publish to stores' workflow."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout ${{ inputs.tag }}
+        if: steps.creds.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Set up Node
+        if: steps.creds.outputs.ok == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: ${{ inputs.artifact == '' && 'npm' || '' }}
+
+      - name: Download release packages
+        if: steps.creds.outputs.ok == 'true' && inputs.artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: packages
+
+      - name: Build packages from the tag
+        if: steps.creds.outputs.ok == 'true' && inputs.artifact == ''
+        run: |
+          npm ci
+          npm run "zip:$STORE"
+          if [ "$STORE" = firefox ]; then npm run zip:source; fi
+          mkdir -p "$PKG_DIR"
+          mv tz-extension-*.zip "$PKG_DIR/"
+
+      - name: Publish to Chrome Web Store
+        if: steps.creds.outputs.ok == 'true' && matrix.store == 'chrome'
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: node scripts/publish-chrome.mjs --zip "$PKG_DIR/tz-extension-chrome.zip" --expect-version "$VERSION"
+
+      - name: Publish to Firefox Add-ons
+        if: steps.creds.outputs.ok == 'true' && matrix.store == 'firefox'
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: >-
+          node scripts/publish-firefox.mjs
+          --zip "$PKG_DIR/tz-extension-firefox.zip"
+          --source "$PKG_DIR/tz-extension-source.zip"
+          --expect-version "$VERSION"

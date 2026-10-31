@@ -2,6 +2,10 @@ node_modules
 dist
 dist-firefox
 *.zip
+web-ext-artifacts/
+.env.store
+.amo-upload-uuid
+.web-extension-id
 *.log
 .DS_Store
 coverage
