@@ -264,6 +264,50 @@ test.describe('formats, context menu, select-to-convert', () => {
     await page.close();
   });
 
+  test('a dismissed card stays closed (Escape in a field, Shift+click, keep-selection off)', async () => {
+    await setPrefs({ keepSelection: false });
+    const page = await openPage(
+      '<input id="i" value="Meeting at 2024-01-02T15:04:05Z" style="width:400px"><p id="t">1700000000</p>',
+    );
+    // Escape inside a text field.
+    await page.locator('#i').focus();
+    await page.keyboard.press('ControlOrMeta+a');
+    await expect(popover(page)).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(700);
+    await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
+
+    // Close with ×, then Shift+click at the end of the same page selection.
+    await selectText(page, '#t');
+    await expect(popover(page)).toBeVisible({ timeout: 5000 });
+    await popover(page).getByLabel('Close').click();
+    const before = await page.evaluate(() => window.getSelection()?.toString());
+    // Re-dispatch a mouseup over the unchanged selection (what Shift+click at
+    // its end does) and a Shift keyup: neither may bring the card back.
+    await page.evaluate(() => {
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, shiftKey: true }));
+      document.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Shift' }));
+    });
+    await page.waitForTimeout(700);
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(before);
+    await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
+    // A new selection converts again.
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await page.mouse.click(5, 5);
+    await selectText(page, '#t');
+    await expect(popover(page)).toBeVisible({ timeout: 5000 });
+    await page.close();
+  });
+
+  test('the menu card says when a very long selection was only partly checked', async () => {
+    const page = await openPage('<p>long</p>');
+    await menuConvert('lorem ipsum '.repeat(2100));
+    const card = page.locator('#tz-extension-popover-host .tzx-nomatch');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Only the first 20,000 characters');
+    await page.close();
+  });
+
   test('settings: the select-to-convert switch persists', async () => {
     const opt = await context.newPage();
     await opt.goto(`chrome-extension://${extId}/src/options/index.html`);

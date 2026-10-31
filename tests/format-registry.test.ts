@@ -5,6 +5,8 @@ import {
   compileAdvancedFormat,
   compileTokenFormat,
   hasNestedQuantifier,
+  isVeto,
+  layoutMatches,
   matchCustomFormat,
   parseCustom,
 } from '../src/lib/custom-formats';
@@ -43,9 +45,10 @@ describe('built-in registry', () => {
   it('every listed example is recognized by its own format', () => {
     for (const f of BUILTIN_FORMATS) {
       for (const ex of f.examples) {
-        const hits = f.match(ex, ctx);
+        const hits = f.match(ex, ctx).filter((h) => !isVeto(h));
         expect(hits.length, `${f.id} should match "${ex}"`).toBeGreaterThan(0);
-        expect(hits[0]?.parsed.formatId).toBe(f.id);
+        const first = hits[0];
+        expect(first && !isVeto(first) ? first.parsed.formatId : null).toBe(f.id);
       }
     }
   });
@@ -361,7 +364,7 @@ describe('QA regressions', () => {
   });
 
   it('does not show the time of an unrecognized date as today', () => {
-    for (const text of ['31/12/2024 10:30', '12/25/2024 3pm EST', '2024/02/31 10:00', '24.12.2024 um 18:30', '24.12.2024 um 18:00 CET', '2024/02/31 10:00 UTC', '31/12/2024 10:30:15 UTC', '2-Jan-2025x 15:04', 'Dec 31 10:30', '31 Dec at 10:30']) {
+    for (const text of ['31/12/2024 10:30', '12/25/2024 3pm EST', '2024/02/31 10:00', '24.12.2024 um 18:30', '24.12.2024 um 18:00 CET', '2024/02/31 10:00 UTC', '31/12/2024 10:30:15 UTC', '2-Jan 15:04', 'Dec 31 10:30', '31 Dec at 10:30']) {
       expect(parseTimes(text, 'UTC'), text).toHaveLength(0);
     }
   });
@@ -548,5 +551,95 @@ describe('round-2 review and QA fixes', () => {
     expect(at('Standup 9:00, demo 16:30')[0]?.matchedText).toBe('9:00');
     expect(at('at 3pm or 1700000000')[0]?.formatId).toBe('epoch-seconds');
     expect(at('09:00 local, 14:00 UTC')[0]?.matchedText).toBe('14:00 UTC');
+  });
+});
+
+describe('round-3 review and QA fixes', () => {
+  const now = Date.UTC(2026, 9, 31, 12);
+  const at = (text: string, zone = 'UTC'): ReturnType<typeof parseTimes> =>
+    parseTimes(text, { assumedZone: zone, nowMs: now });
+  const time = (fn: () => unknown): number => {
+    const t0 = performance.now();
+    fn();
+    return performance.now() - t0;
+  };
+
+  it.each([
+    `(?<h>\\d)${'\\d?'.repeat(14)}\\d{66}:(?<mi>\\d{2})`,
+    `(?<h>\\d)${'\\d{0,2}'.repeat(9)}\\d{50}:(?<mi>\\d{2})`,
+    `(?<h>\\d)${'\\d?'.repeat(14)}(?<=[^]{480})\\d{40}:(?<mi>\\d{2})`,
+    `(?<h>\\d)${'\\d?'.repeat(14)}\\d{14}:(?<mi>\\d{2})`,
+    '(?<h>\\d+\\d+):(?<mi>\\d{2})',
+    '(?<h>\\d{1,2}).*.*x(?<mi>\\d{2})',
+  ])('every accepted-or-not pattern stays within budget through parseTimes: %s', (pattern) => {
+    const f = fmt(pattern, { advanced: true });
+    for (const hostile of ['1'.repeat(500), `${'1'.repeat(400)}:`, '1 '.repeat(250)]) {
+      expect(time(() => parseTimes(hostile, { assumedZone: 'UTC', customFormats: [f] }))).toBeLessThan(250);
+    }
+  });
+
+  it('many slow formats together share one budget', () => {
+    const many = Array.from({ length: 20 }, (_, i) =>
+      fmt(`(?<h>\\d)${'\\d?'.repeat(13)}\\d{${20 + i}}:(?<mi>\\d{2})`, { advanced: true, id: `s${i}` }),
+    );
+    expect(time(() => parseTimes('1'.repeat(500), { assumedZone: 'UTC', customFormats: many }))).toBeLessThan(400);
+  });
+
+  it('rejects wide or repeated lookbehinds', () => {
+    const r = compileAdvancedFormat('(?<=[^]{480})(?<h>\\d{2}):(?<mi>\\d{2})');
+    expect(r.ok ? 'OK' : r.error).toMatch(/Lookbehinds may look back/);
+    expect(compileAdvancedFormat('(?<=at )(?<h>\\d{2}):(?<mi>\\d{2})').ok).toBe(true);
+  });
+
+  it('the settings layout check is bounded on long samples', () => {
+    const f = { pattern: '(?<h>\\d+\\d+):(?<mi>\\d{2})', advanced: true };
+    expect(time(() => layoutMatches('1'.repeat(4000), f))).toBeLessThan(250);
+    expect(layoutMatches('at 10:30', f)).toBe(true);
+  });
+
+  it('a bare number before a two-letter zone is a count, not a time', () => {
+    for (const text of ['Got 3 CT scans', 'Lot 5 PT', 'Apollo 11 MT', 'Got 3 CT']) expect(at(text), text).toHaveLength(0);
+    expect(at('3pm PT')[0]?.assumed).toBe(false);
+    expect(at('5 EST')[0]?.assumed).toBe(false);
+  });
+
+  it('an explicit timestamp leads over a bare 10-digit number', () => {
+    expect(at('Phone 5551234567, meeting 2024-01-02T10:00Z')[0]?.formatId).toBe('iso-8601');
+    expect(at('Call 4155550123 re: Jan 5, 2024 10:00 UTC')[0]?.formatId).toBe('long-form');
+  });
+
+  it('keeps every time in comma-separated lists', () => {
+    expect(at('Times: 9:00,10:00,11:00')).toHaveLength(3);
+    expect(at('id,10:30,done')[0]?.matchedText).toBe('10:30');
+    expect(at('Mon,10:00 UTC')[0]?.matchedText).toBe('10:00 UTC');
+    expect(at('1,30')).toHaveLength(0);
+  });
+
+  it('lower-case "may"/"mar" are words, not months', () => {
+    expect(at('Top 10 may be at 10:00')[0]?.matchedText).toBe('10:00');
+    expect(at('We sold 3 mar at 10:00')[0]?.matchedText).toBe('10:00');
+    expect(at('Dec 31 at 10:30')).toHaveLength(0);
+  });
+
+  it('a recognized date followed by unrelated words keeps the later time', () => {
+    expect(at('2024-01-02, see at 10:00').map((r) => r.matchedText)).toEqual(['2024-01-02', '10:00']);
+  });
+
+  it('am/pm needs a word boundary', () => {
+    expect(at('Jan 5, 2024 2 amendments passed')[0]?.dateOnly).toBe(true);
+    expect(at('3 amps')).toHaveLength(0);
+    expect(at('9 AMC theatre')).toHaveLength(0);
+  });
+
+  it('an ISO-shaped value with impossible parts is refused whole', () => {
+    for (const text of ['2024-13-01 10:00', '2024-13-01 10:30:15 UTC', '2024-12-32 10:00', '2024-01-02T10:00+15:00', '2024/13/01 10:00']) {
+      expect(at(text), text).toHaveLength(0);
+    }
+    expect(at('32/12/2024 10:30')).toHaveLength(0);
+  });
+
+  it('lower-case GMT/UTC offsets are read', () => {
+    expect(iso(at('10:00 gmt+2')[0]!.epochMs)).toBe('2026-10-31T08:00:00.000Z');
+    expect(iso(at('10:00 utc-5')[0]!.epochMs)).toBe('2026-10-31T15:00:00.000Z');
   });
 });

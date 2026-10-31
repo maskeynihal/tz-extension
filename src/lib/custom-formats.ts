@@ -36,7 +36,7 @@ export const ADVANCED_SCAN_LIMIT = 500;
 const MAX_MATCHES_PER_FORMAT = 25;
 
 const ZONE_FRAG =
-  '(?<zone>Z|[+-]\\d{2}:?\\d{2}|(?:GMT|UTC)[+-]\\d{1,2}(?::?\\d{2})?|[A-Za-z]{2,5})';
+  '(?<zone>Z|[+-]\\d{2}:?\\d{2}|(?:[Gg][Mm][Tt]|[Uu][Tt][Cc])[+-]\\d{1,2}(?::?\\d{2})?|[A-Za-z]{2,5})';
 
 interface TokenDef {
   readonly token: string;
@@ -224,12 +224,21 @@ export function compileTokenFormat(pattern: string): CompileResult {
 export const ADVANCED_MATCH_WINDOW = 80;
 /** Upper bound on the estimated backtracking work per start position. */
 const MAX_REGEX_COST = 20_000;
+/** Longest text a lookbehind may inspect (it runs on every attempt). */
+const MAX_LOOKBEHIND_WIDTH = 32;
+/**
+ * Wall-clock budget for one advanced format on one selection. The static
+ * checks bound a single attempt; this bounds the sum over all start positions.
+ */
+export const ADVANCED_TIME_BUDGET_MS = 25;
 
 export interface RegexRisk {
   /** A repeated group contains a repeat or an alternation: exponential. */
   readonly nested: boolean;
   /** Product of the choices every quantifier allows (unbounded = window). */
   readonly cost: number;
+  /** Widest text any lookbehind can inspect (unbounded = Infinity). */
+  readonly lookbehindWidth: number;
 }
 
 /**
@@ -251,8 +260,23 @@ export function analyzeRegex(src: string): RegexRisk {
     /** Number of top-level branches in this group. */
     branches: number;
     cost: number;
+    /** Widest text this group can match (sum of atom maxima). */
+    width: number;
+    /** Widest branch so far (alternation takes the max over branches). */
+    branchWidth: number;
+    lookbehind: boolean;
   }
-  const frame = (): Frame => ({ hasRepeat: false, hasAlt: false, branches: 1, cost: 1 });
+  const frame = (lookbehind = false): Frame => ({
+    hasRepeat: false,
+    hasAlt: false,
+    branches: 1,
+    cost: 1,
+    width: 0,
+    branchWidth: 0,
+    lookbehind,
+  });
+  let lookbehindWidth = 0;
+  const widthOf = (f: Frame): number => Math.max(f.width, f.branchWidth);
   const stack: Frame[] = [frame()];
   const top = (): Frame => stack[stack.length - 1] as Frame;
   let nested = false;
@@ -282,19 +306,25 @@ export function analyzeRegex(src: string): RegexRisk {
   while (i < src.length) {
     const c = src[i];
     if (c === '(') {
-      stack.push(frame());
       i++;
       // Skip group syntax such as ?: ?= ?! ?<= ?<! ?<name>
+      let behind = false;
       if (src[i] === '?') {
         const m = /^\?(?::|=|!|<=|<!|<[A-Za-z_$][\w$]*>)/.exec(src.slice(i));
-        if (m) i += m[0].length;
+        if (m) {
+          behind = m[0] === '?<=' || m[0] === '?<!';
+          i += m[0].length;
+        }
       }
+      stack.push(frame(behind));
       continue;
     }
     if (c === ')') {
       const inner = stack.length > 1 ? (stack.pop() as Frame) : frame();
       // Each branch is another way to match: alternation multiplies the work.
       const innerCost = inner.cost * inner.branches;
+      const innerWidth = widthOf(inner);
+      if (inner.lookbehind) lookbehindWidth = Math.max(lookbehindWidth, innerWidth);
       i++;
       const q = quantAt(i);
       const parent = top();
@@ -303,8 +333,12 @@ export function analyzeRegex(src: string): RegexRisk {
         if (q.max > 1 && (inner.hasRepeat || inner.hasAlt)) nested = true;
         parent.cost *= innerCost * factor(q);
         if (q.max > q.min) parent.hasRepeat = true;
+        if (inner.lookbehind && q.max > 1) lookbehindWidth = Infinity;
+        parent.width += inner.lookbehind ? 0 : innerWidth * q.max;
       } else {
         parent.cost *= innerCost;
+        // Lookarounds match no text of their own.
+        parent.width += inner.lookbehind ? 0 : innerWidth;
       }
       // Wrapping in a plain group must not hide what is inside it.
       if (inner.hasRepeat) parent.hasRepeat = true;
@@ -312,8 +346,11 @@ export function analyzeRegex(src: string): RegexRisk {
       continue;
     }
     if (c === '|') {
-      top().hasAlt = true;
-      top().branches += 1;
+      const f = top();
+      f.hasAlt = true;
+      f.branches += 1;
+      f.branchWidth = Math.max(f.branchWidth, f.width);
+      f.width = 0;
       i++;
       continue;
     }
@@ -330,19 +367,23 @@ export function analyzeRegex(src: string): RegexRisk {
     } else {
       atomEnd = i + 1;
     }
+    // Anchors and boundaries match no text.
+    const zeroWidth = (c === '^' || c === '$') || (c === '\\' && (src[i + 1] === 'b' || src[i + 1] === 'B'));
     const q = quantAt(atomEnd);
     if (q) {
       top().cost *= factor(q);
       // A fixed count like \d{2} matches one way; only variable repeats are ambiguous.
       if (q.max > q.min) top().hasRepeat = true;
+      if (!zeroWidth) top().width += q.max;
       i = atomEnd + q.len;
     } else {
+      if (!zeroWidth) top().width += 1;
       i = atomEnd;
     }
   }
   let cost = 1;
   for (const f of stack) cost *= f.cost * f.branches;
-  return { nested, cost };
+  return { nested, cost, lookbehindWidth };
 }
 
 /** True when a repeated group contains a repeat or an alternation, e.g. (a+)+ or (a|b)*. */
@@ -400,6 +441,12 @@ export function compileAdvancedFormat(pattern: string): CompileResult {
         'This regex repeats a group that contains a repeat or a choice, like (a+)+ or (a|b)+. That can freeze the page, so it is not allowed.',
     };
   }
+  if (risk.lookbehindWidth > MAX_LOOKBEHIND_WIDTH) {
+    return {
+      ok: false,
+      error: `Lookbehinds may look back at most ${MAX_LOOKBEHIND_WIDTH} characters, with fixed or bounded repeats only.`,
+    };
+  }
   if (risk.cost > MAX_REGEX_COST) {
     return {
       ok: false,
@@ -452,11 +499,34 @@ export interface Candidate {
   readonly length: number;
 }
 
+/**
+ * Text that has the shape of a timestamp but holds impossible values
+ * ("2024-13-01 10:00", "10:00+15:00"). It wins overlaps like a match but
+ * produces no result, so no other format can read a piece of it (the "10:00"
+ * or the "15:00") as a time of its own.
+ */
+export interface Veto {
+  readonly veto: true;
+  readonly index: number;
+  readonly length: number;
+}
+
+export type MatchResult = Candidate | Veto;
+
+export function isVeto(m: MatchResult): m is Veto {
+  return 'veto' in m;
+}
+
 export interface MatchContext {
   readonly assumedZone: string;
   readonly dateOnlyPolicy: DateOnlyPolicy;
   /** Injected for tests; defaults to Date.now(). */
   readonly nowMs?: number;
+  /**
+   * performance.now() value after which advanced regexes stop scanning. Lets
+   * parseTimes share one budget across every custom format.
+   */
+  readonly deadline?: number;
 }
 
 function num(v: string | undefined): number | undefined {
@@ -557,6 +627,38 @@ function toCandidate(
   return parsed ? { parsed, index, length: m[0].length } : null;
 }
 
+export function now(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/**
+ * True when the format's layout appears in `text`, even if the values are not
+ * a real date (for the settings tester's hint). Same limits as matching.
+ */
+export function layoutMatches(text: string, fmt: Pick<CustomFormat, 'pattern' | 'advanced'>): boolean {
+  const compiled = compiledFor(fmt);
+  if (!compiled.ok) return false;
+  if (!fmt.advanced) return new RegExp(compiled.regex.source).test(text.slice(0, 2000));
+  let re: RegExp;
+  try {
+    re = new RegExp(compiled.regex.source, 'y');
+  } catch {
+    return false;
+  }
+  const src = text.slice(0, ADVANCED_SCAN_LIMIT);
+  const started = now();
+  for (let i = 0; i < src.length; i++) {
+    if ((i & 15) === 0 && now() - started > ADVANCED_TIME_BUDGET_MS) return false;
+    re.lastIndex = i;
+    try {
+      if (re.exec(src.slice(0, i + ADVANCED_MATCH_WINDOW))) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 /** Token patterns: bounded fragments, so one global scan is safe. */
 function matchGlobal(src: string, source: string, fmt: CustomFormat, ctx: MatchContext): Candidate[] {
   // Fresh regex per call: the cached one is shared and `g` regexes are stateful.
@@ -597,8 +699,11 @@ function matchWindowed(src: string, source: string, fmt: CustomFormat, ctx: Matc
     return [];
   }
   const out: Candidate[] = [];
+  const stopAt = Math.min(now() + ADVANCED_TIME_BUDGET_MS, ctx.deadline ?? Infinity);
   let i = 0;
   while (i < src.length && out.length < MAX_MATCHES_PER_FORMAT) {
+    // Out of time: keep what we found rather than stall the page.
+    if ((i & 7) === 0 && now() > stopAt) break;
     // Everything before i stays visible for lookbehinds; only the text after
     // i is cut to the window.
     const win = src.slice(0, i + ADVANCED_MATCH_WINDOW);

@@ -345,6 +345,8 @@ export function Popover({
 export interface NoMatchCardProps {
   /** The selection the user asked to convert. */
   readonly text: string;
+  /** True when the selection was longer than what is checked. */
+  readonly truncated?: boolean;
   readonly onClose: () => void;
   readonly onOpenSettings: () => void;
   readonly onDragStart?: (e: React.PointerEvent) => void;
@@ -356,7 +358,7 @@ const MAX_QUOTE = 80;
  * Shown when the user explicitly asked to convert (right-click menu) but no
  * enabled format recognized the selection.
  */
-export function NoMatchCard({ text, onClose, onOpenSettings, onDragStart }: NoMatchCardProps): JSX.Element {
+export function NoMatchCard({ text, truncated = false, onClose, onOpenSettings, onDragStart }: NoMatchCardProps): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const oneLine = text.replace(/\s+/g, ' ').trim();
   const quote = oneLine.length > MAX_QUOTE ? `${oneLine.slice(0, MAX_QUOTE - 1)}…` : oneLine;
@@ -380,7 +382,7 @@ export function NoMatchCard({ text, onClose, onOpenSettings, onDragStart }: NoMa
       <p>
         No date or time recognized in <span className="tzx-quote">“{quote}”</span>.
       </p>
-      {text.length > SCAN_LIMIT && (
+      {(truncated || text.length > SCAN_LIMIT) && (
         <p>Only the first {SCAN_LIMIT.toLocaleString('en-US')} characters of a selection are checked.</p>
       )}
       <p>If this is a format your sites use, add it as a custom format.</p>

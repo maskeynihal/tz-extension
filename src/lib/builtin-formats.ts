@@ -1,6 +1,6 @@
 import type { ParsedTime } from '../types';
 import { parseEpoch } from './epoch';
-import type { Candidate, MatchContext } from './custom-formats';
+import type { MatchContext, MatchResult } from './custom-formats';
 import {
   buildParsed,
   dateOnlyTime,
@@ -23,7 +23,7 @@ export interface BuiltinFormat {
   readonly examples: readonly string[];
   /** The regular expression, shown on the settings page. */
   readonly regex: RegExp;
-  readonly match: (src: string, ctx: MatchContext) => Candidate[];
+  readonly match: (src: string, ctx: MatchContext) => MatchResult[];
 }
 
 const MAX_MATCHES = 25;
@@ -33,13 +33,16 @@ const MAX_MATCHES = 25;
  * turn out invalid is skipped one character at a time so a valid match that
  * starts inside it is still found.
  */
+/** Returned by a converter: the shape matched but the values are impossible. */
+const VETO = 'veto' as const;
+
 function scan(
   regex: RegExp,
   src: string,
-  convert: (m: RegExpExecArray) => { parsed: ParsedTime; length?: number } | null,
-): Candidate[] {
+  convert: (m: RegExpExecArray) => { parsed: ParsedTime; length?: number } | typeof VETO | null,
+): MatchResult[] {
   const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : `${regex.flags}g`);
-  const out: Candidate[] = [];
+  const out: MatchResult[] = [];
   let guard = 0;
   let m: RegExpExecArray | null;
   // Each failed attempt advances at least one character, so src.length bounds the loop.
@@ -49,7 +52,10 @@ function scan(
       continue;
     }
     const got = convert(m);
-    if (got) {
+    if (got === VETO) {
+      out.push({ veto: true, index: m.index, length: m[0].length });
+      re.lastIndex = m.index + m[0].length;
+    } else if (got) {
       out.push({ parsed: got.parsed, index: m.index, length: got.length ?? m[0].length });
     } else {
       re.lastIndex = m.index + 1;
@@ -77,9 +83,9 @@ function fractionMs(frac: string | undefined): number | undefined {
 // --- Regexes ---------------------------------------------------------------
 
 /** A zone after a time: Z, ±hh:mm, GMT±h[:mm] / UTC±h[:mm], or an abbreviation. */
-const ZONE = String.raw`Z|[+-]\d{2}:?\d{2}|(?:GMT|UTC)[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5}`;
+const ZONE = String.raw`Z|[+-]\d{2}:?\d{2}|(?:[Gg][Mm][Tt]|[Uu][Tt][Cc])[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5}`;
 /** am/pm, also written "a.m." / "P.M.". */
-const AMPM = String.raw`[AaPp]\.?[Mm]\.?`;
+const AMPM = String.raw`[AaPp]\.?[Mm]\.?(?![A-Za-z])`;
 /**
  * A time inside a written date: "15:04", "3:04:05 PM", or "3pm". Named groups
  * h/mi/s/ap for the colon form, h2/ap2 for the hour-and-am/pm form.
@@ -96,11 +102,11 @@ const RE_EPOCH_MS = /(?<![\w.-])(-?\d{12,13})(?![\w]|\.\d)/;
 // zone/offset may follow it, glued on ("Z", "+05:45") or as a separate word
 // ("UTC", "GMT+1").
 const RE_ISO = new RegExp(
-  String.raw`\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?(?:\s*(Z|[+-]\d{2}:?\d{2})(?![\w:])|[ \t]+((?:GMT|UTC)[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5})(?![\w+-]))?)?(?![\d])`,
+  String.raw`\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?(?:\s*(Z|[+-]\d{2}:?\d{2})(?![\w:])|[ \t]+((?:[Gg][Mm][Tt]|[Uu][Tt][Cc])[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5})(?![\w+-]))?)?(?![\d])`,
 );
 
 const RE_DATE_SLASH = new RegExp(
-  String.raw`\b(\d{4})\/(\d{2})\/(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\b(?:[ \t]+((?:GMT|UTC)[+-]\d{1,2}(?::?\d{2})?|[+-]\d{2}:?\d{2}|[A-Za-z]{2,5})(?![\w+-]))?`,
+  String.raw`\b(\d{4})\/(\d{2})\/(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\b(?:[ \t]+((?:[Gg][Mm][Tt]|[Uu][Tt][Cc])[+-]\d{1,2}(?::?\d{2})?|[+-]\d{2}:?\d{2}|[A-Za-z]{2,5})(?![\w+-]))?`,
 );
 
 // Month first, optionally led by a weekday:
@@ -120,7 +126,7 @@ const RE_DAY_MONTH = new RegExp(
 // Bare time: "3pm", "15:04", "3:30 p.m. UTC", "9:00 +05:45". Never starts
 // inside a number or another time ("10:30:15" must not yield "15").
 const RE_TIME = new RegExp(
-  String.raw`(?<![\d:.,])\b(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:[ \t]*(${AMPM}))?(?:[ \t]+(${ZONE})(?![\w+-]))?(?![\w:])`,
+  String.raw`(?<![\d:.])(?<!(?:^|[^\d:])\d{1,3},)\b(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:[ \t]*(${AMPM}))?(?:[ \t]+(${ZONE})(?![\w+-]))?(?![\w:])`,
 );
 
 /**
@@ -133,23 +139,35 @@ const RE_TIME = new RegExp(
 function dateLikeBefore(src: string, index: number): boolean {
   const before = src.slice(Math.max(0, index - 40), index);
   // Connector between the date and the time: "T", ",", "at", "um", "à", "a las".
-  const tail = String.raw`[T,]?\s*(?:[^\s\d]{1,4}\.?\s+){0,2}$`;
+  // Only real connector words count, so "2024-01-02, see at 10:00" keeps 10:00.
+  const tail = String.raw`[T,]?\s*(?:(?:at|on|um|à|a|las|les|le|el|om|alle|kl\.?|ob|o|klo|-)\s+){0,2}$`;
 
-  const numeric = new RegExp(String.raw`(?<![\w.:/-])(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})${tail}`).exec(before);
+  const numeric = new RegExp(String.raw`(?<![\w.:/-])(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})${tail}`, 'i').exec(before);
   if (numeric) {
     const [a, b, c] = [numeric[1] ?? '', numeric[2] ?? '', numeric[3] ?? ''];
     const n = [Number(a), Number(b), Number(c)];
     if (a.length === 4 && n[1]! <= 12 && n[2]! <= 31 && n[1]! >= 1 && n[2]! >= 1) return true; // Y-M-D
-    if ((c.length === 4 || c.length === 2) && a.length <= 2) {
+    // D-M-YYYY / M-D-YYYY: with a four-digit year the shape alone says
+    // "date", even when the values are impossible (32/12/2024).
+    if (c.length === 4 && a.length <= 2 && b.length <= 2) return true;
+    if (c.length === 2 && a.length <= 2) {
       const [x, y] = [n[0]!, n[1]!];
-      if (x >= 1 && y >= 1 && x <= 31 && y <= 31 && (x <= 12 || y <= 12)) return true; // D-M-Y or M-D-Y
+      if (x >= 1 && y >= 1 && x <= 31 && y <= 31 && (x <= 12 || y <= 12)) return true; // D-M-YY or M-D-YY
     }
   }
-  const dayMon = new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?(?:\s+|-)([A-Za-z]{3,9})\.?,?(?:(?:\s+|-)\d{2,4})?,?${tail}`).exec(before);
-  if (dayMon && monthFromName(dayMon[2]) !== undefined && Number(dayMon[1]) <= 31) return true;
-  const monDay = new RegExp(String.raw`\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?(?:\s+\d{4})?,?${tail}`).exec(before);
-  if (monDay && monthFromName(monDay[1]) !== undefined && Number(monDay[2]) <= 31) return true;
+  const dayMon = new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?(?:\s+|-)([A-Za-z]{3,9})\.?,?(?:(?:\s+|-)\d{2,4})?,?${tail}`, 'i').exec(before);
+  if (dayMon && isMonthWord(dayMon[2]) && Number(dayMon[1]) <= 31) return true;
+  const monDay = new RegExp(String.raw`\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?(?:\s+\d{4})?,?${tail}`, 'i').exec(before);
+  if (monDay && isMonthWord(monDay[1]) && Number(monDay[2]) <= 31) return true;
   return false;
+}
+
+/**
+ * A month name as it appears in a date: capitalized ("May", "Mar") or all
+ * caps. Lower-case "may"/"mar" in running text are ordinary words.
+ */
+function isMonthWord(w: string | undefined): boolean {
+  return Boolean(w && /^[A-Z]/.test(w) && monthFromName(w) !== undefined);
 }
 
 /** An offset-looking zone ("+15:00", "UTC+15", "GMT+5:99") that is not a real offset. */
@@ -205,7 +223,7 @@ function writtenMatcher(
       const g = (m.groups ?? {}) as Record<string, string | undefined>;
       const month = monthFromName(g.mon);
       if (month === undefined || !g.year || !g.day) return null;
-      if (badOffset(g.zone)) return null;
+      if (badOffset(g.zone)) return VETO;
       const zone = resolveZoneToken(g.zone);
       const text = trimUnresolvedZone(m[0], g.zone, zone !== null);
       const dateOnly = g.h === undefined && g.h2 === undefined;
@@ -218,7 +236,8 @@ function writtenMatcher(
         formatLabel: label,
         dateOnly,
       });
-      return parsed ? { parsed, length: text.length } : null;
+      if (!parsed) return dateOnly ? null : VETO;
+      return { parsed, length: text.length };
     });
 }
 
@@ -253,7 +272,9 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
         const dateOnly = h === undefined;
         // An unknown zone word (or an impossible offset) is not part of the
         // timestamp: read the time without it rather than dropping the match.
-        if (badOffset(zoneTok)) return null;
+        // A full ISO timestamp with an impossible offset is not a date and a
+        // separate time; refuse the whole thing.
+        if (badOffset(zoneTok)) return VETO;
         const zone = zoneTok ? resolveZoneToken(zoneTok) : null;
         const text = trimUnresolvedZone(m[0], zoneTok, zone !== null);
         const t = dateOnly ? dateOnlyTime(ctx.dateOnlyPolicy, ctx.assumedZone) : { h: Number(h), mi: Number(mi), s: Number(s ?? 0) };
@@ -269,7 +290,10 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
             dateOnly,
           },
         );
-        return parsed ? { parsed, length: text.length } : null;
+        // "2024-13-01 10:00": the shape is unmistakable, so do not let the
+        // trailing time escape as today's 10:00.
+        if (!parsed) return dateOnly ? null : VETO;
+        return { parsed, length: text.length };
       }),
   },
   {
@@ -281,7 +305,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     match: (src, ctx) =>
       scan(RE_DATE_SLASH, src, (m) => {
         const [, y, mo, d, h, mi, s, zoneTok] = m;
-        if (badOffset(zoneTok)) return null;
+        if (badOffset(zoneTok)) return VETO;
         const zone = resolveZoneToken(zoneTok);
         const text = trimUnresolvedZone(m[0], zoneTok, zone !== null);
         const parsed = buildParsed(
@@ -290,7 +314,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
           ctx.assumedZone,
           { matchedText: text, kind: 'datetime-no-tz', formatId: 'ymd-slash', formatLabel: 'Year/month/day with time' },
         );
-        return parsed ? { parsed, length: text.length } : null;
+        return parsed ? { parsed, length: text.length } : VETO;
       }),
   },
   {
@@ -322,8 +346,11 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
         if (dateLikeBefore(src, m.index)) return null;
         if (badOffset(zoneTok)) return null;
         const zone = resolveZoneToken(zoneTok);
-        // Need an am/pm marker, a colon, or a real zone; "5" alone is not a time.
-        if (!(ampm || miTok !== undefined || zone)) return null;
+        // Need an am/pm marker, a colon, or a real zone; "5" alone is not a
+        // time. A bare number before a two-letter name ("3 CT scans",
+        // "Apollo 11 MT") is a count, not a time.
+        const strongZone = zone !== null && (zoneTok?.length ?? 0) >= 3;
+        if (!(ampm || miTok !== undefined || strongZone)) return null;
         const hour = to24h(Number(hTok), ampm);
         if (hour === null) return null;
         const text = trimUnresolvedZone(m[0], zoneTok, zone !== null);

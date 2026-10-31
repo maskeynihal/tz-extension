@@ -100,6 +100,7 @@ async function convertInTab(tabId: number, frameId: number, text: string): Promi
   const msg: ConvertSelectionMessage = {
     type: 'tzx/convert-selection',
     text: text.slice(0, MAX_MESSAGE_TEXT),
+    truncated: text.length > MAX_MESSAGE_TEXT,
   };
   if (await trySend(tabId, frameId, msg)) return;
   if ((await inject(tabId, frameId)) && (await sendWithRetry(tabId, frameId, msg))) return;

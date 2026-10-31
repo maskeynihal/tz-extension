@@ -1,6 +1,6 @@
 import type { CustomFormat, DateOnlyPolicy, ParsedTime } from '../types';
 import { BUILTIN_FORMATS } from './builtin-formats';
-import { matchCustomFormat, type Candidate, type MatchContext } from './custom-formats';
+import { isVeto, matchCustomFormat, now, type Candidate, type MatchContext, type MatchResult } from './custom-formats';
 
 /**
  * Only this many characters of a selection are scanned. Built-in and token
@@ -8,6 +8,9 @@ import { matchCustomFormat, type Candidate, type MatchContext } from './custom-f
  * keeping each mouseup to a few milliseconds.
  */
 export const SCAN_LIMIT = 20_000;
+
+/** Time all custom regex formats together may spend on one selection. */
+const CUSTOM_TIME_BUDGET_MS = 60;
 
 /** Options controlling how ambiguous values are interpreted. */
 export interface ParseOptions {
@@ -23,22 +26,24 @@ export interface ParseOptions {
   readonly nowMs?: number;
 }
 
-interface Ranked extends Candidate {
+type Ranked = MatchResult & {
   /** Lower wins a tie: custom formats first, then built-ins in registry order. */
   readonly priority: number;
-}
+};
 
 /**
  * How much a match pins down: a calendar date, a time of day, and an explicit
  * zone each count. An epoch is a full instant.
  */
 function specificity(p: ParsedTime): number {
-  if (p.kind === 'epoch-seconds' || p.kind === 'epoch-millis') return 4;
+  // An epoch is a full instant, but a bare 10-digit run is weaker evidence
+  // than a written timestamp with a zone (it may be a phone or ticket number).
+  if (p.kind === 'epoch-seconds' || p.kind === 'epoch-millis') return 3;
   const hasDate = p.kind !== 'time-of-day' && p.kind !== 'offset' && !p.timeOnly;
   return (hasDate ? 2 : 0) + (p.dateOnly ? 0 : 1) + (p.assumed ? 0 : 1);
 }
 
-function overlaps(a: Candidate, b: Candidate): boolean {
+function overlaps(a: { index: number; length: number }, b: { index: number; length: number }): boolean {
   return a.index < b.index + b.length && b.index < a.index + a.length;
 }
 
@@ -63,6 +68,8 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
     assumedZone: o.assumedZone,
     dateOnlyPolicy: o.dateOnlyPolicy ?? 'midnight',
     nowMs: o.nowMs,
+    // All custom regexes together get this long per selection.
+    deadline: now() + CUSTOM_TIME_BUDGET_MS,
   };
   const disabled = new Set(o.disabledFormats ?? []);
   const ranked: Ranked[] = [];
@@ -73,7 +80,7 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
   });
   BUILTIN_FORMATS.forEach((fmt, i) => {
     if (disabled.has(fmt.id)) return;
-    let found: Candidate[] = [];
+    let found: MatchResult[] = [];
     try {
       found = fmt.match(src, ctx);
     } catch {
@@ -83,10 +90,12 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
   });
 
   ranked.sort((a, b) => b.length - a.length || a.priority - b.priority || a.index - b.index);
-  const chosen: Ranked[] = [];
+  const kept: Ranked[] = [];
   for (const c of ranked) {
-    if (!chosen.some((k) => overlaps(k, c))) chosen.push(c);
+    if (!kept.some((k) => overlaps(k, c))) kept.push(c);
   }
+  // Vetoed spans claimed their text; they produce no result.
+  const chosen = kept.filter((c): c is Candidate & { priority: number } => !isVeto(c));
   // The most specific match leads (it is what the popover shows); the rest
   // follow in document order. "Starts 9:00, deadline 2024-01-02T15:00Z" leads
   // with the timestamp; "Standup 9:00, demo 16:30" leads with 9:00.

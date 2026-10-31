@@ -39,6 +39,12 @@ export function Options(): JSX.Element {
       const i = inFlight.current.findIndex((w) => w.key === key);
       if (i >= 0) {
         inFlight.current.splice(0, i + 1);
+        // Our own write landed last: if something else was shown meanwhile,
+        // storage now holds ours, so show it.
+        if (inFlight.current.length === 0 && key !== prefsKey.current) {
+          prefsKey.current = key;
+          setPrefs(p);
+        }
         return;
       }
       prefsKey.current = key;

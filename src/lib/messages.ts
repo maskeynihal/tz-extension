@@ -8,6 +8,8 @@ export interface ConvertSelectionMessage {
   readonly type: 'tzx/convert-selection';
   /** The selection text the browser reported for the menu click. */
   readonly text: string;
+  /** True when `text` was cut to MAX_MESSAGE_TEXT. */
+  readonly truncated?: boolean;
 }
 
 /** Content -> background: open the settings page (optionally at a section). */
@@ -21,12 +23,17 @@ export interface Ack {
 }
 
 /** Longest selection text we accept over messaging. */
-export const MAX_MESSAGE_TEXT = 5000;
+export const MAX_MESSAGE_TEXT = 20_000;
 
 export function isConvertSelectionMessage(m: unknown): m is ConvertSelectionMessage {
   if (typeof m !== 'object' || m === null) return false;
   const o = m as Record<string, unknown>;
-  return o.type === 'tzx/convert-selection' && typeof o.text === 'string' && o.text.length <= MAX_MESSAGE_TEXT;
+  return (
+    o.type === 'tzx/convert-selection' &&
+    typeof o.text === 'string' &&
+    o.text.length <= MAX_MESSAGE_TEXT &&
+    (o.truncated === undefined || typeof o.truncated === 'boolean')
+  );
 }
 
 export function isOpenOptionsMessage(m: unknown): m is OpenOptionsMessage {

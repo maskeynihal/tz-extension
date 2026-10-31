@@ -80,7 +80,11 @@ describe('background: context menu', () => {
     h.sendMessage.mockResolvedValue({ ok: true });
     h.clicked.forEach((l) => l({ menuItemId: 'tzx-convert-selection', frameId: 0, selectionText: '1700000000' }, { id: 7 }));
     await flush();
-    expect(h.sendMessage).toHaveBeenCalledWith(7, { type: 'tzx/convert-selection', text: '1700000000' }, { frameId: 0 });
+    expect(h.sendMessage).toHaveBeenCalledWith(
+      7,
+      { type: 'tzx/convert-selection', text: '1700000000', truncated: false },
+      { frameId: 0 },
+    );
     expect(h.executeScript).not.toHaveBeenCalled();
   });
 
@@ -121,8 +125,9 @@ describe('background: context menu', () => {
     const long = 'a'.repeat(MAX_MESSAGE_TEXT + 100);
     h.clicked.forEach((l) => l({ menuItemId: 'tzx-convert-selection', frameId: 0, selectionText: long }, { id: 2 }));
     await flush();
-    const sent = h.sendMessage.mock.calls[0]?.[1] as { text: string };
+    const sent = h.sendMessage.mock.calls[0]?.[1] as { text: string; truncated: boolean };
     expect(sent.text.length).toBe(MAX_MESSAGE_TEXT);
+    expect(sent.truncated).toBe(true);
   });
 
   it('opens settings at the formats section when asked', async () => {

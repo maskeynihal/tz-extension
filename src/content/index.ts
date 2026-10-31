@@ -1,6 +1,6 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { createElement } from 'react';
-import { parseTimes } from '../lib/parse';
+import { parseTimes, SCAN_LIMIT } from '../lib/parse';
 import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
 import { resolveTheme } from '../lib/theme';
 import {
@@ -363,8 +363,22 @@ function teardownTransient(): void {
   document.removeEventListener('scroll', onScroll, true);
 }
 
+/**
+ * The selection whose card the user closed. Clicking or Shift-clicking inside
+ * that same selection, or releasing a key, must not bring the card back; a
+ * new or changed selection clears it.
+ */
+let dismissedKey: string | null = null;
+/** Key of the selection the open card was made from. */
+let shownKey: string | null = null;
+
+function selectionKey(text: string, rect: DOMRect): string {
+  return `${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}:${text}`;
+}
+
 /** User-facing dismissal: also clears the live (transient) highlight. */
 function dismissTransient(): void {
+  if (tHost && shownKey) dismissedKey = shownKey;
   clearLiveHighlight();
   teardownTransient();
 }
@@ -375,6 +389,14 @@ function onScroll(): void {
 }
 
 function onDocMouseDown(e: MouseEvent): void {
+  // A fresh (non-Shift) click starts a new selection gesture: selecting the
+  // same text again on purpose should show the card again.
+  if (e.button === 0 && !e.shiftKey) {
+    const inCard =
+      e.target instanceof Node &&
+      ((tHost !== null && tHost.contains(e.target)) || Array.from(pins).some((p) => p.host.contains(e.target as Node)));
+    if (!inCard) dismissedKey = null;
+  }
   // Clicking outside the transient card dismisses it. Pinned cards are ignored
   // (each manages its own close button).
   if (tHost && e.target instanceof Node && !tHost.contains(e.target)) {
@@ -533,11 +555,17 @@ function removePin(pin: Pin): void {
  * explicitly, so an unparseable selection gets a "no time recognized" card
  * instead of silence.
  */
-function showForSelection(rect: DOMRect, text: string, range: Range | null, fromMenu = false): void {
+function showForSelection(
+  rect: DOMRect,
+  text: string,
+  range: Range | null,
+  fromMenu = false,
+  truncated = false,
+): void {
   const matches = parseWithPrefs(text);
   const parsed = matches[0];
   if (!parsed) {
-    if (fromMenu) renderNoMatch(rect, text);
+    if (fromMenu) renderNoMatch(rect, text, truncated || text.length > SCAN_LIMIT);
     else teardownTransient();
     return;
   }
@@ -545,7 +573,7 @@ function showForSelection(rect: DOMRect, text: string, range: Range | null, from
   renderTransient(rect, parsed, matches.length, text);
 }
 
-function renderNoMatch(rect: DOMRect, text: string): void {
+function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
   clearLiveHighlight();
   teardownTransient();
   try {
@@ -562,6 +590,7 @@ function renderNoMatch(rect: DOMRect, text: string): void {
     tRoot.render(
       createElement(NoMatchCard, {
         text,
+        truncated,
         onClose: dismissTransient,
         onDragStart: (e) => startDrag(hostEl, e, true),
         onOpenSettings: () => {
@@ -644,7 +673,16 @@ function handleSelectionChange(): void {
   debounceTimer = window.setTimeout(() => {
     if (!prefs.selectToConvert) return;
     const got = readSelection();
-    if (!got) return;
+    if (!got) {
+      dismissedKey = null;
+      return;
+    }
+    const key = selectionKey(got.text, got.rect);
+    if (key === dismissedKey) return; // the user closed this one
+    // Same selection, card already open: nothing to do.
+    if (tHost && key === shownKey) return;
+    dismissedKey = null;
+    shownKey = key;
     showForSelection(got.rect, got.text, got.range);
   }, DEBOUNCE_MS);
 }
@@ -657,16 +695,20 @@ function fallbackRect(): DOMRect {
 }
 
 /** Right-click menu: convert the current selection, whatever the toggle says. */
-function convertFromMenu(menuText: string): void {
+function convertFromMenu(menuText: string, truncated: boolean): void {
   window.clearTimeout(debounceTimer);
+  // An explicit request always shows a card, even for a dismissed selection.
+  dismissedKey = null;
   const got = readSelection();
   if (got) {
+    shownKey = selectionKey(got.text, got.rect);
     showForSelection(got.rect, got.text, got.range, true);
     return;
   }
   const text = menuText.trim();
   if (text.length === 0) return;
-  showForSelection(fallbackRect(), text, null, true);
+  shownKey = null;
+  showForSelection(fallbackRect(), text, null, true, truncated);
 }
 
 function onMouseUp(e: MouseEvent): void {
@@ -681,15 +723,25 @@ const SELECT_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 
 let keyboardSelecting = false;
 
 function onKeyDownSelect(e: KeyboardEvent): void {
-  if (e.shiftKey && SELECT_KEYS.has(e.key)) keyboardSelecting = true;
-  else if (e.key !== 'Shift') keyboardSelecting = false;
+  if (e.shiftKey && SELECT_KEYS.has(e.key)) {
+    keyboardSelecting = true;
+    return;
+  }
+  // Select all (Cmd/Ctrl+A). Use the physical key so non-Latin layouts work,
+  // and keydown because macOS does not send keyup for keys held with Cmd. The
+  // selection changes after this event, so read it on the next tick.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === 'KeyA') {
+    window.setTimeout(handleSelectionChange, 0);
+    return;
+  }
+  if (e.key !== 'Shift') keyboardSelecting = false;
 }
 
 function onKeyUp(e: KeyboardEvent): void {
   // Shift+Arrow/Home/End, then Shift released (that keyup has shiftKey=false).
-  // A plain Shift press (Shift+Tab, Shift+click) is not a selection.
-  const selectAll = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a';
-  if ((e.key === 'Shift' && keyboardSelecting) || (e.shiftKey && SELECT_KEYS.has(e.key)) || selectAll || e.key === 'Escape') {
+  // A plain Shift press (Shift+Tab, Shift+click) is not a selection, and
+  // Escape closes cards rather than opening them.
+  if ((e.key === 'Shift' && keyboardSelecting) || (e.shiftKey && SELECT_KEYS.has(e.key))) {
     if (e.key === 'Shift') keyboardSelecting = false;
     handleSelectionChange();
   }
@@ -709,7 +761,7 @@ function onRuntimeMessage(
   // would use the default zones and ignore the user's formats.
   void prefsReady
     .then(() => {
-      convertFromMenu(msg.text);
+      convertFromMenu(msg.text, msg.truncated === true);
       sendResponse({ ok: true });
     })
     .catch(() => sendResponse({ ok: false }));

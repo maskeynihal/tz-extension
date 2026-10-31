@@ -1,8 +1,8 @@
 import { useId, useMemo, useState } from 'react';
 import type { CustomFormat, Preferences } from '../types';
 import { BUILTIN_FORMATS } from '../lib/builtin-formats';
-import { compileFormat, matchCustomFormat, TOKEN_REFERENCE, KNOWN_GROUPS } from '../lib/custom-formats';
-import { parseTimes } from '../lib/parse';
+import { compileFormat, layoutMatches, matchCustomFormat, TOKEN_REFERENCE, KNOWN_GROUPS } from '../lib/custom-formats';
+import { parseTimes, SCAN_LIMIT } from '../lib/parse';
 import { MAX_CUSTOM_FORMATS, MAX_LABEL, SYNC_ITEM_LIMIT, newFormatId, syncItemBytes } from '../lib/storage';
 import { toIsoUtc, viewInZone } from '../lib/tz';
 
@@ -68,6 +68,7 @@ function FormatTester({ prefs }: { readonly prefs: Preferences }): JSX.Element {
         id={testId}
         className="tzx-input"
         placeholder="Try some text, e.g. 2024-12-31 10:30 UTC or 1700000000"
+        maxLength={SCAN_LIMIT}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
@@ -193,7 +194,7 @@ function FormatEditor({
       { id: 'preview', label: draft.label || pattern, pattern, advanced: draft.advanced, enabled: true },
       { assumedZone: prefs.homeZone, dateOnlyPolicy: prefs.dateOnlyPolicy },
     );
-    const layoutOnly = !hit && new RegExp(compiled.regex.source).test(draft.sample);
+    const layoutOnly = !hit && layoutMatches(draft.sample, { pattern, advanced: draft.advanced });
     preview = hit ? (
       <span className="tzx-good">
         Matches <code>{hit.parsed.matchedText}</code> → {describeInstant(hit.parsed.epochMs, prefs)}
@@ -294,6 +295,7 @@ function FormatEditor({
         id={`${ids}-sample`}
         className="tzx-input"
         placeholder="Paste an example from a page, e.g. 31/12/2024 10:30"
+        maxLength={2000}
         value={draft.sample}
         onChange={(e) => setDraft({ ...draft, sample: e.target.value })}
       />
@@ -336,8 +338,9 @@ function FormatEditor({
             (<code>mo</code> or <code>moName</code>) and a day (<code>d</code>), or an hour (<code>h</code>) for a
             time-of-day format. Year is optional (defaults to this year). To keep pages responsive, a regex may not
             repeat a group that itself repeats or branches (<code>(a+)+</code>, <code>(a|b)+</code>), may use only a
-            couple of open-ended repeats (<code>+</code>, <code>*</code>; prefer <code>\d{'{1,4}'}</code>), matches
-            at most 80 characters, and scans the first 500 characters of a selection.
+            couple of open-ended repeats (<code>+</code>, <code>*</code>; prefer <code>\d{'{1,4}'}</code>), may not use
+            backreferences, can look behind at most 32 characters, matches at most 80 characters, and scans the first
+            500 characters of a selection. A regex that runs too long on a selection is stopped early.
           </p>
         ) : (
           <table className="tzx-ref-table">
