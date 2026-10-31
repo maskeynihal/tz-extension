@@ -58,7 +58,7 @@ Expected differences: the build embeds the git commit and build time as display 
 Tools: Vite 5.4.11, @crxjs/vite-plugin 2, esbuild 0.21.5 (minifier), TypeScript 5.6.3, @vitejs/plugin-react 4.3.3. No build step fetches remote code; all dependencies are pinned in package-lock.json.
 
 NOTES
-No account or login is needed. Select any date/time text on a page, or open the toolbar popup, to convert. Only permission: storage. No network requests. The "innerHTML" validation warnings come from the bundled react-dom library; our source has no innerHTML, outerHTML, insertAdjacentHTML, dangerouslySetInnerHTML or document.write.`;
+No account or login is needed. Select any date/time text on a page, right-click a selection and choose "Convert ... with TZ Converter", or open the toolbar popup, to convert. Permissions: storage (preferences), contextMenus (the right-click item), activeTab + scripting (after that menu click, inject the add-on's own packaged content script into the current tab when it is not already running there). No network requests. The "innerHTML" validation warnings come from the bundled react-dom library; our source has no innerHTML, outerHTML, insertAdjacentHTML, dangerouslySetInnerHTML or document.write.`;
 }
 
 function usage(msg) {

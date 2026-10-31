@@ -25,8 +25,22 @@ https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/demo-real.mp4
 1. **Select to convert.** Select any text on a page. If it parses as a date/time, a small popover appears next to your selection showing that time in your chosen timezones. Renders in an isolated Shadow DOM, clamps to the viewport, and stays silent when the selection is not a time.
 2. **Full converter.** The toolbar popup takes a date + source timezone and shows it in any number of target zones. "Now" button, 12/24-hour toggle, DST-correct, inline validation.
 3. **Epoch converter.** Paste a Unix timestamp (seconds or milliseconds — auto-detected, overridable) to see it in your zones plus ISO-8601 UTC. Reverse direction too: a date back to an epoch.
+4. **Right-click to convert.** Select text, right-click, and choose **Convert “…” with TZ Converter**. Works even when automatic select-to-convert is off, and says so when the selection holds no time it recognizes.
+5. **Formats you control.** The settings page lists every built-in format (with its regular expression) and lets you switch any of them off. Add your own formats with tokens such as `DD/MM/YYYY HH:mm`, `MMM D, YYYY h:mm A` or `DD.MM.YYYY [um] HH:mm`, or with a raw regex using named groups. A live tester shows which format matches a piece of text.
 
-Zones are managed on the options page (add, reorder, remove) and persisted via `chrome.storage`.
+Settings also cover: home zone, target zones (add, reorder, remove), 12/24-hour clock, theme, the date-only time policy, keeping the selection highlighted, and **Convert when I select text** (turn it off to convert only from the right-click menu). Everything is persisted via `chrome.storage`.
+
+### Custom format tokens
+
+| Token | Meaning | Token | Meaning |
+|---|---|---|---|
+| `YYYY` / `YY` | 4- / 2-digit year | `HH` / `H` | hour 00-23 / 0-23 |
+| `MM` / `M` | month 01-12 / 1-12 | `hh` / `h` | hour 01-12 / 1-12 (needs `A`) |
+| `MMMM` / `MMM` | month name / short name | `mm`, `ss`, `SSS` | minutes, seconds, milliseconds |
+| `DD` / `D` / `Do` | day 01-31 / 1-31 / 5th | `A` | AM/PM, any case, `a.m.` too |
+| `TZ` | `UTC`, `EST`, `+05:45`, `GMT+1` | `[text]` | literal text, e.g. `[at]` |
+
+A format needs a month and a day, or just a time (it then means today). The year is optional (defaults to this year). When formats overlap, the longest match wins; on a tie, custom formats beat built-ins. Raw regexes must use the groups `y yy mo moName d h mi s ms ap zone`, may not repeat a repeating group such as `(a+)+`, and only scan the first 500 characters of a selection.
 
 ## Install
 
@@ -95,17 +109,23 @@ npm run e2e          # playwright smoke test
 
 ## Permissions
 
-Only `storage` — for saving your zone list. No `host_permissions`. The content script runs at `document_idle` on all pages purely to read your text selection; nothing leaves the browser.
+- `storage`: saves your settings.
+- `contextMenus`: the right-click **Convert “…”** item.
+- `activeTab` + `scripting`: if you use that item in a tab where the content script is not running yet (opened before install or update, or a Firefox site you have not granted access to), it is injected into that tab after your click.
+
+No `host_permissions`. The content script runs at `document_idle` on all pages purely to read your text selection; nothing leaves the browser.
 
 ## Project layout
 
 ```
 src/
-  background/   MV3 service worker (seeds default prefs on install)
+  background/   MV3 service worker (seeds prefs, right-click menu, on-demand injection)
   content/      select-to-convert popover (Shadow DOM)
   popup/        converter + epoch tabs
-  options/      manage saved zones
-  lib/          parse.ts, tz.ts, epoch.ts, storage.ts (the tested core)
+  options/      settings: zones, preferences, formats (Formats.tsx)
+  lib/          parse.ts (orchestrates matching), builtin-formats.ts (format
+                registry), custom-formats.ts (token/regex compiler),
+                time-tokens.ts, tz.ts, epoch.ts, storage.ts, messages.ts
   types/        shared types
 scripts/
   firefox-manifest.mjs   rewrites the manifest to Firefox MV3 shape

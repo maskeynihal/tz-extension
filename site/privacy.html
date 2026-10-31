@@ -74,7 +74,8 @@
         <li>12- or 24-hour clock preference</li>
         <li>Theme (System / Light / Dark)</li>
         <li>How to treat a date with no time</li>
-        <li>Any custom date formats you add</li>
+        <li>Any custom date formats you add, and which built-in formats you switched off</li>
+        <li>Whether the converter opens automatically when you select text</li>
       </ul>
       <p>
         This data lives only in your browser. If you have browser sync enabled,
@@ -89,10 +90,23 @@
           <code>storage</code> — to remember the preferences listed above, locally.
         </li>
         <li>
+          <code>contextMenus</code> — adds the right-click item
+          <strong>Convert “…” with TZ Converter</strong> for selected text.
+        </li>
+        <li>
+          <code>activeTab</code> and <code>scripting</code> — when you click that
+          item in a tab where the extension is not running yet (for example a tab
+          opened before you installed or updated it), the extension loads its
+          converter into that one tab. This only happens after your click, only
+          in that tab.
+        </li>
+        <li>
           <strong>Access to web pages</strong> — the "select to convert" feature
           needs to run on the page you are reading so it can read the text you
           select and show a popover. It reads only your active selection to parse
-          a time; it does not read, collect, or send page content.
+          a time; it does not read, collect, or send page content. You can turn
+          automatic select-to-convert off in Settings and use only the
+          right-click item.
         </li>
       </ul>
 

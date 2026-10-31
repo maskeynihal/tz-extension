@@ -37,17 +37,20 @@ in every timezone you care about. No tab-switching, no mental arithmetic.
 
 FEATURES
 • Select-to-convert — highlight a time, see it in your zones right there.
+• Right-click any selection → "Convert with TZ Converter". Prefer no automatic
+  popups? Turn select-to-convert off and use only the menu.
 • Pin cards to the page, each with its own colored highlight on the matched text.
 • Toolbar popup converter — pick a source zone and time, read the rest.
 • Epoch converter — Unix seconds/milliseconds to readable dates and back.
-• Custom formats — teach it the date layouts your sites use.
+• Every recognized format listed in Settings — switch off any that misfire.
+• Custom formats — teach it the date layouts your sites use, with a live tester.
 • Light / Dark / System theme, with a quick toggle in the popup.
 • 12- or 24-hour clock, your home zone, and your target zones — all configurable.
 
 PRIVATE BY DESIGN
 Everything runs locally in your browser. The extension makes no network
-requests, collects no data, and sends nothing off your device. Its only
-permission is local storage, used to remember your preferences.
+requests, collects no data, and sends nothing off your device. It stores your
+preferences locally and adds one right-click menu item.
 
 Free and open source: https://github.com/maskeynihal/tz-extension
 ```
@@ -73,6 +76,34 @@ timezone, target timezones, 12/24-hour clock, theme, date-handling policy, and
 any custom date formats. This data stays on the user's device and syncs only
 through the browser's own account sync. No preference data is sent to us or any
 third party.
+```
+
+### Permission justification — contextMenus
+
+```
+Adds one right-click menu item, "Convert “<selection>” with TZ Converter", shown
+only when text is selected. Clicking it converts the selected date or time into
+the user's timezones in a small popover on the page. This lets users who turn off
+automatic select-to-convert still convert on demand.
+```
+
+### Permission justification — activeTab
+
+```
+Used only when the user clicks the extension's right-click menu item in a tab
+where the content script is not running yet (for example a tab that was open
+before the extension was installed or updated). The click grants temporary
+access to that one tab so the converter can be shown there. No other tabs are
+accessed and nothing is read beyond the user's selection.
+```
+
+### Permission justification — scripting
+
+```
+Together with activeTab, used to load the extension's own bundled content script
+into the current tab after the user clicks the right-click "Convert" item, when
+that tab does not have it yet. Only files packaged in the extension are injected;
+no remote code, no arbitrary code strings.
 ```
 
 ### Permission justification — host permissions (content script on all sites)
@@ -112,9 +143,11 @@ no network requests of any kind.
 ### Why Chrome flags "remote code" here
 
 It is a conservative flag triggered by the content script matching `<all_urls>`,
-not by any actual remote code. The manifest declares only `permissions:
-["storage"]`, an empty `host_permissions`, no custom CSP, and no `eval` — so the
-honest answer is that no remote code is used.
+not by any actual remote code. The manifest declares `permissions:
+["storage", "contextMenus", "activeTab", "scripting"]`, an empty
+`host_permissions`, no custom CSP, and no `eval`. `scripting` only injects the
+extension's own packaged content-script file, so the honest answer is that no
+remote code is used.
 
 ## Version notes (0.5.0)
 
