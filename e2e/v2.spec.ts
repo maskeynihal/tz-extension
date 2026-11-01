@@ -1483,6 +1483,56 @@ test.describe('v2 features', () => {
     await page.close();
   });
 
+  // --- Round 9 ---------------------------------------------------------------
+
+  // An app shell (Gmail, Slack, Jira): the window cannot scroll, an inner pane does.
+  const SHELL_LINES = [
+    'Standup 09:00 UTC, review 13:30 UTC, deploy 2024-04-02 18:00 UTC',
+    '03/04/2024 10:00 and 05/06/2024 11:00',
+    'Release 2024-05-10 08:00 PST',
+    'Window 2024-06-01 12:00 UTC to 2024-06-01 14:00 UTC',
+    'Cutover 2024-07-04T23:00:00Z',
+  ];
+  for (const width of [390, 1280]) {
+    test(`round 9: on an app-shell page at ${width} px, pins stay on screen and the page never scrolls`, async () => {
+      await setPrefs({ homeZone: 'UTC', targetZones: ['UTC', 'Asia/Kathmandu', 'America/New_York'], cardSize: 'full', keepSelection: true, numericDateOrder: 'mdy' });
+      const page = await openPage(
+        '<style>html, body { margin: 0 !important; height: 100% !important; } body { overflow: hidden !important; display: flex; flex-direction: column; padding: 0 !important; }' +
+          'header { flex: none; height: 48px; background: #ddd; } main { flex: 1; overflow: auto; padding: 8px 20px; font-size: 16px; }' +
+          'main p { margin: 0; height: 40px; line-height: 20px; }</style>' +
+          '<header id="bar">Toolbar</header><main id="pane">' +
+          [...SHELL_LINES, ...SHELL_LINES.map((t) => `Later: ${t}`)].map((t, i) => `<p id="l${i}">${t}</p>`).join('') +
+          '<p>filler</p>'.repeat(40) +
+          '</main>',
+      );
+      await page.setViewportSize({ width, height: 800 });
+      // Ten pins: more than fit on screen without overlapping at either width.
+      for (let i = 0; i < 10; i++) {
+        const before = await page.locator('.tz-extension-pin-host').count();
+        await selectAll(page, `l${i}`);
+        await expect(card(page)).toBeVisible({ timeout: 5000 });
+        await card(page).getByRole('button', { name: 'Pin to page' }).click();
+        await expect(page.locator('.tz-extension-pin-host')).toHaveCount(before + 1);
+        // The window never scrolls, and the app's toolbar stays at the top.
+        expect(await page.evaluate(() => [window.scrollX, window.scrollY])).toEqual([0, 0]);
+        expect((await page.locator('#bar').boundingBox())?.y).toBe(0);
+        // Every pin is wholly on screen, where the user can reach it.
+        const boxes = await page.evaluate(() =>
+          Array.from(document.querySelectorAll('.tz-extension-pin-host')).map((h) => h.getBoundingClientRect().toJSON()),
+        );
+        for (const b of boxes as Array<{ top: number; left: number; bottom: number; right: number }>) {
+          expect(b.top, JSON.stringify(boxes)).toBeGreaterThanOrEqual(0);
+          expect(b.bottom, JSON.stringify(boxes)).toBeLessThanOrEqual(800);
+          expect(b.left, JSON.stringify(boxes)).toBeGreaterThanOrEqual(0);
+          expect(b.right, JSON.stringify(boxes)).toBeLessThanOrEqual(width);
+        }
+        // Close the card if one is still open, so the next selection starts clean.
+        await page.keyboard.press('Escape');
+      }
+      await page.close();
+    });
+  }
+
   test('round 8: "Pin all to page" after scrolling to y 2000 puts each card back by its own text', async () => {
     await setPrefs({ homeZone: 'UTC', targetZones: ['UTC', 'Asia/Kathmandu', 'America/New_York'], cardSize: 'full', keepSelection: true, numericDateOrder: 'mdy' });
     // The review's page (pins8.spec.ts): three lines 120 px apart near the top.

@@ -652,10 +652,10 @@ function placedText(el: Element | null, cache: SeenCache): Placed {
   let got: Placed = null;
   try {
     const cs = getComputedStyle(el);
-    if (!scrolls(cs)) {
-      const here: Placed = cs.position === 'fixed' ? 'fixed' : cs.position === 'absolute' ? 'absolute' : null;
-      got = morePlaced(here, placedText(el.parentElement, cache));
-    }
+    const here: Placed = cs.position === 'fixed' ? 'fixed' : cs.position === 'absolute' ? 'absolute' : null;
+    // A scroll container's own position still counts (an off-left wrapper
+    // with overflow: hidden); the walk just goes no higher than it.
+    got = scrolls(cs) ? here : morePlaced(here, placedText(el.parentElement, cache));
   } catch {
     got = null;
   }
@@ -757,7 +757,12 @@ function offPage(b: Box, placed: Exclude<Placed, null>, cache: SeenCache): boole
   if (b.bottom + sy <= 0) return true;
   if (!pageRtl(cache)) return b.right + sx <= 0;
   const edge = placed === 'fixed' ? window.innerWidth : document.documentElement.clientWidth || window.innerWidth;
-  return b.left + sx >= edge;
+  if (b.left + sx >= edge) return true;
+  // The left of a right-to-left page can be scrolled to, but positioned text
+  // far out there is the `left: -9999px` pattern many sites use whatever the
+  // direction (it widens the page to reach it). Real content sits within a
+  // couple of screens.
+  return b.right + sx <= -2 * edge;
 }
 
 /**
@@ -2049,7 +2054,13 @@ function pinSpot(pin: Pin, others: Iterable<Pin>, fallback: PagePoint): PagePoin
   }
   spots.sort((a, b) => a.d - b.d);
 
-  for (const shownOnly of textAway ? [false] : [true, false]) {
+  // A page whose window cannot scroll (an app shell: body or html with
+  // overflow hidden and an inner pane that scrolls) has no "further down":
+  // a card placed below the screen could never be reached, and would grow
+  // the hidden page. There, only spots on screen count.
+  const canScroll = windowScrollsY();
+  const passes = !canScroll ? [true] : textAway ? [false] : [true, false];
+  for (const shownOnly of passes) {
     const ok = (x: number, y: number): boolean => free(x, y) && (!shownOnly || whollyShown(x, y));
     if (ok(below.x, below.y)) return below;
     if (right && roomRight && ok(right.x, right.y)) return right;
@@ -2064,7 +2075,29 @@ function pinSpot(pin: Pin, others: Iterable<Pin>, fallback: PagePoint): PagePoin
     if (hit.length === 0) break;
     y = Math.max(...hit.map((b) => b.bottom)) + MARGIN;
   }
+  // On a page that cannot scroll, stay on screen even if that overlaps.
+  if (!canScroll) y = Math.max(sy + MARGIN, Math.min(y, sy + vh - h - MARGIN));
   return { x: below.x, y };
+}
+
+/**
+ * True when the window can scroll down. The viewport takes the root's
+ * `overflow`, or the body's when the root's is `visible`; `hidden` or
+ * `clip` there means the user cannot scroll the page (app-shell layouts),
+ * even though a script still could.
+ */
+function windowScrollsY(): boolean {
+  try {
+    const y = (el: Element): string => {
+      const cs = getComputedStyle(el);
+      return cs.overflowY || cs.overflow || 'visible';
+    };
+    const root = y(document.documentElement);
+    const used = root === 'visible' && document.body ? y(document.body) : root;
+    return !/^(hidden|clip)\b/.test(used);
+  } catch {
+    return true;
+  }
 }
 
 /** Put a pinned card at the spot pinSpot gives, among every other card. */
@@ -2085,6 +2118,9 @@ function movePin(pin: Pin, at: PagePoint): void {
  * placed it. The scroll is ours: it dismisses nothing (see onScroll).
  */
 function bringPinIntoView(pin: Pin): void {
+  // Never scroll a window the user cannot scroll back (see windowScrollsY):
+  // the whole app would move up and stay there.
+  if (!windowScrollsY()) return;
   const r = pin.host.getBoundingClientRect();
   if (!r.width && !r.height) return;
   const inView = r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth;
