@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, fireEvent, waitFor, within } from '@testing-library/react';
 import { ClockApp } from '../src/clock/Clock';
 import { zoneDescription, zonePlace } from '../src/clock/model';
-import { matchKey, readingOrder } from '../site/convert';
+import { matchKey } from '../site/convert';
 import { DEFAULT_PREFERENCES, type ParsedTime, type Preferences } from '../src/types';
 
 const KEY = 'tz-extension-prefs';
@@ -17,31 +17,11 @@ function fake(matchedText: string, sourceIndex?: number): ParsedTime {
   } as unknown as ParsedTime;
 }
 
-describe('readingOrder (QA r5 N8)', () => {
-  it('sorts best-first results by sourceIndex and reports where the best one went', () => {
-    const best = fake('2024-07-01T09:00Z', 15);
-    const r = readingOrder([best, fake('1700000000', 0), fake('10:00', 40)], 'x');
-    expect(r.times.map((p) => p.matchedText)).toEqual(['1700000000', '2024-07-01T09:00Z', '10:00']);
-    expect(r.best).toBe(1);
-    expect(r.times[r.best]).toBe(best);
-  });
-
-  it('keeps best-first order on ties', () => {
-    const a = fake('10:00 UTC', 3);
-    const b = fake('10:00', 3);
-    expect(readingOrder([a, b], 'x').times).toEqual([a, b]);
-    expect(readingOrder([b, a], 'x').times).toEqual([b, a]);
-  });
-
-  it('falls back to where the text occurs when sourceIndex is missing', () => {
-    const text = '1700000000 and 2024-07-01T09:00Z';
-    const r = readingOrder([fake('2024-07-01T09:00Z'), fake('1700000000')], text);
-    expect(r.times.map((p) => p.matchedText)).toEqual(['1700000000', '2024-07-01T09:00Z']);
-    expect(r.best).toBe(1);
-  });
-
-  it('is empty for no matches, and the key tells repeated text apart by position', () => {
-    expect(readingOrder([], '')).toEqual({ times: [], best: 0 });
+// readingOrder was replaced by src/lib/read-times.ts (round 6, QA F2); its
+// reading-order and best-match cases now live in tests/read-times.test.ts and
+// tests/ui-r6.test.tsx. The step key is still the website's.
+describe('matchKey (QA r5 N8)', () => {
+  it('tells repeated text apart by position', () => {
     expect(matchKey(fake('10:00', 0))).not.toBe(matchKey(fake('10:00', 9)));
   });
 });

@@ -137,7 +137,7 @@ describe('book numbers, chapter ranges and hours of 13 or more (review #4)', () 
     '2 Peter 1:16-2:10',
     '2 Peter 1:17-1:45',
     'Matthew 5:17-7:12',
-    '1 John 09:41',
+    // ("1 John 09:41" is a time since round 6: there is no chapter 09. See parser-r6.)
     'chapter John 3:31-4:30',
     // hour ≥ 13 after a citation verb
     'See John 15:13',

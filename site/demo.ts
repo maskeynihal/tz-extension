@@ -8,7 +8,8 @@
 // survive reloads.
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { parseTimes, type ParseOptions } from '../src/lib/parse';
+import type { ParseOptions } from '../src/lib/parse';
+import { readTimes, type TimeList } from '../src/lib/read-times';
 import { isValidZone, sameZone, toIsoUtc, viewInZone, zoneLabel, resolveZone } from '../src/lib/tz';
 import {
   loadPreferences,
@@ -18,7 +19,7 @@ import {
 } from '../src/lib/storage';
 import { ZonePicker } from '../src/popup/ZonePicker';
 import { readingLabel } from './reading';
-import { EPOCH_INPUT_HINT, matchKey, readEpochInput, readingOrder, wallClockNote } from './convert';
+import { EPOCH_INPUT_HINT, matchKey, readEpochInput, wallClockNote } from './convert';
 import {
   DEFAULT_PREFERENCES,
   type NumericDateOrder,
@@ -107,6 +108,12 @@ function mountDemo(): void {
   let stepText: string | null = null;
   let shown: readonly ParsedTime[] = [];
   let shownIndex = 0;
+  // True when readTimes could not list every time (count or length cap): the
+  // count reads "1 of N+", like the extension card.
+  let shownCapped = false;
+  // The last readTimes result, for this input text and settings object (every
+  // settings change replaces `prefs`, so identity is enough).
+  let listCache: { raw: string; prefs: Preferences; list: TimeList } | null = null;
   function step(delta: number): void {
     const n = shown.length;
     if (n < 2) return;
@@ -125,7 +132,7 @@ function mountDemo(): void {
   function renderStepper(): void {
     const n = shown.length;
     stepper.hidden = n < 2;
-    stepCount.replaceChildren(h('span', { class: 'demo-sr' }, ['Time ']), `${shownIndex + 1} of ${n}`);
+    stepCount.replaceChildren(h('span', { class: 'demo-sr' }, ['Time ']), `${shownIndex + 1} of ${n}${shownCapped ? '+' : ''}`);
   }
   prevBtn.addEventListener('click', () => step(-1));
   nextBtn.addEventListener('click', () => step(1));
@@ -223,6 +230,7 @@ function mountDemo(): void {
     orderBox.hidden = true;
     shown = [];
     shownIndex = 0;
+    shownCapped = false;
     renderStepper();
     const raw = input.value.trim();
     if (!raw) {
@@ -254,8 +262,16 @@ function mountDemo(): void {
       renderPicker();
       return;
     }
-    const { times, best } = readingOrder(parseTimes(raw, opts), raw);
+    // Every time in the input, in reading order, opening on the parser's best
+    // match: the same list the extension card steps through.
+    // A step re-renders with the same input and settings: reuse the list
+    // rather than reading up to 200k characters again on every click.
+    if (!listCache || listCache.raw !== raw || listCache.prefs !== prefs) {
+      listCache = { raw, prefs, list: readTimes(raw, opts) };
+    }
+    const { matches: times, best, capped } = listCache.list;
     shown = times;
+    shownCapped = capped;
     shownIndex = chooseStep(raw, times, best);
     const parsed = times[shownIndex];
     stepText = raw;

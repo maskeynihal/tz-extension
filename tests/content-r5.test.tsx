@@ -313,7 +313,9 @@ describe('content script, round 5', () => {
       if (top - scrolled > 700 - 20) scrolled = top + 20 - 700;
     });
     (Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = scrollIntoView;
-    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(((o: ScrollToOptions) => {
+      scrolled += o.top ?? 0;
+    }) as typeof window.scrollBy);
     await load();
     await selectWithMouse('list');
     const host = transientHost() as HTMLElement;
@@ -332,12 +334,14 @@ describe('content script, round 5', () => {
     document.dispatchEvent(new Event('scroll'));
     expect(transientHost()).toBe(host);
     // The time is on screen now, and the card sits next to it (above: no room below).
+    // Round 6 (QA F7): not flush on the edge; 48 px (REVEAL_MARGIN) clear of it.
     const box = marked()?.getBoundingClientRect() as DOMRect;
-    expect(box.top).toBe(680);
+    expect(scrollBy).toHaveBeenCalledWith({ top: 48, behavior: 'instant' });
+    expect(box.top).toBe(680 - 48);
+    expect(box.bottom).toBe(700 - 48);
     const top = parseFloat(host.style.getPropertyValue('top'));
     expect(host.style.getPropertyValue('top')).not.toBe(before);
-    expect(top).toBe(680 - 8 - 200);
-    expect(scrollBy).not.toHaveBeenCalled();
+    expect(top).toBe(680 - 48 - 8 - 200);
     // A user's scroll later still closes it.
     await sleep(300);
     document.dispatchEvent(new Event('scroll'));
@@ -390,16 +394,17 @@ describe('mapping the selection string to the page', () => {
 });
 
 describe('listing every time (QA N2)', () => {
+  // Round 6: the content script uses readTimes from src/lib/read-times.ts
+  // (its own copy, with a time budget, is gone); these call that one.
   it('lists 60 times past the parser cap of 25 per format, in reading order, fast', async () => {
-    await load();
-    const { readTimes } = await import('../src/content/index');
+    const { readTimes } = await import('../src/lib/read-times');
     const text = Array.from(
       { length: 60 },
       (_, i) => `Item ${i} at 2024-05-${String(1 + (i % 28)).padStart(2, '0')} ${String(i % 24).padStart(2, '0')}:15 UTC`,
     ).join('\n');
     expect(parseTimes(text, 'UTC')).toHaveLength(25);
     const t0 = performance.now();
-    const r = readTimes(text);
+    const r = readTimes(text, { assumedZone: 'UTC' });
     const ms = performance.now() - t0;
     expect(r.matches).toHaveLength(60);
     expect(r.capped).toBe(false);
@@ -408,22 +413,6 @@ describe('listing every time (QA N2)', () => {
       expect(p.matchedText).toBe(`2024-05-${String(1 + (i % 28)).padStart(2, '0')} ${String(i % 24).padStart(2, '0')}:15 UTC`);
       expect(text.slice(p.sourceIndex, (p.sourceIndex as number) + p.matchedText.length)).toBe(p.matchedText);
     });
-  });
-
-  it('says when it stops listing', async () => {
-    await load();
-    const { readTimes, MAX_LISTED, PARSER_FORMAT_CAP } = await import('../src/content/index');
-    // A parser that always finds 25 one-character times at the start.
-    const parse = (t: string): ParsedTime[] =>
-      Array.from({ length: Math.min(PARSER_FORMAT_CAP, t.length) }, (_, i) => ({
-        epochMs: t.length * 1000 + i,
-        matchedText: t[i] as string,
-        sourceIndex: i,
-        formatId: 'x',
-      }) as unknown as ParsedTime);
-    const r = readTimes('x'.repeat(19_000), parse);
-    expect(r.matches).toHaveLength(MAX_LISTED);
-    expect(r.capped).toBe(true);
   });
 });
 

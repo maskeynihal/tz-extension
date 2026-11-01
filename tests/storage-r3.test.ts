@@ -373,18 +373,23 @@ describe('previous write id (round 4)', () => {
     expect((await stored()).legacy.pw).toBe(w1);
   });
 
-  it('a legacy item with a different pw but pt >= extras t (writes in a row, the middle extras lost) merges', () => {
+  it('a legacy item with a different pw but pt >= extras t (writes in a row, the middle extras lost) merges', async () => {
     // Round 5 (review #1): this used to read extras whole and bring Tokyo
-    // back. B wrote twice after A; the peer has B's second legacy item and
-    // A's extras. B's pt (its first write's t) is above A's t, so legacy follows.
-    const a = toSyncItems(START);
-    const b1 = toSyncItems({ ...START, targetZones: NO_TOKYO });
-    const b2 = toSyncItems({ ...START, targetZones: [...NO_TOKYO, 'America/New_York'] });
+    // back. B read A, then wrote twice; the peer has B's second legacy item
+    // and A's extras. B's pt is A's t (round 6: pt comes only from reads),
+    // so legacy follows.
+    const A = await device();
+    const B = await device();
+    await A.savePreferences(START);
+    const a = await stored();
+    await B.loadPreferences();
+    const b1 = B.toSyncItems({ ...START, targetZones: NO_TOKYO });
+    const b2 = B.toSyncItems({ ...START, targetZones: [...NO_TOKYO, 'America/New_York'] });
     const legacy = b2[PREFS_KEY] as Item;
-    expect(legacy.pw).not.toBe((a[PREFS_EXTRAS_KEY] as Item).w);
+    expect(legacy.pw).not.toBe(a.extras?.w);
     expect(legacy.pw).toBe((b1[PREFS_EXTRAS_KEY] as Item).w);
-    expect(legacy.pt).toBe((b1[PREFS_EXTRAS_KEY] as Item).t);
-    expect(fromSyncItems({ [PREFS_KEY]: legacy, [PREFS_EXTRAS_KEY]: a[PREFS_EXTRAS_KEY] }).targetZones).toEqual([
+    expect(legacy.pt).toBe(a.extras?.t);
+    expect(fromSyncItems({ [PREFS_KEY]: legacy, [PREFS_EXTRAS_KEY]: a.extras }).targetZones).toEqual([
       ...NO_TOKYO,
       'America/New_York',
     ]);
@@ -422,7 +427,9 @@ describe('previous write time (round 5)', () => {
     await B.savePreferences({ ...KTM, targetZones: KTM_NO_TOKYO, hour12: true }); // then toggle 12h
     const { legacy } = await stored();
     expect(legacy.pw).toBe(b1?.w);
-    expect(legacy.pt).toBe(b1?.t);
+    // Round 6: pt is the t of the extras B read (A's), not B's own first write.
+    expect(legacy.pt).toBe(extrasA?.t);
+    expect(legacy.pt).not.toBe(b1?.t);
     // The peer has B's newest legacy item, the extras still A's.
     await sync().set({ [PREFS_EXTRAS_KEY]: extrasA });
     const p = await P.loadPreferences();
@@ -465,13 +472,101 @@ describe('previous write time (round 5)', () => {
     expect((await P.loadPreferences()).targetZones).toEqual(bList);
   });
 
-  it('pt is restored after a failed save', async () => {
+  it('pw is restored after a failed save, and pt stays the read extras t', async () => {
+    // Round 6: pt no longer comes from A's own writes, so A first reads C's.
+    const C = await device();
+    await C.savePreferences(KTM);
+    const read = (await stored()).extras;
     const A = await device();
+    await A.loadPreferences();
     await A.savePreferences(KTM);
     const first = (await stored()).extras;
     vi.mocked(sync().set).mockRejectedValueOnce(new Error('network'));
     expect((await A.savePreferences({ ...KTM, theme: 'light' })).ok).toBe(false);
     await A.savePreferences({ ...KTM, theme: 'dark' });
-    expect((await stored()).legacy).toMatchObject({ pw: first?.w, pt: first?.t });
+    expect((await stored()).legacy).toMatchObject({ pw: first?.w, pt: read?.t });
+  });
+});
+
+/*
+ * Round 6 (review #1): `pt` comes only from extras read from storage that
+ * another context wrote, never from this context's own writes or their
+ * onChanged echo. As sync-sim6.mjs ("halves, no skew").
+ */
+describe('pt from reads only (round 6)', () => {
+  type Storage = typeof import('../src/lib/storage');
+  const device = async (): Promise<Storage> => {
+    vi.resetModules();
+    return import('../src/lib/storage');
+  };
+  const A1_LIST = ['Europe/London', 'abbr:IST-IE', 'UTC+05:45', 'Asia/Tokyo', 'Asia/Kolkata', 'abbr:CET'];
+  const B_LIST = ['UTC+05:45', 'Asia/Tokyo', 'America/New_York'];
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 3));
+
+  it("halves: A writes A1 offline, B (saw only A0) saves twice; legacy B2 + extras A1 reads A1's list whole", async () => {
+    const A = await device();
+    const B = await device();
+    const P = await device();
+    await A.savePreferences(START);
+    const a0 = await stored();
+    await B.loadPreferences();
+    await tick();
+    await A.savePreferences({ ...START, targetZones: A1_LIST });
+    const extrasA1 = (await stored()).extras;
+    await tick();
+    // B's store still holds A0 (A1 has not reached it).
+    await sync().set({ [PREFS_KEY]: a0.legacy, [PREFS_EXTRAS_KEY]: a0.extras });
+    await B.savePreferences({ ...START, targetZones: B_LIST, theme: 'dark' });
+    await B.savePreferences({ ...START, targetZones: B_LIST });
+    const legacyB2 = (await stored()).legacy;
+    // B's pt is A0's t, below A1's: B did not follow A1.
+    expect(legacyB2.pt).toBe(a0.extras?.t);
+    expect(legacyB2.pt as number).toBeLessThan(extrasA1?.t as number);
+    expect(legacyB2.t as number).toBeGreaterThan(extrasA1?.t as number);
+    // A1's extras reached the server last.
+    await sync().set({ [PREFS_EXTRAS_KEY]: extrasA1 });
+    const p = await P.loadPreferences();
+    expect(p.targetZones).toEqual(A1_LIST);
+    expect(p.homeZone).toBe('abbr:PT');
+  });
+
+  it('a context that only ever wrote has pw but no pt', async () => {
+    const A = await device();
+    await A.savePreferences(START);
+    await A.savePreferences({ ...START, theme: 'dark' });
+    await A.loadPreferences(); // reads back its own write
+    await A.savePreferences(START);
+    const { legacy } = await stored();
+    expect(typeof legacy.pw).toBe('string');
+    expect(legacy).not.toHaveProperty('pt');
+  });
+
+  it("the onChanged echo of the context's own write does not set pt; another context's change does", async () => {
+    const C = await device();
+    await C.savePreferences(START);
+    const read = (await stored()).extras;
+    const A = await device();
+    await A.loadPreferences();
+    const on = (globalThis as unknown as { chrome: { storage: { onChanged: { addListener: ReturnType<typeof vi.fn> } } } })
+      .chrome.storage.onChanged.addListener;
+    A.onPreferencesChanged(() => {});
+    const listener = on.mock.calls.at(-1)?.[0] as (c: Record<string, { newValue: unknown }>, area: string) => void;
+    const fire = (s: { legacy: Item; extras: Item | undefined }): void =>
+      listener({ [PREFS_KEY]: { newValue: s.legacy }, [PREFS_EXTRAS_KEY]: { newValue: s.extras } }, 'sync');
+
+    await A.savePreferences({ ...START, theme: 'dark' });
+    const own = await stored();
+    fire(own); // the echo of A's own write
+    await A.savePreferences({ ...START, theme: 'light' });
+    expect((await stored()).legacy).toMatchObject({ pw: own.extras?.w, pt: read?.t });
+
+    // Another device writes; A hears it through onChanged and follows it.
+    await tick();
+    const D = await device();
+    await D.savePreferences({ ...START, targetZones: B_LIST });
+    const other = await stored();
+    fire(other);
+    await A.savePreferences(START);
+    expect((await stored()).legacy).toMatchObject({ pw: other.extras?.w, pt: other.extras?.t });
   });
 });

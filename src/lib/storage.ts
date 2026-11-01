@@ -215,10 +215,13 @@ export function sanitize(input: unknown): Preferences {
  * - The legacy item also carries `pw`, the write id this context last wrote,
  *   or last read in an extras item, before this write: the write it follows.
  *   It is absent when the context has seen no write id. Next to it, `pt` is
- *   that write's `t` (absent when unknown). Because a context's write times
- *   stay above every write time it has read, a legacy item with
- *   `pt >= extras.t` comes from a context that had already read or written
- *   a write at least as new as that extras.
+ *   the `t` of the last extras item this context read from storage that
+ *   another context wrote (absent when it has read none). The context's own
+ *   writes, and the onChanged echo of them, never set `pt`: a second save
+ *   would otherwise carry the first save's `t`, which is above every extras
+ *   written before it, including another device's that this context never
+ *   read. So a legacy item with `pt >= extras.t` comes from a context that
+ *   had read that extras, or one at least as new.
  *
  * Reading (fromSyncItems):
  * - No extras: the legacy item as is.
@@ -244,9 +247,11 @@ export function sanitize(input: unknown): Preferences {
  *     so extras' full value, e.g. abbr:PT, still applies).
  *     Known gap: a new-style id removed by the newer write shows until its
  *     extras lands, since the legacy item cannot say it is gone.
- *     Known gap: two devices that never read each other's writes, the
- *     extras one with a clock far enough behind that its `t` is at or below
- *     the legacy one's `pt`, merge as if one followed the other.
+ *     Known gap: two devices that never read each other's writes merge as
+ *     if one followed the other only when the extras one's clock is so far
+ *     behind that its `t` is at or below an extras `t` the legacy one read
+ *     from a third write (the legacy one's `pt`). Saving twice does not
+ *     cause it, since `pt` comes only from reads.
  *   The item still in flight settles it when it lands.
  * - Legacy has no `w` (0.6.x wrote it, or a build older than the write id):
  *   - homeZone: if the legacy value still matches its fingerprint, nobody
@@ -300,7 +305,9 @@ export function toSyncItems(prefs: Preferences): Record<string, unknown> {
   const t = writeTime();
   const items = buildSyncItems(prefs, { w, t, pw, pt });
   lastWriteId = w;
-  lastWriteIdTime = t;
+  // `pt` stays the write time of the last extras read from storage: this
+  // write's own `t` must never become a later write's `pt` (see remember).
+  noteOwnWrite(w);
   return items;
 }
 
@@ -345,8 +352,29 @@ let lastWriteTime = 0;
  */
 let lastWriteId: string | undefined;
 
-/** The write time `t` of that write (the next write's `pt`), when known. */
+/**
+ * The write time `t` of the last extras item read from storage that this
+ * context did not write (the next write's `pt`), when known.
+ */
 let lastWriteIdTime: number | undefined;
+
+/** How many of this context's recent write ids are remembered (see ownWrites). */
+const OWN_WRITES_KEPT = 64;
+
+/**
+ * Write ids this context made, newest last. remember() takes no `pt` from an
+ * extras item carrying one of them, including the onChanged echo of a write.
+ */
+const ownWrites = new Set<string>();
+
+function noteOwnWrite(w: string): void {
+  ownWrites.add(w);
+  while (ownWrites.size > OWN_WRITES_KEPT) {
+    const oldest = ownWrites.values().next().value;
+    if (oldest === undefined) break;
+    ownWrites.delete(oldest);
+  }
+}
 
 /**
  * Write time for a new write: Date.now(), but always above every write time
@@ -470,7 +498,10 @@ function remember(area: chrome.storage.StorageArea, items: Record<string, unknow
   const extras = record(items?.[EXTRAS_KEY]);
   if (typeof extras?.w === 'string') {
     lastWriteId = extras.w;
-    lastWriteIdTime = isWriteTime(extras.t) ? extras.t : undefined;
+    // Only another context's write sets `pt`. Taking it from our own writes
+    // would make a second save "follow" any older extras, including another
+    // device's that this context never read (review r6 #1).
+    if (!ownWrites.has(extras.w)) lastWriteIdTime = isWriteTime(extras.t) ? extras.t : undefined;
   }
 }
 

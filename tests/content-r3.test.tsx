@@ -130,7 +130,10 @@ describe('content script, round 3', () => {
   });
 
   // QA #2
-  it.each([390, 1280])('at %i px, "Pin all to page" puts each card back next to its own date', async (width) => {
+  // Round 6 (QA F6): at 1280 px there is room beside the cards, so they no
+  // longer stack over each other's dates; content-r6 checks that layout. At
+  // 390 px there is none, and the cards still go right below their dates.
+  it.each([390])('at %i px, "Pin all to page" puts each card back next to its own date', async (width) => {
     setViewport(width, 800);
     const listener = await load({ cardSize: 'full' });
     const hosts: HTMLElement[] = [];

@@ -400,8 +400,9 @@ function parseOffset(off: string): number | null {
 
 /**
  * Search form of any text: lower case, accents removed, every dash or minus
- * sign (U+2212, en dash…) as "-", full stops and apostrophes dropped
- * ("St. John's" → "st johns"), single spaces.
+ * sign (U+2212, en dash…) as "-", apostrophes and full stops dropped
+ * ("St. John's" → "st johns"), single spaces. A full stop between two
+ * digits stays ("5.5", "utc+1.0"): the offset parser reads it.
  */
 export function normalizeSearch(s: string): string {
   return s
@@ -409,7 +410,8 @@ export function normalizeSearch(s: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-')
-    .replace(/[.'\u2018\u2019\u02BC]/g, '')
+    .replace(/['\u2018\u2019\u02BC]/g, '')
+    .replace(/(?<!\d)\.|\.(?!\d)/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -982,8 +984,25 @@ export function zoneGroups(now: number = Date.now()): readonly ZoneGroup[] {
   return groups;
 }
 
-/** A query that is only an offset: "+545", "+0545", "545", "+5:45", "-8", "utc−8", "gmt+1". */
-const OFFSET_QUERY_RE = /^(?:(?:utc|gmt) ?)?([+-])? ?(\d{1,2}:\d{2}|\d{1,4})$/;
+/**
+ * A query that is only an offset: "+545", "+0545", "545", "+5:45", "-8",
+ * "utc−8", "gmt+1", and with a full stop "5.45", "utc+5.5" (see dotOffset).
+ */
+const OFFSET_QUERY_RE = /^(?:(?:utc|gmt) ?)?([+-])? ?(\d{1,2}:\d{2}|\d{1,2}\.\d{1,2}|\d{1,4})$/;
+
+/**
+ * Minutes after the hour for the fraction of a dotted offset ("5.45", "5.5"),
+ * or null. One digit is a decimal hour ("5.5" → 30, "1.0" → 0). Two digits
+ * under 60 are minutes ("5.45" → 45, "5.30" → 30). Two digits from 60 up
+ * can't be minutes, so they are a decimal hour too ("5.75" → 45), when that
+ * is a whole minute.
+ */
+function dotOffset(frac: string): number | null {
+  const f = Number(frac);
+  if (frac.length === 1) return f * 6;
+  if (f < 60) return f;
+  return f % 5 === 0 ? (f * 3) / 5 : null;
+}
 
 function parseOffsetQuery(q: string): { readonly minutes: number; readonly typed: string } | null {
   const m = OFFSET_QUERY_RE.exec(q);
@@ -991,6 +1010,17 @@ function parseOffsetQuery(q: string): { readonly minutes: number; readonly typed
   const body = m[2] as string;
   let h: number;
   let min: number;
+  if (body.includes('.')) {
+    const [hs, fs] = body.split('.') as [string, string];
+    const dm = dotOffset(fs);
+    if (dm === null) return null;
+    h = Number(hs);
+    min = dm;
+    const minutes = (m[1] === '-' ? -1 : 1) * (h * 60 + min);
+    if (minutes < -720 || minutes > 840) return null;
+    // Typed as "+hh:mm", so the offset forms' prefix match sees the reading.
+    return { minutes: minutes || 0, typed: offsetString(minutes || 0) };
+  }
   if (body.includes(':')) {
     [h, min] = body.split(':').map(Number) as [number, number];
   } else if (body.length <= 2) {
@@ -1063,18 +1093,63 @@ interface RankedGroup {
   readonly hits: readonly { readonly option: ZoneOption; readonly score: number }[];
 }
 
+let etcCache: ZoneGroup | null = null;
+
+/**
+ * The POSIX-style Etc/GMT±N zones, Etc/GMT-14 to Etc/GMT+12. They are not
+ * in the zone list (Intl doesn't list them, and their reversed signs would
+ * confuse offset searches), so search offers them only for a query that
+ * starts with "etc" ("Etc/GMT+12"). Each detail gives the real offset.
+ */
+function etcGroup(): ZoneGroup {
+  if (etcCache) return etcCache;
+  const options: ZoneOption[] = [];
+  for (let n = -14; n <= 12; n++) {
+    if (n === 0) continue;
+    const id = `Etc/GMT${n < 0 ? '-' : '+'}${Math.abs(n)}`;
+    if (!isIana(id)) continue;
+    const minutes = -n * 60;
+    const real = offsetLabel(minutes);
+    options.push(
+      makeOption(
+        { id, label: id, detail: `${real} · POSIX sign, reversed: ${id} is ${real}` },
+        { kind: 'iana', exact: [id], extra: [`utc${offsetString(minutes)}`], minutes },
+      ),
+    );
+  }
+  etcCache = { id: 'Etc', label: 'Etc', options };
+  return etcCache;
+}
+
+/** True for a query that names an Etc/… zone ("etc", "etc/gmt+12", "etc gmt"). */
+function isEtcQuery(q: string): boolean {
+  return /^etc(?:$|[/ ])/.test(q);
+}
+
 /** Rank every option that passes `keep` against a normalized, non-empty query. */
 function rankGroups(q: string, keep: (id: string) => boolean): RankedGroup[] {
   const offset = parseOffsetQuery(q);
   const words = q.split(' ').filter(Boolean);
   const out: RankedGroup[] = [];
-  zoneGroups().forEach((group, order) => {
+  // "gmt+12" lists UTC+12:00 first, and last the Etc/GMT+12 it may mean,
+  // whose detail explains the reversed sign.
+  const gmtId = /^gmt ?[+-]\d{1,2}$/.test(q) ? `etc/${q.replace(' ', '')}` : null;
+  const groups = isEtcQuery(q) || gmtId ? [...zoneGroups(), etcGroup()] : zoneGroups();
+  groups.forEach((group, order) => {
     const hits: { option: ZoneOption; score: number; order: number; i: number }[] = [];
+    const etc = group === etcCache;
     group.options.forEach((o, i) => {
       if (!keep(o.id)) return;
       const e = searchEntries.get(o);
       if (!e) return;
-      const hit = offset ? offsetHit(e, offset.minutes, offset.typed) : textHit(e, q, words);
+      const hit =
+        etc && gmtId
+          ? e.exact.includes(gmtId)
+            ? { score: 4 }
+            : null
+          : offset
+            ? offsetHit(e, offset.minutes, offset.typed)
+            : textHit(e, q, words);
       if (!hit) return;
       hits.push({ option: hit.matched ? { ...o, matched: hit.matched } : o, score: hit.score, order: hit.order ?? 0, i });
     });

@@ -210,7 +210,8 @@ describe('content script, round 4', () => {
     await vi.waitFor(() => expect(pin.shadowRoot?.querySelector('.tzx-card')).toBeTruthy());
     const pinRoot = pin.shadowRoot as ShadowRoot;
     expect(pinRoot.querySelector('.tzx-src span')?.textContent).toBe('“2024-03-25”');
-    expect(pinRoot.querySelector('.tzx-more')?.textContent).toBe('+1 more time in selection');
+    // Round 6 (QA F12): the pin keeps the stepper, on the step it was pinned at.
+    expect(pinRoot.querySelector('.tzx-step [aria-live="polite"]')?.textContent).toBe('Time 2 of 2');
     expect(highlights.get('tz-pin-0')?.ranges[0]?.toString()).toBe('2024-03-25');
   });
 

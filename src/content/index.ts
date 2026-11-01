@@ -1,12 +1,14 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { createElement } from 'react';
-import { parseTimes, SCAN_LIMIT } from '../lib/parse';
+import { parseTimes, type ParseOptions } from '../lib/parse';
+import { readTimes, MAX_READ_CHARS } from '../lib/read-times';
 import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
 import { resolveTheme } from '../lib/theme';
 import {
   fromThisExtension,
   isConvertSelectionMessage,
+  MAX_MESSAGE_TEXT,
   type Ack,
   type OpenOptionsMessage,
 } from '../lib/messages';
@@ -47,15 +49,15 @@ let debounceTimer: number | undefined;
 /** Where the last right-click happened (viewport coords), to anchor menu cards. */
 let lastContextPoint: { x: number; y: number } | null = null;
 
-/** Parse with every current preference that affects matching. */
-function parseWithPrefs(text: string): ParsedTime[] {
-  return parseTimes(text, {
+/** Every current preference that affects matching, for the parser. */
+function parseOptions(): ParseOptions {
+  return {
     assumedZone: prefs.homeZone,
     dateOnlyPolicy: prefs.dateOnlyPolicy,
     customFormats: prefs.customFormats,
     disabledFormats: prefs.disabledFormats,
     numericDateOrder: prefs.numericDateOrder,
-  });
+  };
 }
 
 /** Card writes run one after another, so two quick changes cannot overwrite each other. */
@@ -106,90 +108,18 @@ function rememberSize(compact: boolean): void {
   }, REMEMBER_SIZE_MS);
 }
 
-/**
- * The parser lists at most this many results per format (MAX_MATCHES in
- * builtin-formats.ts, MAX_MATCHES_PER_FORMAT in custom-formats.ts).
- */
-export const PARSER_FORMAT_CAP = 25;
-/** A card lists at most this many times of one selection. */
-export const MAX_LISTED = 500;
-/** Time spent finding the times past the parser's per-format cap. */
-const LIST_BUDGET_MS = 40;
-
-/** The times of a selection, for a card. */
+/** The times of a card's text, for the card. */
 export interface Reading {
-  /** Every time found, in reading order (by `sourceIndex`; ties best-first). */
+  /** Every time found, in reading order (by `sourceIndex`). */
   readonly matches: ParsedTime[];
-  /** Where the best match (the parser's first) is in `matches`: the card opens on it. */
+  /** Where the card opens in `matches`: the best match, or the visible one nearest the pointer. */
   readonly open: number;
   /** True when the selection has more times than `matches` lists. */
   readonly capped: boolean;
 }
 
-function endOf(p: ParsedTime): number {
-  return (p.sourceIndex ?? 0) + p.matchedText.length;
-}
-
 function sameMatch(a: ParsedTime, b: ParsedTime): boolean {
   return a.sourceIndex === b.sourceIndex && a.matchedText === b.matchedText;
-}
-
-/**
- * Find every time in `text`, in reading order. The parser stops each format
- * at PARSER_FORMAT_CAP results; when a format reaches it, the results up to
- * where that format stopped are kept and the rest of the text is read
- * again, until nothing is cut, MAX_LISTED times are listed or
- * LIST_BUDGET_MS is spent (then `capped`). Only the first SCAN_LIMIT
- * characters are read, as for one parse.
- */
-export function readTimes(text: string, parse: (t: string) => ParsedTime[] = parseWithPrefs): Reading {
-  const limit = Math.min(text.length, SCAN_LIMIT);
-  const started = Date.now();
-  const all: ParsedTime[] = [];
-  const seen = new Set<string>();
-  let best: ParsedTime | null = null;
-  let base = 0;
-  let capped = false;
-  for (;;) {
-    const found = parse(text.slice(base, limit)).map((p) =>
-      base === 0 ? p : { ...p, sourceIndex: base + (p.sourceIndex ?? 0) },
-    );
-    if (!best && found[0]) best = found[0];
-    const counts = new Map<string, { n: number; end: number }>();
-    for (const p of found) {
-      const k = p.formatId ?? p.kind;
-      const c = counts.get(k) ?? { n: 0, end: 0 };
-      counts.set(k, { n: c.n + 1, end: Math.max(c.end, endOf(p)) });
-    }
-    // Where the first format that reached the cap stopped; no match may
-    // straddle the cut, or the next read would see only part of it.
-    let cut = Infinity;
-    for (const c of counts.values()) if (c.n >= PARSER_FORMAT_CAP) cut = Math.min(cut, c.end);
-    if (cut !== Infinity) {
-      for (const p of found) if ((p.sourceIndex ?? 0) < cut && endOf(p) > cut) cut = p.sourceIndex ?? 0;
-    }
-    for (const p of found) {
-      if (cut !== Infinity && endOf(p) > cut) continue;
-      const key = `${p.epochMs}:${p.matchedText}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      all.push(p);
-    }
-    if (cut === Infinity || cut >= limit) break;
-    if (cut <= base || all.length >= MAX_LISTED || Date.now() - started > LIST_BUDGET_MS) {
-      capped = true;
-      break;
-    }
-    base = cut;
-  }
-  const matches = all
-    .map((p, i) => ({ p, i }))
-    .sort((a, b) => (a.p.sourceIndex ?? 0) - (b.p.sourceIndex ?? 0) || a.i - b.i)
-    .map(({ p }) => p)
-    .slice(0, MAX_LISTED);
-  if (all.length > MAX_LISTED) capped = true;
-  const at = best ? matches.findIndex((p) => sameMatch(p, best as ParsedTime)) : -1;
-  return { matches, open: Math.max(0, at), capped };
 }
 
 /**
@@ -198,10 +128,10 @@ export function readTimes(text: string, parse: (t: string) => ParsedTime[] = par
  * still there (same place, same text; else same place), else the best one.
  */
 function reparse(
-  srcText: string,
+  src: CardText,
   shown: ParsedTime | null,
 ): { parsed: ParsedTime; count: number; matches: ParsedTime[]; index: number; capped: boolean } | null {
-  const again = readTimes(srcText);
+  const again = readCard(src);
   if (again.matches.length === 0) return null;
   let i = -1;
   if (shown && shown.sourceIndex !== undefined) {
@@ -217,8 +147,6 @@ function reparse(
     capped: again.capped,
   };
 }
-
-
 
 /**
  * Tag a popover's shadow host with the resolved theme so the shadow CSS can
@@ -241,14 +169,17 @@ let tRoot: Root | null = null;
 interface Pin {
   readonly host: HTMLDivElement;
   readonly root: Root;
-  /** Document-space anchor (page coords, not viewport) where it was first placed. */
-  readonly pageX: number;
-  readonly pageY: number;
+  /** Document-space anchor (page coords, not viewport) where it was placed. */
+  pageX: number;
+  pageY: number;
   /** Highlight slot index (color + number) this pin owns. */
   readonly slot: number;
-  /** The highlighted range for this pin, so it can be restored/cleared. */
-  readonly range: Range | null;
-  readonly srcText: string;
+  /** The page range of the time it shows, so its mark can be restored or cleared (null when not found). */
+  range: Range | null;
+  /** Its selection: the text and where it is on the page. */
+  readonly src: CardText;
+  /** Every time in the selection, in reading order; it shows `index`. */
+  matches: ParsedTime[];
   parsed: ParsedTime;
   count: number;
   /** True when the selection has more times than `count`. */
@@ -331,58 +262,43 @@ function ensureHighlightStyle(): void {
 }
 
 /**
- * Narrow a selection range to the matched token. Triple-click selections span
- * a whole block whose text lives across several child text nodes, so we walk
- * the text nodes inside the range and anchor to the first one that contains the
- * token. Falls back to the full range when it cannot be located contiguously.
+ * The one place of `token` in a selection range, when the selection's text
+ * holds it exactly once and one text node has all of it. Null otherwise: a
+ * mark on the wrong copy, or on the whole selection, is worse than none.
  */
-function narrowRangeToToken(range: Range, token: string): Range {
-  if (!token) return range;
-
-  // Fast path: selection is itself a single text node.
-  const sc = range.startContainer;
-  if (sc.nodeType === Node.TEXT_NODE && typeof (sc as Text).data === 'string') {
-    const idx = (sc as Text).data.indexOf(token);
-    if (idx >= 0) {
-      try {
-        const r = document.createRange();
-        r.setStart(sc, idx);
-        r.setEnd(sc, idx + token.length);
-        return r;
-      } catch {
-        /* fall through */
-      }
-    }
-  }
-
-  // General path: walk text nodes intersecting the range.
+function uniqueTokenRange(range: Range, selText: string, token: string): Range | null {
+  if (!token) return null;
+  const first = selText.indexOf(token);
+  if (first < 0 || selText.indexOf(token, first + 1) >= 0) return null;
   const root =
     range.commonAncestorContainer.nodeType === Node.TEXT_NODE
       ? range.commonAncestorContainer.parentNode
       : range.commonAncestorContainer;
-  if (!root) return range;
-
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) =>
-      range.intersectsNode(n) && (n as Text).data.includes(token)
-        ? NodeFilter.FILTER_ACCEPT
-        : NodeFilter.FILTER_SKIP,
-  });
-  const hit = walker.nextNode() as Text | null;
-  if (hit) {
-    const idx = hit.data.indexOf(token);
-    if (idx >= 0) {
-      try {
-        const r = document.createRange();
-        r.setStart(hit, idx);
-        r.setEnd(hit, idx + token.length);
-        return r;
-      } catch {
-        /* fall through */
-      }
-    }
+  if (!root) return null;
+  const nodes: Text[] =
+    range.commonAncestorContainer.nodeType === Node.TEXT_NODE ? [range.commonAncestorContainer as Text] : [];
+  if (nodes.length === 0) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        range.intersectsNode(n) && (n as Text).data.includes(token) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+    });
+    const hit = walker.nextNode() as Text | null;
+    if (hit) nodes.push(hit);
   }
-  return range;
+  const hit = nodes[0];
+  if (!hit) return null;
+  const from = hit === range.startContainer ? range.startOffset : 0;
+  const idx = hit.data.indexOf(token, from);
+  const to = hit === range.endContainer ? range.endOffset : hit.data.length;
+  if (idx < 0 || idx + token.length > to) return null;
+  try {
+    const r = document.createRange();
+    r.setStart(hit, idx);
+    r.setEnd(hit, idx + token.length);
+    return r;
+  } catch {
+    return null;
+  }
 }
 
 /** A character's place in the page: a text node and an offset in it. */
@@ -408,78 +324,213 @@ function sameChar(a: string, b: string): boolean {
 }
 
 /**
- * Where each character of `selText` (the selection's `toString()`) is in the
- * page, or null for a character the page's text does not have (a line break
- * the browser added between blocks). The selection's string collapses
- * whitespace runs and adds breaks; the page's text nodes keep their own
- * whitespace and may hold text the string leaves out. So the two are lined
- * up character by character: whitespace against any whitespace run, other
- * characters by value, skipping over page text the string does not show.
+ * How an element's edge separates the text on either side of it: 'out'
+ * for an element out of the line (absolute, fixed or floated), whose text
+ * sits elsewhere on the page; 'box' for one laid out as its own box in the
+ * line (inline-block, flex or grid item, table cell...); null for plain
+ * inline text.
  */
-export function mapSelectionText(range: Range, selText: string): Array<TextPos | null> {
-  const nodes: Text[] = [];
-  const root = range.commonAncestorContainer;
-  if (root.nodeType === Node.TEXT_NODE) nodes.push(root as Text);
-  else {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode: (n) => (range.intersectsNode(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
-    });
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+type Edge = 'out' | 'box' | null;
+
+function edgeOf(el: Element, cache: Map<Element, Edge>): Edge {
+  const known = cache.get(el);
+  if (known !== undefined) return known;
+  let edge: Edge = null;
+  try {
+    const cs = getComputedStyle(el);
+    const display = cs.display;
+    const inline = display === '' || display === 'inline' || display === 'contents' || display.startsWith('ruby');
+    if (cs.position === 'absolute' || cs.position === 'fixed' || (cs.cssFloat !== '' && cs.cssFloat !== 'none')) {
+      edge = 'out';
+    } else if (!inline) edge = 'box';
+  } catch {
+    edge = null;
   }
-  // The page's characters, in order, with where each one is.
+  cache.set(el, edge);
+  return edge;
+}
+
+/** The strongest element edge (see Edge) between two text nodes. */
+function edgeBetween(a: Text, b: Text, cache: Map<Element, Edge>): Edge {
+  const upA: Element[] = [];
+  for (let el = a.parentElement; el; el = el.parentElement) upA.push(el);
+  const onA = new Set<Element>(upA);
+  let common: Element | null = null;
+  let found: Edge = null;
+  const note = (e: Edge): void => {
+    if (e === 'out' || (e === 'box' && found === null)) found = e;
+  };
+  for (let el = b.parentElement; el; el = el.parentElement) {
+    if (onA.has(el)) {
+      common = el;
+      break;
+    }
+    note(edgeOf(el, cache));
+  }
+  for (const el of upA) {
+    if (el === common) break;
+    note(edgeOf(el, cache));
+  }
+  return found;
+}
+
+/** What mapSelection learns about a selection's string. */
+export interface SelectionMap {
+  /**
+   * Where each character of the string is on the page, or null for one the
+   * page's text does not have (a line break the browser added between
+   * blocks). Characters at or past the walk's limit are not mapped.
+   */
+  readonly map: Array<TextPos | null>;
+  /**
+   * Places where the string runs two characters together that the page
+   * keeps apart, by the index of the second character, ascending. `apart`
+   * is true when the two are not next to each other on the page: the page
+   * has whitespace between them that the string dropped (as it does around
+   * positioned elements), or an element out of the line starts or ends
+   * between them. Else an edge of an inline-block (or other box in the
+   * line) lies between them.
+   */
+  readonly breaks: ReadonlyArray<{ readonly at: number; readonly apart: boolean }>;
+}
+
+/**
+ * Line the selection's `toString()` up with the page (see SelectionMap),
+ * for its first `limit` characters only: past that nothing is read, so a
+ * select-all on a huge page costs no more than a selection of `limit`
+ * characters.
+ *
+ * The selection's string collapses whitespace runs and adds breaks; the
+ * page's text nodes keep their own whitespace and may hold text the string
+ * leaves out. So the two are lined up character by character: whitespace
+ * against any whitespace run, other characters by value (ignoring case),
+ * skipping over page text the string does not show.
+ */
+export function mapSelection(range: Range, selText: string, limit = selText.length): SelectionMap {
+  const len = Math.max(0, Math.min(selText.length, limit));
+  const out: Array<TextPos | null> = new Array<TextPos | null>(len).fill(null);
+  const breaks: Array<{ at: number; apart: boolean }> = [];
+  const edges = new Map<Element, Edge>();
+  // The page's characters, read node by node as the walk needs them: `raw`
+  // holds their text, and segment s starts at raw index segAt[s], at offset
+  // segFrom[s] of segNode[s].
   let raw = '';
-  const at: TextPos[] = [];
-  for (const node of nodes) {
-    if (hiddenText(node)) continue;
-    const from = node === range.startContainer ? range.startOffset : 0;
-    const to = node === range.endContainer ? range.endOffset : node.data.length;
-    for (let k = from; k < to; k++) at.push({ node, offset: k });
-    raw += node.data.slice(from, to);
-  }
-  const out: Array<TextPos | null> = new Array<TextPos | null>(selText.length).fill(null);
-  /** The next non-whitespace character of `s` from `i` on, and where it is. */
-  const nextSolid = (s: string, i: number): number => {
+  const segNode: Text[] = [];
+  const segAt: number[] = [];
+  const segFrom: number[] = [];
+  const root = range.commonAncestorContainer;
+  const walker =
+    root.nodeType === Node.TEXT_NODE
+      ? null
+      : document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode: (n) => (range.intersectsNode(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
+        });
+  let single: Text | null = root.nodeType === Node.TEXT_NODE ? (root as Text) : null;
+  /** Read the next page node in; false when there is none. */
+  const more = (): boolean => {
+    for (;;) {
+      let node: Text | null;
+      if (walker) node = walker.nextNode() as Text | null;
+      else {
+        node = single;
+        single = null;
+      }
+      if (!node) return false;
+      if (hiddenText(node)) continue;
+      const from = node === range.startContainer ? range.startOffset : 0;
+      const to = node === range.endContainer ? range.endOffset : node.data.length;
+      if (to <= from) continue;
+      segNode.push(node);
+      segAt.push(raw.length);
+      segFrom.push(from);
+      raw += node.data.slice(from, to);
+      return true;
+    }
+  };
+  /** True when raw index `k` is read in (reading more as needed). */
+  const has = (k: number): boolean => {
+    while (k >= raw.length) if (!more()) return false;
+    return true;
+  };
+  let seg = 0;
+  const posAt = (k: number): TextPos => {
+    // Segments are found in order mostly; search from the last one either way.
+    while (seg + 1 < segAt.length && (segAt[seg + 1] as number) <= k) seg++;
+    while (seg > 0 && (segAt[seg] as number) > k) seg--;
+    return { node: segNode[seg] as Text, offset: (segFrom[seg] as number) + k - (segAt[seg] as number) };
+  };
+  /** The next non-whitespace character of the page from `k` on. */
+  const solidFrom = (k: number): number => {
+    let i = k;
+    while (has(i) && WS.test(raw[i] as string)) i++;
+    return i;
+  };
+  /** The next non-whitespace character of the string from `i` on. */
+  const nextSolid = (i: number): number => {
     let k = i;
-    while (k < s.length && WS.test(s[k] as string)) k++;
+    while (k < selText.length && WS.test(selText[k] as string)) k++;
     return k;
   };
   const LOOKAHEAD = 512;
+  /** Raw index of the last string character placed, and its index in the string. */
+  let lastK = -1;
+  let lastI = -2;
+  const place = (i: number, k: number): void => {
+    out[i] = posAt(k);
+    if (lastI === i - 1 && lastK >= 0 && !WS.test(selText[i] as string) && !WS.test(selText[lastI] as string)) {
+      const between = raw.slice(lastK + 1, k);
+      const a = out[lastI] as TextPos;
+      const b = out[i] as TextPos;
+      const edge = a.node === b.node ? null : edgeBetween(a.node, b.node, edges);
+      if (WS.test(between) || edge === 'out') breaks.push({ at: i, apart: true });
+      else if (edge === 'box') breaks.push({ at: i, apart: false });
+    }
+    lastK = k;
+    lastI = i;
+  };
   let j = 0;
-  for (let i = 0; i < selText.length && j < raw.length; i++) {
+  for (let i = 0; i < len && has(j); i++) {
     const c = selText[i] as string;
     if (WS.test(c)) {
-      if (WS.test(raw[j] as string)) out[i] = at[j++] as TextPos;
+      if (WS.test(raw[j] as string)) place(i, j++);
       continue;
     }
-    j = nextSolid(raw, j);
-    if (j >= raw.length) break;
+    j = solidFrom(j);
+    if (!has(j)) break;
     if (sameChar(raw[j] as string, c)) {
-      out[i] = at[j++] as TextPos;
+      place(i, j++);
       continue;
     }
     // Page text the string leaves out: find this character further on,
     // followed by the string's next character too, so a stray match does
     // not throw the rest off.
-    const after = nextSolid(selText, i + 1);
-    const follow = selText[after];
+    const follow = selText[nextSolid(i + 1)];
+    has(j + LOOKAHEAD);
     for (let k = j + 1; k < raw.length && k < j + LOOKAHEAD; k++) {
       if (!sameChar(raw[k] as string, c)) continue;
-      const n = nextSolid(raw, k + 1);
-      if (follow !== undefined && (n >= raw.length || !sameChar(raw[n] as string, follow))) continue;
-      out[i] = at[k] as TextPos;
+      const n = solidFrom(k + 1);
+      if (follow !== undefined && (!has(n) || !sameChar(raw[n] as string, follow))) continue;
+      place(i, k);
       j = k + 1;
       break;
     }
   }
-  return out;
+  return { map: out, breaks };
 }
 
-const squash = (s: string): string => s.replace(/\s+/g, '');
+/** Where each character of `selText` is on the page (see mapSelection). */
+export function mapSelectionText(range: Range, selText: string, limit = selText.length): Array<TextPos | null> {
+  return mapSelection(range, selText, limit).map;
+}
+
+/** Text without whitespace, in lower case: how the string and the page are compared. */
+const squash = (s: string): string => s.replace(/\s+/g, '').toLowerCase();
 
 /**
  * The page range of `selText.slice(start, end)`, through `map` (see
  * mapSelectionText). Null when its ends are not in the page or the range's
- * text is not that text (whitespace aside).
+ * text is not that text (whitespace and case aside: text-transform changes
+ * the case in the string, not in the page).
  */
 export function spanRange(
   selText: string,
@@ -511,25 +562,247 @@ interface MarkSource {
   readonly selText: string | null;
   /** Where the parsed (trimmed) text starts in `selText`. */
   readonly selLead: number;
-  /** mapSelectionText of the above, built on first use. */
-  posMap?: Array<TextPos | null>;
+  /** mapSelection of the above, built on first use. */
+  selMap?: SelectionMap;
+}
+
+/** A card's text and where it came from. */
+interface CardText extends MarkSource {
+  /** The text given to the parser: the selection's string, trimmed. */
+  readonly text: string;
+  /** Where the pointer was when the selection was made (viewport), to open on the time nearest it. */
+  readonly point?: { readonly x: number; readonly y: number } | null;
+}
+
+/** The selection's map, built once (see mapSelection), up to what a card reads. */
+function selectionMap(src: MarkSource): SelectionMap | null {
+  if (!src.selRange || src.selText === null) return null;
+  src.selMap ??= mapSelection(src.selRange, src.selText, src.selLead + MAX_READ_CHARS);
+  return src.selMap;
 }
 
 /**
  * The page range of one match: its `sourceIndex` in the parsed text, mapped
- * through the selection's string to the page. Falls back to the first
- * occurrence of its text in the selection when that fails.
+ * through the selection's string to the page. When that fails, its text's
+ * only place in the selection, if it has exactly one; else null (no mark).
  */
 function matchRange(src: MarkSource, p: ParsedTime): Range | null {
   const range = src.selRange;
-  if (!range) return null;
-  if (src.selText !== null && p.sourceIndex !== undefined) {
-    src.posMap ??= mapSelectionText(range, src.selText);
+  const sm = selectionMap(src);
+  if (!range || !sm || src.selText === null) return null;
+  if (p.sourceIndex !== undefined) {
     const start = src.selLead + p.sourceIndex;
-    const r = spanRange(src.selText, src.posMap, start, start + p.matchedText.length);
+    const r = spanRange(src.selText, sm.map, start, start + p.matchedText.length);
     if (r) return r;
   }
-  return narrowRangeToToken(range, p.matchedText);
+  return uniqueTokenRange(range, src.selText, p.matchedText);
+}
+
+/** A rect in viewport coordinates. */
+type Box = Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom' | 'width' | 'height'>;
+
+/** A range's line boxes, or null when the browser cannot say. */
+function rangeBoxes(r: Range): Box[] | null {
+  if (typeof r.getClientRects === 'function') return Array.from(r.getClientRects());
+  if (typeof r.getBoundingClientRect === 'function') return [r.getBoundingClientRect()];
+  return null;
+}
+
+/**
+ * True when `el` or an element it is in hides its content by clipping it to
+ * nothing: the screen-reader-only patterns (`clip: rect(0 0 0 0)`,
+ * `clip-path: inset(50%)`, a 1×1 box with overflow hidden).
+ */
+function clippedAway(el: Element | null, cache: Map<Element, boolean>): boolean {
+  for (let e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+    let hides = cache.get(e);
+    if (hides === undefined) {
+      hides = false;
+      try {
+        const cs = getComputedStyle(e);
+        const clip = cs.clip || '';
+        const clipPath = cs.getPropertyValue('clip-path') || '';
+        if (/^rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)$/.test(clip.trim())) hides = true;
+        else if (/^inset\(\s*(50|[5-9]\d|100)(\.\d+)?%/.test(clipPath.trim())) hides = true;
+        else if (cs.overflow !== '' && cs.overflow !== 'visible') {
+          const b = e.getBoundingClientRect();
+          hides = b.width <= 1 && b.height <= 1;
+        }
+      } catch {
+        hides = false;
+      }
+      cache.set(e, hides);
+    }
+    if (hides) return true;
+  }
+  return false;
+}
+
+/**
+ * The line boxes of a match the user can see, or null when the browser
+ * cannot tell. Empty for text with no visible box: every box empty or
+ * outside the document's scrollable area (off-screen text), or clipped to
+ * nothing (screen-reader-only text).
+ */
+function visibleBoxes(r: Range, cache: Map<Element, boolean>): Box[] | null {
+  const boxes = rangeBoxes(r);
+  if (!boxes) return null;
+  const doc = document.documentElement;
+  const sx = window.scrollX;
+  const sy = window.scrollY;
+  const w = doc.scrollWidth;
+  const h = doc.scrollHeight;
+  const shown = boxes.filter(
+    (b) =>
+      b.width > 0 &&
+      b.height > 0 &&
+      b.right + sx > 0 &&
+      b.bottom + sy > 0 &&
+      (w <= 0 || b.left + sx < w) &&
+      (h <= 0 || b.top + sy < h),
+  );
+  if (shown.length === 0) return [];
+  const node = r.startContainer;
+  const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+  return clippedAway(el, cache) ? [] : shown;
+}
+
+/** True when a box is at least partly in the viewport. */
+function onScreen(b: Box): boolean {
+  return b.bottom > 0 && b.right > 0 && b.top < window.innerHeight && b.left < window.innerWidth;
+}
+
+/** How far a point is from a box (0 inside it). */
+function distance(b: Box, x: number, y: number): number {
+  const dx = x < b.left ? b.left - x : x > b.right ? x - b.right : 0;
+  const dy = y < b.top ? b.top - y : y > b.bottom ? y - b.bottom : 0;
+  return Math.hypot(dx, dy);
+}
+
+/** How far back a cut match is read again, so look-behinds see real context. */
+const CUT_CONTEXT = 40;
+
+/**
+ * Every time in a card's text, in reading order (see readTimes), as the page
+ * shows it:
+ * - Where the selection's string runs together text the page keeps apart
+ *   (SelectionMap.breaks), the parser reads a space there. A time that
+ *   still runs across a place where the two sides are not next to each
+ *   other on the page is cut there when the part before is a time by
+ *   itself, else dropped. One across the edge of an inline-block (a date
+ *   and a time in boxes side by side) is read whole.
+ * - Times in text the user cannot see (off-screen or screen-reader-only)
+ *   are dropped.
+ * - It opens on the best match; when that is off screen and another one is
+ *   on screen, on the visible one nearest the pointer (or the selection's
+ *   end) instead.
+ */
+function readCard(src: CardText): Reading {
+  const opts = parseOptions();
+  const sm = selectionMap(src);
+  if (!sm || src.selText === null) {
+    const r = readTimes(src.text, opts);
+    return { matches: [...r.matches], open: r.best, capped: r.capped };
+  }
+  // Breaks in the trimmed text, and where each space goes in the parsed text.
+  const gaps: number[] = [];
+  const apart: boolean[] = [];
+  for (const b of sm.breaks) {
+    const t = b.at - src.selLead;
+    if (t > 0 && t < src.text.length) {
+      gaps.push(t);
+      apart.push(b.apart);
+    }
+  }
+  let parsedText = src.text;
+  const at: number[] = gaps.map((g, k) => g + k);
+  if (gaps.length > 0) {
+    const parts: string[] = [];
+    let from = 0;
+    for (const g of gaps) {
+      parts.push(src.text.slice(from, g));
+      from = g;
+    }
+    parts.push(src.text.slice(from));
+    parsedText = parts.join(' ');
+  }
+  const got = readTimes(parsedText, opts);
+  const best = got.matches[got.best];
+  /** How many spaces went in before index `q` of the parsed text. */
+  const before = (q: number): number => {
+    let lo = 0;
+    let hi = at.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((at[mid] as number) < q) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const kept: Array<{ p: ParsedTime; best: boolean; boxes: Box[] | null }> = [];
+  const clips = new Map<Element, boolean>();
+  for (const found of got.matches) {
+    const q = found.sourceIndex ?? 0;
+    const end = q + found.matchedText.length;
+    const k = before(q);
+    // The first break it runs across where the two sides are apart.
+    let cut = -1;
+    for (let n = k; n < at.length && (at[n] as number) < end && cut < 0; n++) if (apart[n]) cut = at[n] as number;
+    let p: ParsedTime | null = found;
+    if (cut >= 0) {
+      // Runs across text that is not next to it: keep the part before, if that is a time.
+      const ctx = Math.max(0, q - CUT_CONTEXT);
+      p = parseTimes(parsedText.slice(ctx, cut), opts).find((h) => (h.sourceIndex ?? 0) + ctx === q) ?? null;
+    }
+    if (!p) continue;
+    // Its text as the selection has it: without the spaces put in (one read
+    // across an inline-block's edge has some).
+    const pe = q + p.matchedText.length;
+    const ke = before(pe);
+    p = { ...p, sourceIndex: q - k, matchedText: ke > k ? src.text.slice(q - k, pe - ke) : p.matchedText };
+    const r = matchRange(src, p);
+    const boxes = r ? visibleBoxes(r, clips) : null;
+    if (boxes && boxes.length === 0) continue;
+    kept.push({ p, best: found === best, boxes });
+  }
+  const matches = kept.map((m) => m.p);
+  let open = Math.max(0, kept.findIndex((m) => m.best));
+  const shown = kept[open];
+  const offScreen = !shown || (shown.boxes !== null && !shown.boxes.some(onScreen));
+  if (offScreen && kept.length > 1) {
+    const pt = src.point ?? selectionEnd(src.selRange);
+    let nearest = -1;
+    let d = Infinity;
+    kept.forEach((m, i) => {
+      for (const b of m.boxes ?? []) {
+        if (!onScreen(b)) continue;
+        const e = pt ? distance(b, pt.x, pt.y) : b.top;
+        if (e < d) {
+          d = e;
+          nearest = i;
+        }
+      }
+    });
+    if (nearest >= 0) open = nearest;
+  }
+  return { matches, open, capped: got.capped };
+}
+
+/**
+ * Where a selection ends on screen, or null. Measured at its end point
+ * only: the boxes of a whole select-all would cost a layout of every line.
+ */
+function selectionEnd(range: Range | null): { x: number; y: number } | null {
+  if (!range) return null;
+  try {
+    const r = document.createRange();
+    r.setStart(range.endContainer, range.endOffset);
+    r.collapse(true);
+    const b = typeof r.getBoundingClientRect === 'function' ? r.getBoundingClientRect() : null;
+    return b && (b.top || b.left || b.height) ? { x: b.left, y: b.bottom } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The live (transient) popover's highlight on its selected token. */
@@ -1190,10 +1463,9 @@ function onKeyDownBubble(e: KeyboardEvent): void {
 }
 
 /** The transient card's content, kept so it can re-render in place. */
-interface TransientState extends MarkSource {
+interface TransientState extends CardText {
   /** What the card is placed next to: the selection, or the shown match after a scroll to it. */
   rect: DOMRect;
-  readonly srcText: string;
   pageX: number;
   pageY: number;
   /** Every match in the selection, in reading order; the card shows `index`. */
@@ -1225,9 +1497,12 @@ function takeReparse(st: TransientState, again: NonNullable<ReturnType<typeof re
   paintTransient();
 }
 
+/** Room left between a time scrolled into view and the screen's edge, in px. */
+export const REVEAL_MARGIN = 48;
+
 /**
  * After a step: when the shown match is off screen, scroll it into view
- * (nearest edge) and put the card next to it. That scroll does not close
+ * (nearest edge, REVEAL_MARGIN from it) and put the card next to it. That scroll does not close
  * the card, as a user's scroll does. A match on screen but under the card
  * moves the card only.
  */
@@ -1239,8 +1514,8 @@ function revealMatch(st: TransientState): void {
   const vh = window.innerHeight;
   let box = r.getBoundingClientRect();
   if (!box.width && !box.height) return;
-  const onScreen = box.top >= 0 && box.bottom <= vh && box.left >= 0 && box.right <= vw;
-  if (onScreen) {
+  const inView = box.top >= 0 && box.bottom <= vh && box.left >= 0 && box.right <= vw;
+  if (inView) {
     // On screen but under the card (a long selection): move the card.
     const c = hostEl.getBoundingClientRect();
     const covered = c.left < box.right && c.right > box.left && c.top < box.bottom && c.bottom > box.top;
@@ -1257,8 +1532,11 @@ function revealMatch(st: TransientState): void {
     /* not scrollable */
   }
   box = r.getBoundingClientRect();
-  // A block taller than the screen can leave the line itself outside.
-  const dy = box.top < 0 ? box.top - MARGIN : box.bottom > vh ? box.bottom - vh + MARGIN : 0;
+  // Leave some room between the time and the screen's edge (scrollIntoView
+  // puts it flush), and bring the line itself in when a block taller than
+  // the screen left it outside.
+  const room = Math.min(REVEAL_MARGIN, Math.max(0, (vh - box.height) / 2));
+  const dy = box.top < room ? box.top - room : box.bottom > vh - room ? box.bottom - (vh - room) : 0;
   if (dy) {
     try {
       window.scrollBy({ top: dy, behavior: 'instant' as ScrollBehavior });
@@ -1326,7 +1604,8 @@ function paintTransient(): void {
           count: st.count,
           capped: st.capped,
           index: st.index,
-          srcText: st.srcText,
+          matches: st.matches,
+          src: cardTextOf(st),
           pageX: st.pageX,
           pageY: st.pageY,
           compact: st.compact,
@@ -1353,33 +1632,36 @@ function paintTransient(): void {
       onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
         // Persist as the global default, then re-read this value with it.
         patchPrefs({ dateOnlyPolicy: policy });
-        const again = reparse(st.srcText, st.parsed);
+        const again = reparse(st, st.parsed);
         if (again) takeReparse(st, again);
       },
       onDateOrder: (order: NumericDateOrder) => {
         patchPrefs({ numericDateOrder: order });
-        const again = reparse(st.srcText, st.parsed);
+        const again = reparse(st, st.parsed);
         if (again) takeReparse(st, again);
       },
     }),
   );
 }
 
-/** A selection to show a card for: its parsed text and where that is on the page. */
-interface CardSource {
+/** A selection to show a card for: its text, where that is on the page, and the box it is in. */
+interface CardSource extends CardText {
   readonly rect: DOMRect;
-  /** The text given to the parser (trimmed). */
-  readonly text: string;
-  readonly range: Range | null;
-  /** The selection's untrimmed `toString()` (null without a range). */
-  readonly selText: string | null;
-  /** Where `text` starts in `selText`. */
-  readonly selLead: number;
+}
+
+/** Just the selection of a card (what a pin made from it keeps). */
+function cardTextOf(c: CardText): CardText {
+  return { text: c.text, selRange: c.selRange, selText: c.selText, selLead: c.selLead, selMap: c.selMap };
+}
+
+/** True when a box is wholly in the viewport. */
+function whollyOnScreen(b: Box): boolean {
+  return b.top >= 0 && b.left >= 0 && b.bottom <= window.innerHeight && b.right <= window.innerWidth;
 }
 
 function renderTransient(src: CardSource, reading: Reading): void {
   teardownTransient();
-  const { rect, text: srcText } = src;
+  const { rect } = src;
   try {
     tHost = document.createElement('div');
     tHost.id = TRANSIENT_HOST_ID;
@@ -1391,17 +1673,15 @@ function renderTransient(src: CardSource, reading: Reading): void {
     positionFixed(tHost, rect);
     watchFocus(tHost);
 
-    // Opens on the best match; the stepper counts in reading order.
+    // Opens on the best match (or the visible one nearest the pointer); the
+    // stepper counts in reading order.
     const index = reading.open;
     // Capture a document-space point for the pin, from the current scroll.
     tState = {
+      ...cardTextOf(src),
       rect,
-      srcText,
       pageX: rect.left + window.scrollX,
       pageY: rect.bottom + MARGIN + window.scrollY,
-      selRange: src.range ? src.range.cloneRange() : null,
-      selText: src.range ? src.selText : null,
-      selLead: src.selLead,
       matches: reading.matches,
       index,
       parsed: reading.matches[index] as ParsedTime,
@@ -1412,7 +1692,14 @@ function renderTransient(src: CardSource, reading: Reading): void {
     markShownMatch(tState);
     tRoot = createRoot(mount);
     paintTransient();
-    refitFixed(tHost, rect);
+    // A selection running off screen: open next to the time shown, when
+    // that is on screen, not next to the selection's far edge.
+    const shown = liveRange && typeof liveRange.getBoundingClientRect === 'function' ? liveRange.getBoundingClientRect() : null;
+    if (shown && (shown.width || shown.height) && whollyOnScreen(shown) && !whollyOnScreen(rect)) {
+      anchorTo(tState, tHost, shown);
+    } else {
+      refitFixed(tHost, rect);
+    }
     document.addEventListener('scroll', onScroll, true);
     // The binding may have changed in the browser's settings since.
     refreshFocusKey();
@@ -1431,7 +1718,10 @@ interface PinSpec {
   readonly capped?: boolean;
   /** Which match of the selection it shows (default 0). */
   readonly index?: number;
-  readonly srcText: string;
+  /** Every time in the selection, in reading order (default: just `parsed`). */
+  readonly matches?: readonly ParsedTime[];
+  /** Its selection: the text and where it is on the page. */
+  readonly src: CardText;
   readonly pageX: number;
   readonly pageY: number;
   readonly compact: boolean;
@@ -1460,10 +1750,46 @@ function currentPagePos(pin: Pin): { x: number; y: number } {
   return pin.placement === 'floating' ? { x: left + window.scrollX, y: top + window.scrollY } : { x: left, y: top };
 }
 
+/** A rectangle in page coordinates. */
+interface PageRect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+/** A card's size, or the usual size while it cannot be measured. */
+function cardSize(host: HTMLElement): { w: number; h: number } {
+  const r = host.getBoundingClientRect();
+  return { w: r.width || CARD_MAX_W, h: r.height || EST_HEIGHT };
+}
+
+/** Where a pinned card is on the page now. */
+function pinBox(p: Pin): PageRect {
+  const at = currentPagePos(p);
+  const { w, h } = cardSize(p.host);
+  return { left: at.x, top: at.y, right: at.x + w, bottom: at.y + h };
+}
+
+/** Where a page range is, in page coordinates; null when it is gone or has no box. */
+function rangeBox(range: Range | null): PageRect | null {
+  if (!range || range.collapsed || !range.startContainer.isConnected) return null;
+  if (typeof range.getBoundingClientRect !== 'function') return null;
+  const r = selectionRect(range);
+  if (!r.width && !r.height) return null;
+  const sx = window.scrollX;
+  const sy = window.scrollY;
+  return { left: r.left + sx, top: r.top + sy, right: r.right + sx, bottom: r.bottom + sy };
+}
+
+function overlapsPage(a: PageRect, b: PageRect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
 /**
  * Step a page point down-right until none of `others` sits within 48 px of
- * it, so a new or re-pinned card never lands on top of another one. Compares
- * against where those cards are now, not where they were first placed.
+ * it, so a card never lands exactly on top of another one. Compares against
+ * where those cards are now, not where they were first placed.
  */
 function cascadeFrom(pageX: number, pageY: number, others: Iterable<Pin>): { x: number; y: number } {
   let px = pageX;
@@ -1471,6 +1797,7 @@ function cascadeFrom(pageX: number, pageY: number, others: Iterable<Pin>): { x: 
   const tooClose = (): boolean => {
     const left = clampPageLeft(px);
     for (const p of others) {
+      if (p.placement !== 'pinned') continue;
       const at = currentPagePos(p);
       if (Math.abs(at.x - left) < 48 && Math.abs(at.y - py) < 48) return true;
     }
@@ -1481,6 +1808,130 @@ function cascadeFrom(pageX: number, pageY: number, others: Iterable<Pin>): { x: 
     py += 36;
   }
   return { x: px, y: py };
+}
+
+/**
+ * Where to pin a card on the page so that it covers neither its own text
+ * nor another pinned card or that card's text (nor any of `extra`):
+ * below its text when that is free; else to its right, when the screen has
+ * room there; else the free spot nearest to "below its text" among the
+ * spots beside, above and below what is in the way, on screen across and
+ * at most half its own height further up or down. When there is none (a
+ * narrow screen full of cards), it cascades: down-right in steps off the
+ * other cards, which may then overlap. `fallback` stands in for "below its text" when the
+ * text is gone. Floating cards are left out: they stay on screen wherever
+ * the page is.
+ */
+function pinSpot(
+  pin: Pin,
+  others: Iterable<Pin>,
+  fallback: { x: number; y: number },
+  extra: readonly PageRect[] = [],
+): { x: number; y: number } {
+  const own = rangeBox(pin.range);
+  const below = own ? { x: own.left, y: own.bottom + MARGIN } : fallback;
+  const reach = cardSize(pin.host).h / 2;
+  const rest = Array.from(others).filter((o) => o !== pin);
+  return freeSpot(pin, rest, fallback, extra, reach) ?? cascadeFrom(below.x, below.y, rest);
+}
+
+/**
+ * The free spot of pinSpot, at most `reach` px above or below "below its
+ * text"; null when there is none.
+ */
+function freeSpot(
+  pin: Pin,
+  others: Iterable<Pin>,
+  fallback: { x: number; y: number },
+  extra: readonly PageRect[],
+  reach: number,
+): { x: number; y: number } | null {
+  const { w, h } = cardSize(pin.host);
+  const own = rangeBox(pin.range);
+  const blocked: PageRect[] = [...extra];
+  if (own) blocked.push(own);
+  for (const o of others) {
+    if (o === pin || o.placement !== 'pinned') continue;
+    blocked.push(pinBox(o));
+    const text = rangeBox(o.range);
+    if (text) blocked.push(text);
+  }
+  const free = (x: number, y: number): boolean => {
+    const box = { left: x, top: y, right: x + w, bottom: y + h };
+    return !blocked.some((b) => overlapsPage(box, b));
+  };
+  const below = own ? { x: own.left, y: own.bottom + MARGIN } : fallback;
+  const left0 = clampPageLeft(below.x);
+  if (free(left0, below.y)) return { x: left0, y: below.y };
+  // Spots must be on screen across, inside the page, and not far down.
+  const minX = Math.max(MARGIN, window.scrollX + MARGIN);
+  const maxX = window.scrollX + window.innerWidth - w - MARGIN;
+  const fits = (x: number, y: number): boolean =>
+    x >= minX && x <= maxX && clampPageLeft(x) === x && y >= MARGIN && Math.abs(y - below.y) <= reach;
+  if (own) {
+    const right = { x: own.right + MARGIN, y: own.top };
+    if (fits(right.x, right.y) && free(right.x, right.y)) return right;
+  }
+  const xs = new Set<number>([left0]);
+  const ys = new Set<number>([below.y]);
+  if (own) {
+    xs.add(own.right + MARGIN);
+    xs.add(own.left - w - MARGIN);
+    ys.add(own.top);
+    ys.add(own.top - h - MARGIN);
+  }
+  for (const b of blocked) {
+    xs.add(b.right + MARGIN);
+    xs.add(b.left - w - MARGIN);
+    ys.add(b.bottom + MARGIN);
+    ys.add(b.top - h - MARGIN);
+  }
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  for (const y of ys) {
+    for (const x of xs) {
+      const d = Math.hypot(x - left0, y - below.y);
+      if (d >= bestD || !fits(x, y) || !free(x, y)) continue;
+      best = { x, y };
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Before pinning `pin` by its text: a card among `among` that covers that
+ * text moves off it, a short way (beside, or at most its own height up or
+ * down) and not into the spot just below the text, unless the user put it
+ * where it is or there is no such spot. A card sent far from its own text
+ * is worse than one that covers another's.
+ */
+function makeRoomFor(pin: Pin, among: Iterable<Pin>): void {
+  const mine = rangeBox(pin.range);
+  if (!mine) return;
+  const size = cardSize(pin.host);
+  const left = clampPageLeft(mine.left);
+  const wanted = { left, top: mine.bottom + MARGIN, right: left + size.w, bottom: mine.bottom + MARGIN + size.h };
+  const list = Array.from(among).filter((o) => o !== pin);
+  for (const o of list) {
+    if (o.placement !== 'pinned' || o.host.dataset.tzxDragged === '1') continue;
+    if (!overlapsPage(pinBox(o), mine)) continue;
+    const rest = list.filter((p) => p !== o);
+    const to = freeSpot(o, rest, currentPagePos(o), [mine, wanted], cardSize(o.host).h);
+    if (!to) continue;
+    positionAbsolute(o.host, to.x, to.y);
+    o.pageX = to.x;
+    o.pageY = to.y;
+  }
+}
+
+/** Pin a new card by its text, where it covers no other pinned card or its text (see pinSpot). */
+function placeNewPin(pin: Pin, fallback: { x: number; y: number }): void {
+  makeRoomFor(pin, pins);
+  const at = pinSpot(pin, pins, fallback);
+  positionAbsolute(pin.host, at.x, at.y);
+  pin.pageX = at.x;
+  pin.pageY = at.y;
 }
 
 /**
@@ -1603,7 +2054,12 @@ function setPlacement(pin: Pin, placement: 'pinned' | 'floating', others?: Itera
   lockWidth(pin);
   const anchor = sourceAnchor(pin.range);
   if (anchor) {
-    const at = cascadeFrom(anchor.x, anchor.y, others ?? Array.from(pins).filter((p) => p !== pin));
+    // Measured as it will be once pinned (the "floating" tag goes).
+    pin.placement = placement;
+    renderNow(pin);
+    const among = Array.from(others ?? pins).filter((p) => p !== pin);
+    makeRoomFor(pin, among);
+    const at = pinSpot(pin, among, anchor);
     positionAbsolute(pin.host, at.x, at.y);
   } else {
     const r = pin.host.getBoundingClientRect();
@@ -1639,11 +2095,8 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
     const mount = document.createElement('div');
     shadow.appendChild(mount);
     document.body.appendChild(host);
-    // If this pin would land on top of an existing one (values close together
-    // on the page), cascade it down-right so every pinned card stays visible.
-    let px = spec.pageX;
-    let py = spec.pageY;
-    if (!spec.box) ({ x: px, y: py } = cascadeFrom(px, py, pins));
+    const px = spec.pageX;
+    const py = spec.pageY;
     const placement = spec.placement ?? 'pinned';
     if (spec.box) applyBox(host, placement === 'floating' ? 'fixed' : 'absolute', spec.box.top, spec.box.left);
     else positionAbsolute(host, px, py);
@@ -1657,7 +2110,8 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
       pageY: py,
       slot,
       range,
-      srcText: spec.srcText,
+      src: spec.src,
+      matches: spec.matches ? [...spec.matches] : [spec.parsed],
       parsed: spec.parsed,
       count: spec.count,
       capped: spec.capped ?? false,
@@ -1678,6 +2132,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
             compact: pin.compact,
             pinNumber: slot + 1,
             pinDot: color.dot,
+            onStep: pin.matches.length > 1 ? (delta: number) => stepPin(pin, delta) : undefined,
             onClose: () => {
               removePin(pin);
               refreshDock();
@@ -1705,7 +2160,12 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
       },
     };
     pins.add(pin);
-    pin.render();
+    if (spec.box) pin.render();
+    else {
+      // Measure it first: where it can go depends on its size.
+      renderNow(pin);
+      placeNewPin(pin, { x: px, y: py });
+    }
 
     if (!restore) {
       // The value is pinned in its own slot; drop the transient card and its
@@ -1722,14 +2182,43 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
   }
 }
 
+/** Move a pin's mark to the time it shows now. */
+function markPin(pin: Pin): void {
+  clearPinHighlight(pin.slot);
+  let range: Range | null = null;
+  try {
+    range = matchRange(pin.src, pin.parsed)?.cloneRange() ?? null;
+  } catch {
+    range = null;
+  }
+  pin.range = range;
+  setPinHighlight(pin.slot, range);
+}
+
+/**
+ * Show the previous (-1) or next (+1) time of a pin's selection, wrapping
+ * around, and move its mark there. The card stays where it is.
+ */
+function stepPin(pin: Pin, delta: number): void {
+  const n = pin.matches.length;
+  if (n < 2) return;
+  pin.index = (((pin.index + delta) % n) + n) % n;
+  pin.parsed = pin.matches[pin.index] as ParsedTime;
+  markPin(pin);
+  pin.render();
+}
+
 /** Read a pin's text again with the current settings, keeping the match it shows when it is still there. */
 function rereadPin(pin: Pin): void {
-  const again = reparse(pin.srcText, pin.parsed);
+  const again = reparse(pin.src, pin.parsed);
   if (again) {
+    const moved = !sameMatch(again.parsed, pin.parsed);
     pin.parsed = again.parsed;
+    pin.matches = again.matches;
     pin.count = again.count;
     pin.capped = again.capped;
     pin.index = again.index;
+    if (moved && pin.src.selRange) markPin(pin);
   }
   pin.render();
 }
@@ -1769,7 +2258,8 @@ function specOf(pin: Pin): PinSpec {
     count: pin.count,
     capped: pin.capped,
     index: pin.index,
-    srcText: pin.srcText,
+    matches: pin.matches,
+    src: pin.src,
     pageX: pin.pageX,
     pageY: pin.pageY,
     compact: pin.compact,
@@ -1933,9 +2423,10 @@ function inOurUi(node: Node): boolean {
  * instead of silence.
  */
 function showForSelection(src: CardSource, fromMenu = false, truncated = false): void {
-  const reading = readTimes(src.text);
+  const reading = readCard(src);
   if (reading.matches.length === 0) {
-    if (fromMenu) renderNoMatch(src.rect, src.text, truncated || src.text.length > SCAN_LIMIT);
+    // Menu text without a live selection arrives cut to MAX_MESSAGE_TEXT.
+    if (fromMenu) renderNoMatch(src.rect, src.text, truncated ? MAX_MESSAGE_TEXT : MAX_READ_CHARS);
     else teardownTransient();
     return;
   }
@@ -1944,10 +2435,11 @@ function showForSelection(src: CardSource, fromMenu = false, truncated = false):
 
 /** A card source with no page range (form fields, menu text). */
 function plainSource(rect: DOMRect, text: string): CardSource {
-  return { rect, text, range: null, selText: null, selLead: 0 };
+  return { rect, text, selRange: null, selText: null, selLead: 0 };
 }
 
-function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
+/** The "no time recognized" card; `checked` is how many characters of the text were read. */
+function renderNoMatch(rect: DOMRect, text: string, checked: number): void {
   clearLiveHighlight();
   teardownTransient();
   try {
@@ -1965,7 +2457,8 @@ function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
     tRoot.render(
       createElement(NoMatchCard, {
         text,
-        truncated,
+        truncated: checked < MAX_READ_CHARS || text.length > checked,
+        checkedChars: checked,
         onClose: () => dismissTransient(true),
         onDragStart: (e) => startDrag(hostEl, e, true),
         onOpenSettings: () => {
@@ -2041,7 +2534,17 @@ function readSelection(): CardSource | null {
     return null;
   }
   if (rect.width === 0 && rect.height === 0) return null;
-  return { text, rect, range, selText, selLead: selText.length - selText.trimStart().length };
+  // A selection the mouse just made opens on the time nearest the pointer
+  // when its best one is off screen (keyboard selections: nearest their end).
+  const point = lastPointer && Date.now() - lastPointer.at < POINTER_FRESH_MS ? lastPointer : null;
+  return {
+    text,
+    rect,
+    selRange: range.cloneRange(),
+    selText,
+    selLead: selText.length - selText.trimStart().length,
+    point: point ? { x: point.x, y: point.y } : null,
+  };
 }
 
 function handleSelectionChange(): void {
@@ -2089,6 +2592,11 @@ function convertFromMenu(menuText: string, truncated: boolean): void {
   showForSelection(plainSource(fallbackRect(), text), true, truncated);
 }
 
+/** Where the last mouse selection ended (viewport), and when. */
+let lastPointer: { x: number; y: number; at: number } | null = null;
+/** How long after the mouse is released its place still stands for the selection's end. */
+const POINTER_FRESH_MS = 1000;
+
 function onMouseUp(e: MouseEvent): void {
   // Right/middle clicks open menus; the menu item handles conversion then.
   if (e.button !== 0) return;
@@ -2100,6 +2608,7 @@ function onMouseUp(e: MouseEvent): void {
   const ours = pressInOurUi;
   pressInOurUi = false;
   if (ours) return;
+  lastPointer = { x: e.clientX, y: e.clientY, at: Date.now() };
   handleSelectionChange();
 }
 
@@ -2111,6 +2620,7 @@ let keyboardSelecting = false;
 function onKeyDownSelect(e: KeyboardEvent): void {
   if (e.shiftKey && SELECT_KEYS.has(e.key)) {
     keyboardSelecting = true;
+    lastPointer = null;
     return;
   }
   // Moving the caret without Shift collapses the selection: the next one is a
@@ -2120,6 +2630,7 @@ function onKeyDownSelect(e: KeyboardEvent): void {
   // and keydown because macOS does not send keyup for keys held with Cmd. The
   // selection changes after this event, so read it on the next tick.
   if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === 'KeyA') {
+    lastPointer = null;
     dismissedKey = null; // an explicit select-all is a fresh gesture
     window.setTimeout(handleSelectionChange, 0);
     return;
@@ -2191,7 +2702,7 @@ function followSettings(before: Preferences, now: Preferences): void {
   const st = tState;
   if (st && tHost) {
     applyHostTheme(tHost);
-    const again = reread ? reparse(st.srcText, st.parsed) : null;
+    const again = reread ? reparse(st, st.parsed) : null;
     if (again) takeReparse(st, again);
     else paintTransient();
   }
@@ -2235,7 +2746,8 @@ function install(): ContentInstance {
     if (p.keepSelection !== before.keepSelection) syncHighlights();
     followSettings(before, p);
   });
-  refreshFocusKey();
+  // The focus key is asked for when a card opens (see renderTransient), so
+  // a page load does not wake the service worker.
 
   document.addEventListener('mouseup', onMouseUp);
   document.addEventListener('keyup', onKeyUp);

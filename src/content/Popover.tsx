@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DateOnlyPolicy, NumericDateOrder, ParsedTime, Preferences } from '../types';
 import { formatCalendarDate, resolveLocalZone } from '../types';
 import { viewInZone, isValidZone, sameZone, zoneLabel, resolveZone } from '../lib/tz';
-import { SCAN_LIMIT } from '../lib/parse';
+import { MAX_READ_CHARS } from '../lib/read-times';
 // The DST note shares one wording with the popup and the website.
 import { wallClockNote } from '../lib/wall-note';
 import { ZonePicker, ZONE_PICKER_CSS } from '../popup/ZonePicker';
@@ -658,6 +658,8 @@ export interface NoMatchCardProps {
   readonly text: string;
   /** True when the selection was longer than what is checked. */
   readonly truncated?: boolean;
+  /** How many characters of it were checked then (default MAX_READ_CHARS). */
+  readonly checkedChars?: number;
   readonly onClose: () => void;
   readonly onOpenSettings: () => void;
   readonly onDragStart?: (e: React.PointerEvent) => void;
@@ -669,7 +671,14 @@ const MAX_QUOTE = 80;
  * Shown when the user explicitly asked to convert (right-click menu) but no
  * enabled format recognized the selection.
  */
-export function NoMatchCard({ text, truncated = false, onClose, onOpenSettings, onDragStart }: NoMatchCardProps): JSX.Element {
+export function NoMatchCard({
+  text,
+  truncated = false,
+  checkedChars = MAX_READ_CHARS,
+  onClose,
+  onOpenSettings,
+  onDragStart,
+}: NoMatchCardProps): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const oneLine = text.replace(/\s+/g, ' ').trim();
   const quote = oneLine.length > MAX_QUOTE ? `${oneLine.slice(0, MAX_QUOTE - 1)}…` : oneLine;
@@ -693,8 +702,8 @@ export function NoMatchCard({ text, truncated = false, onClose, onOpenSettings, 
       <p>
         No date or time recognized in <span className="tzx-quote">“{quote}”</span>.
       </p>
-      {(truncated || text.length > SCAN_LIMIT) && (
-        <p>Only the first {SCAN_LIMIT.toLocaleString('en-US')} characters of a selection are checked.</p>
+      {(truncated || text.length > checkedChars) && (
+        <p>Only the first {checkedChars.toLocaleString('en-US')} characters of a selection are checked.</p>
       )}
       <p>If this is a format your sites use, add it as a custom format.</p>
       <button type="button" className="tzx-linkbtn" onClick={onOpenSettings}>

@@ -295,6 +295,30 @@ export function normalizeSigns(text: string): string {
   return text.replace(/\u2212/g, '-').replace(/(?<=(?:GMT|UTC))\u2013(?=\d)/gi, '-');
 }
 
+/**
+ * Spaces other than U+0020 that pages and formatters put between a time and
+ * its zone or AM/PM: no-break (U+00A0, "13:30&nbsp;UTC"), narrow no-break
+ * (U+202F, which CLDR 42+ puts before AM/PM: "1:30 PM"), the U+2000–U+200A
+ * spaces (thin U+2009, figure U+2007, hair U+200A...), U+205F and the
+ * ideographic space U+3000.
+ */
+const ODD_SPACE = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/;
+const ODD_SPACES = new RegExp(ODD_SPACE.source, 'g');
+
+/**
+ * Replace the spaces in ODD_SPACE by U+0020, so formats that read `[ \t]`
+ * see them as spaces. One UTF-16 unit for one, so indexes and lengths in the
+ * result match the original text (as in normalizeSigns).
+ */
+export function normalizeSpaces(text: string): string {
+  return ODD_SPACE.test(text) ? text.replace(ODD_SPACES, ' ') : text;
+}
+
+/** What every format reads: ASCII minus signs and plain spaces, same length as `text`. */
+export function normalizeForMatching(text: string): string {
+  return normalizeSpaces(normalizeSigns(text));
+}
+
 /** "+0545" / "+05:45" -> "+05:45"; anything else -> null. */
 export function normalizeOffsetToken(tok: string): string | null {
   const m = /^([+-])(\d{2}):?(\d{2})$/.exec(normalizeSigns(tok));
@@ -373,6 +397,25 @@ export function isRealDate(year: number, month: number, day: number): boolean {
   return day <= dim;
 }
 
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * One year/month/day formatter per zone. Creating an Intl.DateTimeFormat
+ * costs far more than using one, and every bare time ("10:00") asks for
+ * today's date. Throws for an unknown zone, as the constructor does.
+ */
+function dateFormatter(zone: string): Intl.DateTimeFormat {
+  let f = dateFormatters.get(zone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone: tzArg(zone), year: 'numeric', month: '2-digit', day: '2-digit' });
+    if (dateFormatters.size > 200) dateFormatters.clear();
+    dateFormatters.set(zone, f);
+  }
+  return f;
+}
+
+let lastToday: { zone: string; second: number; date: { y: number; mo: number; d: number } } | null = null;
+
 /** Calendar date "now" in a zone (or at a fixed UTC offset in minutes). */
 export function todayIn(zone: string | number, nowMs: number = Date.now()): { y: number; mo: number; d: number } {
   if (typeof zone === 'number') {
@@ -381,18 +424,19 @@ export function todayIn(zone: string | number, nowMs: number = Date.now()): { y:
   }
   const fixed = resolveZone(zone)?.minutes;
   if (fixed !== undefined) return todayIn(fixed, nowMs);
+  // A parse asks this for every bare time; the date only changes at midnight.
+  const second = Math.floor(nowMs / 1000);
+  if (lastToday && lastToday.zone === zone && lastToday.second === second) return { ...lastToday.date };
   try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tzArg(zone),
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(new Date(nowMs));
+    const parts = dateFormatter(zone).formatToParts(new Date(nowMs));
     const get = (t: string): number => Number(parts.find((p) => p.type === t)?.value ?? NaN);
     const y = get('year');
     const mo = get('month');
     const d = get('day');
-    if (Number.isFinite(y) && Number.isFinite(mo) && Number.isFinite(d)) return { y, mo, d };
+    if (Number.isFinite(y) && Number.isFinite(mo) && Number.isFinite(d)) {
+      lastToday = { zone, second, date: { y, mo, d } };
+      return { y, mo, d };
+    }
   } catch {
     /* fall through to UTC */
   }

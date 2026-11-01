@@ -360,7 +360,8 @@ test.describe('v2 features', () => {
     await card(page).getByLabel('Pin to page').click();
     const pin = page.locator('.tz-extension-pin-host .tzx-card');
     await expect(pin.locator('.tzx-src > span').first()).toHaveText('“2024-03-25”');
-    await expect(pin.locator('.tzx-more')).toHaveText('+1 more time in selection');
+    // Round 6 (QA F12): the pin keeps the stepper, on the step it was pinned at.
+    await expect(pin.locator('[aria-live="polite"]')).toHaveText('Time 2 of 2');
     await page.waitForTimeout(600);
     await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
     await page.close();
@@ -661,6 +662,29 @@ test.describe('v2 features', () => {
     return page;
   }
 
+  /**
+   * Pinned cards that overlap each other, and cards over another card's
+   * date (round 6, QA F6), as "i/j" and "i>date j".
+   */
+  async function coverReport(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+      const over = (a: DOMRect, b: DOMRect): boolean =>
+        a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      const cards = Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((h) => h.getBoundingClientRect());
+      const dates = Array.from(document.querySelectorAll('p span')).map((s) => s.getBoundingClientRect());
+      const out: string[] = [];
+      cards.forEach((c, i) => {
+        cards.forEach((d, j) => {
+          if (i < j && over(c, d)) out.push(`${i}/${j}`);
+        });
+        dates.forEach((d, j) => {
+          if (over(c, d)) out.push(`${i}>date ${j}`);
+        });
+      });
+      return out;
+    });
+  }
+
   /** For each card: how many of its header buttons are what sits under their centre, of how many, and its box. */
   async function headerReach(page: Page): Promise<Array<{ hit: number; of: number; box: number[] }>> {
     return page.evaluate(() =>
@@ -703,9 +727,18 @@ test.describe('v2 features', () => {
       await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Pin all to page' }).click();
       await expect(pins.locator('.tzx-card.floating')).toHaveCount(0);
       const tops = await pins.evaluateAll((hosts) => hosts.map((h) => Math.round(h.getBoundingClientRect().top)));
-      // Back where they were pinned: 8 px below their own date.
+      // Back where they were pinned.
       expect(tops).toEqual(pinnedTops);
-      tops.forEach((t, i) => expect(Math.abs(t - (sources[i]! + 8)), `card ${i}: ${tops} vs ${sources}`).toBeLessThanOrEqual(1));
+      if (width < 400) {
+        // No room beside: 8 px below their own date.
+        tops.forEach((t, i) => expect(Math.abs(t - (sources[i]! + 8)), `card ${i}: ${tops} vs ${sources}`).toBeLessThanOrEqual(1));
+      } else {
+        // Round 6 (QA F6): room beside, so no card covers another or another's
+        // date; each stays within a card's height of just below its date.
+        expect(await coverReport(page)).toEqual([]);
+        const h = await pins.evaluateAll((hosts) => hosts.map((x) => x.getBoundingClientRect().height));
+        tops.forEach((t, i) => expect(Math.abs(t - (sources[i]! + 8)), `card ${i}: ${tops} vs ${sources}`).toBeLessThanOrEqual(h[i]! + 1));
+      }
       await page.close();
     });
   }
@@ -714,16 +747,15 @@ test.describe('v2 features', () => {
     test.setTimeout(90_000);
     const page = await pinMany(15, 1280, 800);
     // Every pinned card has the same width (pins 10 to 15 have two-digit
-    // numbers), and each sits at its own date's left edge.
-    const placed = await page.evaluate(() => {
-      const spans = Array.from(document.querySelectorAll('p span'));
-      return Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((h, i) => ({
+    // numbers). Round 6 (QA F6): they no longer all sit at their date's left
+    // edge, stacked over each other; none covers another or another's date.
+    const placed = await page.evaluate(() =>
+      Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((h) => ({
         w: Math.round(h.getBoundingClientRect().width),
-        dx: Math.round(h.getBoundingClientRect().left - spans[i]!.getBoundingClientRect().left),
-      }));
-    });
+      })),
+    );
     expect(new Set(placed.map((p) => p.w)).size, JSON.stringify(placed)).toBe(1);
-    expect(placed.map((p) => p.dx)).toEqual(placed.map(() => 0));
+    expect(await coverReport(page)).toEqual([]);
     await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
     await expect(page.locator('.tz-extension-pin-host .tzx-card.floating')).toHaveCount(15);
     const reach = await headerReach(page);
@@ -933,5 +965,222 @@ test.describe('v2 features', () => {
     expect(errors).toEqual([]);
     await clock.close();
     await popup.close();
+  });
+
+  // --- Round 6 ---------------------------------------------------------------
+
+  /** The text of a highlight (live mark by default), joined. */
+  const highlightText = (page: Page, name = 'tz-extension-match'): Promise<string> =>
+    page.evaluate((n) => {
+      const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get(n);
+      return hl ? Array.from(hl).map(String).join('|') : '';
+    }, name);
+
+  /** Viewport box of a highlight's first range. */
+  const highlightBox = (page: Page, name = 'tz-extension-match'): Promise<{ top: number; bottom: number; left: number; right: number } | null> =>
+    page.evaluate((n) => {
+      const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get(n);
+      const r = hl ? (Array.from(hl)[0] as Range | undefined) : undefined;
+      if (!r) return null;
+      const b = r.getBoundingClientRect();
+      return { top: b.top, bottom: b.bottom, left: b.left, right: b.right };
+    }, name);
+
+  /** Select an element's contents and end it as a mouse drag would, at (x, y). */
+  async function selectAll(page: Page, id: string, at?: { x: number; y: number }): Promise<void> {
+    await page.evaluate(
+      ({ id, at }) => {
+        const r = document.createRange();
+        r.selectNodeContents(document.getElementById(id) as HTMLElement);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(r);
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: at?.x ?? 0, clientY: at?.y ?? 0 }));
+      },
+      { id, at },
+    );
+  }
+
+  test('round 6: on text-transform pages the marks and the pin mark the time, not the paragraph', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const page = await openPage(
+      '<p id="up" style="text-transform:uppercase">meet 10:00 utc then 3pm est, deploy 2024-04-02 18:00 utc</p>' +
+        '<p id="cap" style="text-transform:capitalize">call at 10:00 utc today</p>',
+    );
+    expect(await page.evaluate(() => {
+      const r = document.createRange();
+      r.selectNodeContents(document.getElementById('up') as HTMLElement);
+      const s = window.getSelection();
+      s?.removeAllRanges();
+      s?.addRange(r);
+      return s?.toString();
+    })).toBe('MEET 10:00 UTC THEN 3PM EST, DEPLOY 2024-04-02 18:00 UTC');
+    await selectAll(page, 'up');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const status = card(page).locator('[aria-live="polite"]');
+    await expect(status).toHaveText('Time 3 of 3');
+    await expect.poll(() => highlightText(page)).toBe('2024-04-02 18:00 utc');
+    await card(page).getByRole('button', { name: 'Next time' }).click();
+    await expect.poll(() => highlightText(page)).toBe('10:00 utc');
+    await card(page).getByRole('button', { name: 'Next time' }).click();
+    await expect.poll(() => highlightText(page)).toBe('3pm est');
+    await card(page).getByRole('button', { name: 'Pin to page' }).click();
+    await expect(page.locator('.tz-extension-pin-host')).toHaveCount(1);
+    await expect.poll(() => highlightText(page, 'tz-pin-0')).toBe('3pm est');
+    await selectAll(page, 'cap');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect.poll(() => highlightText(page)).toBe('10:00 utc');
+    await page.close();
+  });
+
+  test('round 6: off-screen and screen-reader-only times are left out; a positioned edge is a word break', async () => {
+    await setPrefs({ homeZone: 'Asia/Tokyo', targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const page = await openPage(
+      '<p id="off">x <span style="position:absolute;left:-9999px">2024-08-12 06:00 UTC</span> y</p>' +
+        '<p id="sr">Updated <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap">on 2024-08-13 07:00 UTC</span><span aria-hidden="true">3 days ago</span></p>' +
+        '<p id="mix">Visible 2024-08-01 10:00 UTC and offscreen <span style="position:absolute;left:-9999px">2024-08-12 06:00 UTC</span> end</p>' +
+        '<p id="glue" style="position:relative">Updated <span style="position:absolute;left:0;top:30px">2024-08-13 07:00 UTC</span> 3 days ago</p>',
+    );
+    for (const id of ['off', 'sr']) {
+      await selectAll(page, id);
+      await page.waitForTimeout(500);
+      await expect(card(page), `#${id}`).toHaveCount(0);
+    }
+    await selectAll(page, 'mix');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(card(page).locator('.tzx-src span').first()).toHaveText('“2024-08-01 10:00 UTC”');
+    await expect(card(page).locator('.tzx-step')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await selectAll(page, 'glue');
+    // Chrome's string runs the positioned time into the next words.
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Updated 2024-08-13 07:00 UTC3 days ago');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(card(page).locator('.tzx-src span').first()).toHaveText('“2024-08-13 07:00 UTC”');
+    await expect(card(page).locator('.tzx-src')).toContainText('read as UTC');
+    await page.close();
+  });
+
+  test('round 6: two pins 140 px apart cover neither each other nor each other’s marked time', async () => {
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC', 'Asia/Tokyo'], cardSize: 'full', keepSelection: true, numericDateOrder: 'mdy' });
+    const page = await openPage(
+      '<p id="l1" style="margin:0;line-height:20px">Standup is at 09:00 UTC, every day</p>' +
+        '<p id="l2" style="margin:120px 0 0;line-height:20px">03/04/2024 10:00 and 05/06/2024 11:00</p>',
+    );
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await selectAll(page, 'l1');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await card(page).getByRole('button', { name: 'Pin to page' }).click();
+    await expect(page.locator('.tz-extension-pin-host')).toHaveCount(1);
+    await selectAll(page, 'l2');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const status = card(page).locator('[aria-live="polite"]');
+    if ((await status.textContent())?.includes('1 of 2')) await card(page).getByRole('button', { name: 'Next time' }).click();
+    await expect(status).toHaveText('Time 2 of 2');
+    await card(page).getByRole('button', { name: 'Pin to page' }).click();
+    await expect(page.locator('.tz-extension-pin-host')).toHaveCount(2);
+    await page.waitForTimeout(200);
+    const boxes = await page.evaluate(() => {
+      const rect = (b: DOMRect): { top: number; bottom: number; left: number; right: number } => ({ top: b.top, bottom: b.bottom, left: b.left, right: b.right });
+      const pins = Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((h) => rect(h.getBoundingClientRect()));
+      const reg = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights;
+      const marks = ['tz-pin-0', 'tz-pin-1'].map((n) => rect((Array.from(reg.get(n) ?? [])[0] as Range).getBoundingClientRect()));
+      return { pins, marks, gap: document.getElementById('l2')!.getBoundingClientRect().top - document.getElementById('l1')!.getBoundingClientRect().top };
+    });
+    expect(boxes.gap).toBe(140);
+    const over = (a: { top: number; bottom: number; left: number; right: number }, b: typeof a): boolean =>
+      a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    expect(over(boxes.pins[0]!, boxes.pins[1]!)).toBe(false);
+    for (const p of boxes.pins) for (const m of boxes.marks) expect(over(p, m)).toBe(false);
+    console.log('pins', JSON.stringify(boxes));
+    await page.close();
+  });
+
+  test('round 6: a pin keeps the stepper and a step moves its mark', async () => {
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const page = await openPage('<p id="t">Standup 09:00 UTC, review 13:30 UTC, deploy 2024-04-02 18:00 UTC</p>');
+    await selectAll(page, 't');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await card(page).getByRole('button', { name: 'Pin to page' }).click();
+    const pin = page.locator('.tz-extension-pin-host .tzx-card');
+    await expect(pin.locator('[aria-live="polite"]')).toHaveText('Time 3 of 3');
+    await expect.poll(() => highlightText(page, 'tz-pin-0')).toBe('2024-04-02 18:00 UTC');
+    await pin.getByRole('button', { name: 'Next time' }).click();
+    await expect(pin.locator('[aria-live="polite"]')).toHaveText('Time 1 of 3');
+    await expect.poll(() => highlightText(page, 'tz-pin-0')).toBe('09:00 UTC');
+    await page.close();
+  });
+
+  test('round 6: a selection running above the screen opens on a time on screen, and a step scrolls with a margin', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const lines = Array.from(
+      { length: 60 },
+      (_, i) => `<div style="line-height:32px">Item ${i} at 2024-06-${String((i % 28) + 1).padStart(2, '0')} ${String(i % 24).padStart(2, '0')}:05 UTC</div>`,
+    ).join('');
+    const page = await openPage(`<section id="list">${lines}</section>`);
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.evaluate(() => window.scrollTo(0, 900));
+    await selectAll(page, 'list', { x: 200, y: 300 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const mark = await highlightBox(page);
+    expect(mark).not.toBeNull();
+    expect(mark!.top).toBeGreaterThanOrEqual(0);
+    expect(mark!.bottom).toBeLessThanOrEqual(700);
+    // Nearest the mouse (y = 300).
+    expect(Math.abs((mark!.top + mark!.bottom) / 2 - 300)).toBeLessThan(40);
+    // Step past the bottom of the screen: the time lands at least 40 px clear of the edge.
+    const status = card(page).locator('[aria-live="polite"]');
+    let moved = false;
+    for (let i = 0; i < 20; i++) {
+      const before = await page.evaluate(() => window.scrollY);
+      await card(page).getByRole('button', { name: 'Next time' }).click();
+      await page.waitForTimeout(60);
+      const after = await page.evaluate(() => window.scrollY);
+      if (after !== before) {
+        const b = await highlightBox(page);
+        expect(b!.bottom).toBeLessThanOrEqual(700 - 40);
+        moved = true;
+        break;
+      }
+    }
+    expect(moved).toBe(true);
+    await expect(status).toBeVisible();
+    await page.close();
+  });
+
+  test('round 6: Ctrl+A on a 2.5M-character page opens a card on its time (timings logged)', async () => {
+    test.setTimeout(120_000);
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const para = '<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>';
+    const page = await openPage(`<p>Release at 2024-04-02 18:00 UTC</p>${para.repeat(20000)}`);
+    await page.evaluate(() => {
+      (window as unknown as { __lt: number[] }).__lt = [];
+      new PerformanceObserver((l) => {
+        for (const e of l.getEntries()) (window as unknown as { __lt: number[] }).__lt.push(Math.round(e.duration));
+      }).observe({ type: 'longtask', buffered: false });
+    });
+    const chars = await page.evaluate(() => document.body.innerText.length);
+    // What the browser itself spends on the selection (string and line boxes), for comparison.
+    const own = await page.evaluate(() => {
+      const r = document.createRange();
+      r.selectNodeContents(document.body);
+      const t0 = performance.now();
+      const s = r.toString();
+      const t1 = performance.now();
+      r.getClientRects();
+      const t2 = performance.now();
+      return { toString: Math.round(t1 - t0), rects: Math.round(t2 - t1), len: s.length };
+    });
+    await page.evaluate(() => {
+      (window as unknown as { __lt: number[] }).__lt = [];
+    });
+    const t0 = Date.now();
+    await page.keyboard.press('ControlOrMeta+a');
+    await expect(card(page)).toBeVisible({ timeout: 60_000 });
+    const open = Date.now() - t0;
+    await page.waitForTimeout(500);
+    const lt = await page.evaluate(() => (window as unknown as { __lt: number[] }).__lt);
+    await expect.poll(() => highlightText(page)).toBe('2024-04-02 18:00 UTC');
+    console.log(`chars=${chars} open=${open}ms longTasks=${JSON.stringify(lt)} browserOwn=${JSON.stringify(own)}`);
+    await page.close();
   });
 });

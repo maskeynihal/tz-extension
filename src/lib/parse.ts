@@ -1,7 +1,7 @@
 import type { CustomFormat, DateOnlyPolicy, NumericDateOrder, ParsedTime } from '../types';
 import { BUILTIN_FORMATS, type BuiltinMatchContext } from './builtin-formats';
 import { isVeto, matchCustomFormat, now, type Candidate, type MatchResult } from './custom-formats';
-import { normalizeSigns } from './time-tokens';
+import { normalizeForMatching } from './time-tokens';
 
 /**
  * Only this many characters of a selection are scanned. Built-in and token
@@ -40,9 +40,10 @@ type Ranked = MatchResult & {
 
 /**
  * How much a match pins down: a calendar date, a time of day, and an explicit
- * zone each count. An epoch is a full instant.
+ * zone each count. An epoch is a full instant. parseTimes puts the first
+ * match with the highest value first; readTimes opens on the same one.
  */
-function specificity(p: ParsedTime): number {
+export function specificity(p: ParsedTime): number {
   // An epoch is a full instant, but a bare 10-digit run is weaker evidence
   // than a written timestamp with a zone (it may be a phone or ticket number).
   if (p.kind === 'epoch-seconds' || p.kind === 'epoch-millis') return 3;
@@ -68,8 +69,49 @@ function withSource(c: Candidate, src: string, original: string, lead: number): 
   return { ...c.parsed, matchedText: span === text || found < 0 ? text : span, sourceIndex: lead + at };
 }
 
-function overlaps(a: { index: number; length: number }, b: { index: number; length: number }): boolean {
+type Span = { readonly index: number; readonly length: number };
+
+function overlaps(a: Span, b: Span): boolean {
   return a.index < b.index + b.length && b.index < a.index + a.length;
+}
+
+/**
+ * Keep each span (in the given order) that overlaps none kept before it.
+ * The kept spans are disjoint, so they are held sorted by start and each new
+ * one is checked against its two neighbours (a binary search) rather than
+ * against all of them.
+ */
+function keepDisjoint<T extends Span>(spans: readonly T[]): T[] {
+  const kept: T[] = [];
+  const byStart: T[] = [];
+  for (const c of spans) {
+    let lo = 0;
+    let hi = byStart.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (byStart[mid]!.index < c.index) lo = mid + 1;
+      else hi = mid;
+    }
+    const prev = byStart[lo - 1];
+    const next = byStart[lo];
+    if ((prev && overlaps(prev, c)) || (next && overlaps(next, c))) continue;
+    byStart.splice(lo, 0, c);
+    kept.push(c);
+  }
+  return kept;
+}
+
+/** What parseTimesDetailed returns. */
+export interface DetailedParse {
+  /** As parseTimes returns them: the best match first, then document order. */
+  readonly results: ParsedTime[];
+  /**
+   * Index into the text passed in up to which every format read fully: a
+   * format that stopped at its match cap, or the SCAN_LIMIT cut, ends it.
+   * Equals `text.length` when nothing was cut. Every match that starts
+   * before it was proposed.
+   */
+  readonly complete: number;
 }
 
 /**
@@ -85,15 +127,30 @@ function overlaps(a: { index: number; length: number }, b: { index: number; leng
  * Accepts either a plain assumed-zone string (back-compat) or ParseOptions.
  */
 export function parseTimes(text: string, opts: string | ParseOptions): ParsedTime[] {
+  return parseTimesDetailed(text, opts).results;
+}
+
+/**
+ * parseTimes, plus where the formats stopped reading (see DetailedParse).
+ * Internal: readTimes uses it to read on past the per-format match cap.
+ */
+export function parseTimesDetailed(
+  text: string,
+  opts: string | ParseOptions,
+  /** Matches per format before it stops; default 25 (see MatchContext.maxMatches). */
+  maxMatches?: number,
+): DetailedParse {
   const o: ParseOptions = typeof opts === 'string' ? { assumedZone: opts } : opts;
   const trimmed = text.trim();
-  if (trimmed.length === 0) return [];
+  if (trimmed.length === 0) return { results: [], complete: text.length };
   // sourceIndex counts from the untrimmed text.
   const offset = text.length - text.trimStart().length;
   const original = trimmed.slice(0, SCAN_LIMIT);
-  // Formats see ASCII minus signs ("UTC−5" -> "UTC-5"). The replacement keeps
-  // every index, so the highlighted text is cut from the original below.
-  const src = normalizeSigns(original);
+  // Formats see ASCII minus signs ("UTC−5" -> "UTC-5") and plain spaces for
+  // no-break and thin ones ("13:30&nbsp;UTC"). The replacement keeps every
+  // index, so the highlighted text is cut from the original below.
+  const src = normalizeForMatching(original);
+  let complete = original.length < trimmed.length ? offset + original.length : text.length;
 
   const ctx: BuiltinMatchContext = {
     assumedZone: o.assumedZone,
@@ -102,6 +159,10 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
     numericDateOrder: o.numericDateOrder,
     // All custom regexes together get this long per selection.
     deadline: now() + CUSTOM_TIME_BUDGET_MS,
+    maxMatches,
+    onCapped: (scannedTo) => {
+      complete = Math.min(complete, offset + scannedTo);
+    },
   };
   const disabled = new Set(o.disabledFormats ?? []);
   const ranked: Ranked[] = [];
@@ -122,10 +183,7 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
   });
 
   ranked.sort((a, b) => b.length - a.length || a.priority - b.priority || a.index - b.index);
-  const kept: Ranked[] = [];
-  for (const c of ranked) {
-    if (!kept.some((k) => overlaps(k, c))) kept.push(c);
-  }
+  const kept = keepDisjoint(ranked);
   // Vetoed spans claimed their text; they produce no result.
   const chosen = kept.filter((c): c is Candidate & { priority: number } => !isVeto(c));
   // The most specific match leads (it is what the popover shows); the rest
@@ -147,5 +205,5 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
     seen.add(key);
     out.push(withSource(c, src, original, offset));
   }
-  return out;
+  return { results: out, complete };
 }

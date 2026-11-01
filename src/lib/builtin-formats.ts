@@ -29,6 +29,9 @@ export interface BuiltinMatchContext extends MatchContext {
   readonly numericDateOrder?: NumericDateOrder;
 }
 
+/** Raw matches (vetoes included) one regex of a built-in format yields per parse. */
+const MAX_MATCHES = 25;
+
 /**
  * The formats the extension recognizes out of the box. Each entry is listed
  * on the settings page (where it can be switched off) and runs as one matcher
@@ -44,8 +47,6 @@ export interface BuiltinFormat {
   readonly regex: RegExp;
   readonly match: (src: string, ctx: BuiltinMatchContext) => MatchResult[];
 }
-
-const MAX_MATCHES = 25;
 
 /** Returned by a converter: the shape matched but the values are impossible. */
 const VETO = 'veto' as const;
@@ -65,6 +66,7 @@ type SizedVeto = { veto: number };
 function scan(
   regex: RegExp,
   src: string,
+  ctx: BuiltinMatchContext,
   convert: (m: RegExpExecArray) => Converted | typeof VETO | SizedVeto | null,
 ): MatchResult[] {
   const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : `${regex.flags}g`);
@@ -72,7 +74,8 @@ function scan(
   let guard = 0;
   let m: RegExpExecArray | null;
   // Each failed attempt advances at least one character, so src.length bounds the loop.
-  while (out.length < MAX_MATCHES && guard++ <= src.length + 1 && (m = re.exec(src)) !== null) {
+  const cap = ctx.maxMatches ?? MAX_MATCHES;
+  while (out.length < cap && guard++ <= src.length + 1 && (m = re.exec(src)) !== null) {
     if (m[0].length === 0) {
       re.lastIndex = m.index + 1;
       continue;
@@ -89,6 +92,8 @@ function scan(
       re.lastIndex = m.index + 1;
     }
   }
+  // Stopped at the cap: the next search would have started at lastIndex.
+  if (out.length >= cap) ctx.onCapped?.(re.lastIndex);
   return out;
 }
 
@@ -350,10 +355,12 @@ function scriptureBefore(line: string, hour: string, minutes: string, after: str
   const m = NAME_BOOK_BEFORE.exec(line);
   if (!m) return false;
   const g = m.groups ?? {};
-  // A book number or "verse"/"chapter" settles it: "2 Peter 1:16-2:10", "1 John 09:41".
+  // There is no verse 0 and no chapter 09: ":00" minutes or a zero-padded
+  // hour is a time even after a book number ("1 John 10:00-11:30",
+  // "1 Samuel 9:00-9:45", "1 John 09:41").
+  if (minutes === '00' || /^0\d/.test(hour)) return false;
+  // A book number or "verse"/"chapter" settles it: "2 Peter 1:16-2:10".
   if (g.num || g.ctx) return true;
-  // Otherwise a zero-padded hour is never a verse.
-  if (/^0\d/.test(hour)) return false;
   if (VERSE_AFTER.test(after)) return true;
   const before = line.slice(0, m.index + (g.lead ?? '').length);
   const opensLine = /^[\s"'“‘«([*>•–—-]*$/.test(before);
@@ -366,6 +373,16 @@ const RATIO_WORD = 'odds|ratios?|scale|aspect|split|mix|proportions?';
 const RATIO_BEFORE = new RegExp(String.raw`(?<![${L}])(?:${RATIO_WORD})(?:[ \t]+(?:of|is|was|=))?[ \t:=]*$`, 'i');
 const RATIO_AFTER = new RegExp(String.raw`^[ \t]*(?:${RATIO_WORD})(?![${L}])`, 'i');
 
+// Connector between the date and the time: "T", ",", "at", "um", "à", "a las".
+// Only real connector words count, so "2024-01-02, see at 10:00" keeps 10:00.
+const DATE_TAIL = String.raw`[T,]?\s*(?:(?:at|on|um|à|a|las|les|le|el|om|alle|kl\.?|ob|o|klo|-)\s+){0,2}$`;
+const DATE_BEFORE_NUMERIC = new RegExp(String.raw`(?<![\w.:/-])(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})\.?${DATE_TAIL}`, 'i');
+const DATE_BEFORE_DAY_MONTH = new RegExp(
+  String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\.?(?:\s+|-)([${L}]{3,10})\.?,?(?:(?:\s+|-)\d{2,4})?,?${DATE_TAIL}`,
+  'i',
+);
+const DATE_BEFORE_MONTH_DAY = new RegExp(String.raw`\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?(?:\s+\d{4})?,?${DATE_TAIL}`, 'i');
+
 /**
  * True when the text just before `index` ends in a date that no enabled
  * format read ("31/12/2024 ", "24.12.2024 um ", "Dec 31 at ", "2 Jan "). A
@@ -375,11 +392,7 @@ const RATIO_AFTER = new RegExp(String.raw`^[ \t]*(?:${RATIO_WORD})(?![${L}])`, '
  */
 function dateLikeBefore(src: string, index: number): boolean {
   const before = src.slice(Math.max(0, index - 40), index);
-  // Connector between the date and the time: "T", ",", "at", "um", "à", "a las".
-  // Only real connector words count, so "2024-01-02, see at 10:00" keeps 10:00.
-  const tail = String.raw`[T,]?\s*(?:(?:at|on|um|à|a|las|les|le|el|om|alle|kl\.?|ob|o|klo|-)\s+){0,2}$`;
-
-  const numeric = new RegExp(String.raw`(?<![\w.:/-])(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})\.?${tail}`, 'i').exec(before);
+  const numeric = DATE_BEFORE_NUMERIC.exec(before);
   if (numeric) {
     const [a, b, c] = [numeric[1] ?? '', numeric[2] ?? '', numeric[3] ?? ''];
     const n = [Number(a), Number(b), Number(c)];
@@ -392,9 +405,9 @@ function dateLikeBefore(src: string, index: number): boolean {
       if (x >= 1 && y >= 1 && x <= 31 && y <= 31 && (x <= 12 || y <= 12)) return true; // D-M-YY or M-D-YY
     }
   }
-  const dayMon = new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\.?(?:\s+|-)([${L}]{3,10})\.?,?(?:(?:\s+|-)\d{2,4})?,?${tail}`, 'i').exec(before);
+  const dayMon = DATE_BEFORE_DAY_MONTH.exec(before);
   if (dayMon && isMonthWord(dayMon[2]) && Number(dayMon[1]) <= 31) return true;
-  const monDay = new RegExp(String.raw`\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?(?:\s+\d{4})?,?${tail}`, 'i').exec(before);
+  const monDay = DATE_BEFORE_MONTH_DAY.exec(before);
   if (monDay && isMonthWord(monDay[1]) && Number(monDay[2]) <= 31) return true;
   return false;
 }
@@ -528,7 +541,7 @@ function numericDate(
 
 function epochMatcher(id: string, label: string, unit: 'seconds' | 'milliseconds', regex: RegExp): BuiltinFormat['match'] {
   return (src, ctx) =>
-    scan(regex, src, (m) => {
+    scan(regex, src, ctx, (m) => {
       const raw = m[1] ?? '';
       const ep = parseEpoch(raw, unit);
       if (!ep) return null;
@@ -556,7 +569,7 @@ function writtenMatcher(
   monthOf: (name: string | undefined) => number | undefined,
 ): BuiltinFormat['match'] {
   return (src, ctx) =>
-    scan(regex, src, (m) => {
+    scan(regex, src, ctx, (m) => {
       const g = (m.groups ?? {}) as Record<string, string | undefined>;
       // "on 22 March 1999": the leading word is not part of the date. Nor is
       // a weekday abbreviation that is also a month ("Mar", Spanish martes):
@@ -635,7 +648,7 @@ function numericMatcher(src: string, ctx: BuiltinMatchContext): MatchResult[] {
       length: text.length,
     };
   };
-  return [...scan(RE_NUMERIC, src, convert), ...scan(RE_NUMERIC_TIME_FIRST, src, convert)];
+  return [...scan(RE_NUMERIC, src, ctx, convert), ...scan(RE_NUMERIC_TIME_FIRST, src, ctx, convert)];
 }
 
 /** A date with an optional glued offset (ordinal, week and compact dates). */
@@ -691,7 +704,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     ],
     regex: RE_ISO,
     match: (src, ctx) =>
-      scan(RE_ISO, src, (m) => {
+      scan(RE_ISO, src, ctx, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         if (g.era === 'BC' || g.era === 'BCE') return VETO;
         const offTok = g.glued ?? (g.short ? `${g.short}:00` : undefined) ?? g.dz;
@@ -751,7 +764,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     examples: ['1999-081', '1999-081+01:00'],
     regex: RE_ORDINAL,
     match: (src, ctx) =>
-      scan(RE_ORDINAL, src, (m) => {
+      scan(RE_ORDINAL, src, ctx, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         const ymd = ordinalDate(Number(g.y), Number(g.doy));
         if (!ymd) return null;
@@ -780,7 +793,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     examples: ['1999-W13-2', '1999W132', '2024-W01'],
     regex: RE_WEEK,
     match: (src, ctx) =>
-      scan(RE_WEEK, src, (m) => {
+      scan(RE_WEEK, src, ctx, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         // "SKU 2024W012", "Order #2024-W01": a product code or an id.
         if (labelledBefore(src, m.index, CODE_ID_BEFORE)) return null;
@@ -798,7 +811,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     examples: ['19990322', '19990322+0100'],
     regex: RE_COMPACT,
     match: (src, ctx) =>
-      scan(RE_COMPACT, src, (m) => {
+      scan(RE_COMPACT, src, ctx, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         const ymd = { y: Number(g.y), mo: Number(g.mo), d: Number(g.d) };
         if (!isRealDate(ymd.y, ymd.mo, ymd.d)) return null;
@@ -814,7 +827,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     examples: ['2024/01/02 15:04', '2024/12/31 10:30:15 UTC'],
     regex: RE_DATE_SLASH,
     match: (src, ctx) =>
-      scan(RE_DATE_SLASH, src, (m) => {
+      scan(RE_DATE_SLASH, src, ctx, (m) => {
         const [, y, mo, d, h, mi, s, zoneTok] = m;
         if (badOffset(zoneTok)) return VETO;
         const zone = resolveZoneToken(zoneTok);
@@ -844,7 +857,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     examples: ['Mon Mar 22 05:06:07 CET 1999', 'Tue Jan  2 15:04:05 UTC 2024'],
     regex: RE_UNIX,
     match: (src, ctx) =>
-      scan(RE_UNIX, src, (m) => {
+      scan(RE_UNIX, src, ctx, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         const month = monthFromName(g.mon);
         if (month === undefined) return null;
@@ -899,7 +912,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     examples: ['1999年3月22日', '1999年3月22日 星期一 上午05时06分07秒 CET', '1999年3月22日 5時06分07秒', '平成11年3月22日'],
     regex: RE_CJK,
     match: (src, ctx) =>
-      scan(RE_CJK, src, (m) => {
+      scan(RE_CJK, src, ctx, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         let y: number;
         if (g.era !== undefined) {
@@ -939,7 +952,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     examples: ['3pm', '15:30', '11:00 p.m.', '9:00 UTC', '9:00 GMT+5:30', '3 PM ET', '3:30 PM +05:45'],
     regex: RE_TIME,
     match: (src, ctx) =>
-      scan(RE_TIME, src, (m) => {
+      scan(RE_TIME, src, ctx, (m) => {
         const [, hTok, miTok, sTok, ampm, brTok, bareTok, zoneTok] = m;
         if (dateLikeBefore(src, m.index)) return null;
         // "10:00 +15:00": refuse the whole span so "15:00" is not read next.

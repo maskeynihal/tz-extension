@@ -371,11 +371,13 @@ describe('content script fixes', () => {
     a.style.setProperty('top', '900px', 'important');
     const b = await pinFrom(env, 'a2');
     expect(px(b, 'top')).toBe(128);
-    // Now a card does sit there: the next one steps down-right (36 px a
-    // step, until it is 48 px clear of it).
+    // Now a card does sit there. Round 6 (QA F6): the next one goes where
+    // it covers no card and no card's text, here beside that card (360 px
+    // wide while it cannot be measured, + 8), instead of 72 px down-right
+    // over it.
     const c = await pinFrom(env, 'a3');
-    expect(px(c, 'top')).toBe(128 + 72);
-    expect(px(c, 'left')).toBe(100 + 72);
+    expect(px(c, 'top')).toBe(128);
+    expect(px(c, 'left')).toBe(100 + 360 + 8);
   });
 
   // Fix 1 (keyboard reachability)
