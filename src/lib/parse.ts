@@ -1,6 +1,6 @@
-import type { CustomFormat, DateOnlyPolicy, ParsedTime } from '../types';
-import { BUILTIN_FORMATS } from './builtin-formats';
-import { isVeto, matchCustomFormat, now, type Candidate, type MatchContext, type MatchResult } from './custom-formats';
+import type { CustomFormat, DateOnlyPolicy, NumericDateOrder, ParsedTime } from '../types';
+import { BUILTIN_FORMATS, type BuiltinMatchContext } from './builtin-formats';
+import { isVeto, matchCustomFormat, now, type Candidate, type MatchResult } from './custom-formats';
 
 /**
  * Only this many characters of a selection are scanned. Built-in and token
@@ -22,6 +22,12 @@ export interface ParseOptions {
   readonly customFormats?: readonly CustomFormat[];
   /** Ids of built-in formats to skip (see BUILTIN_FORMATS). */
   readonly disabledFormats?: readonly string[];
+  /**
+   * How to read a numeric date whose day and month could swap (03/04/2024):
+   * 'dmy' (default) or 'mdy'. Such results carry the other reading in
+   * ParsedTime.dateOrder.
+   */
+  readonly numericDateOrder?: NumericDateOrder;
   /** Injected clock for tests. */
   readonly nowMs?: number;
 }
@@ -64,10 +70,11 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
   const src = text.trim().slice(0, SCAN_LIMIT);
   if (src.length === 0) return [];
 
-  const ctx: MatchContext = {
+  const ctx: BuiltinMatchContext = {
     assumedZone: o.assumedZone,
     dateOnlyPolicy: o.dateOnlyPolicy ?? 'midnight',
     nowMs: o.nowMs,
+    numericDateOrder: o.numericDateOrder,
     // All custom regexes together get this long per selection.
     deadline: now() + CUSTOM_TIME_BUDGET_MS,
   };

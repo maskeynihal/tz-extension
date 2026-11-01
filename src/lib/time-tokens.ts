@@ -36,6 +36,13 @@ export const ABBREV_OFFSETS: Readonly<Record<string, number>> = {
   BST: 1 * 60, // British Summer (ambiguous with Bangladesh)
   CET: 1 * 60,
   CEST: 2 * 60,
+  // German names for the European zones (MEZ = Mitteleuropäische Zeit).
+  MEZ: 1 * 60,
+  MESZ: 2 * 60,
+  WEZ: 0,
+  WESZ: 1 * 60,
+  OEZ: 2 * 60,
+  OESZ: 3 * 60,
   IST: 5 * 60 + 30, // India (ambiguous with Israel/Irish)
   JST: 9 * 60,
   // North America (beyond the contiguous US)
@@ -90,6 +97,123 @@ export function pad(n: number, len = 2): string {
 export function monthFromName(name: string | undefined): number | undefined {
   if (!name) return undefined;
   return MONTHS[name.replace(/\.$/, '').toLowerCase()];
+}
+
+/** Lower-case, accent-free form of a word, without a trailing dot: "März." -> "marz". */
+export function normalizeWord(w: string): string {
+  return w
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\.$/, '');
+}
+
+/**
+ * Month names and abbreviations in German, French, Spanish, Italian,
+ * Portuguese and Dutch, keyed by normalizeWord() (English is in MONTHS).
+ */
+const LOCAL_MONTHS: Readonly<Record<string, number>> = {
+  // German
+  januar: 1, janner: 1, februar: 2, marz: 3, mrz: 3, mai: 5, juni: 6, juli: 7,
+  oktober: 10, okt: 10, dezember: 12, dez: 12,
+  // French
+  janvier: 1, janv: 1, fevrier: 2, fevr: 2, fev: 2, mars: 3, avril: 4, avr: 4, juin: 6,
+  juillet: 7, juil: 7, aout: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12,
+  // Spanish
+  enero: 1, ene: 1, febrero: 2, marzo: 3, abril: 4, abr: 4, mayo: 5, junio: 6, julio: 7,
+  agosto: 8, ago: 8, septiembre: 9, setiembre: 9, set: 9, octubre: 10, noviembre: 11,
+  diciembre: 12, dic: 12,
+  // Italian
+  gennaio: 1, gen: 1, febbraio: 2, aprile: 4, maggio: 5, mag: 5, giugno: 6, giu: 6,
+  luglio: 7, lug: 7, settembre: 9, ottobre: 10, ott: 10, dicembre: 12,
+  // Portuguese
+  janeiro: 1, fevereiro: 2, marco: 3, maio: 5, junho: 6, julho: 7, setembro: 9,
+  outubro: 10, out: 10, novembro: 11, dezembro: 12,
+  // Dutch
+  januari: 1, februari: 2, maart: 3, mrt: 3, mei: 5, augustus: 8,
+};
+
+/** Abbreviations that are also everyday English words: only a capitalized form counts. */
+const WORDLIKE_MONTHS = new Set(['set', 'out', 'ago', 'gen', 'mag', 'lug']);
+
+/**
+ * Month number for a month name in English, German, French, Spanish,
+ * Italian, Portuguese or Dutch, ignoring case and accents ("März", "marz",
+ * "Mrz.", "févr", "março"). Abbreviations that are English words ("set",
+ * "out") count only when capitalized.
+ */
+export function monthFromLocalName(name: string | undefined): number | undefined {
+  if (!name) return undefined;
+  const key = normalizeWord(name);
+  const n = MONTHS[key] ?? LOCAL_MONTHS[key];
+  if (n === undefined) return undefined;
+  if (WORDLIKE_MONTHS.has(key) && !/^[A-ZÀ-Þ]/.test(name)) return undefined;
+  return n;
+}
+
+/** Weekday names (1 = Monday) in the same languages, keyed by normalizeWord(). */
+const WEEKDAYS: Readonly<Record<string, number>> = {
+  // English
+  monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2, wednesday: 3, wed: 3, thursday: 4, thu: 4,
+  thur: 4, thurs: 4, friday: 5, fri: 5, saturday: 6, sat: 6, sunday: 7, sun: 7,
+  // German
+  montag: 1, dienstag: 2, mittwoch: 3, donnerstag: 4, freitag: 5, samstag: 6, sonnabend: 6, sonntag: 7,
+  // French
+  lundi: 1, lun: 1, mardi: 2, mercredi: 3, mer: 3, jeudi: 4, jeu: 4, vendredi: 5, ven: 5,
+  samedi: 6, sam: 6, dimanche: 7, dim: 7,
+  // Spanish
+  lunes: 1, martes: 2, miercoles: 3, mie: 3, jueves: 4, jue: 4, viernes: 5, vie: 5, sabado: 6,
+  sab: 6, domingo: 7, dom: 7,
+  // Italian
+  lunedi: 1, martedi: 2, mercoledi: 3, giovedi: 4, gio: 4, venerdi: 5, domenica: 7,
+  // Portuguese
+  'segunda-feira': 1, segunda: 1, seg: 1, 'terca-feira': 2, terca: 2, ter: 2, 'quarta-feira': 3,
+  quarta: 3, qua: 3, 'quinta-feira': 4, quinta: 4, qui: 4, 'sexta-feira': 5, sexta: 5, sex: 5,
+  // Dutch
+  maandag: 1, dinsdag: 2, woensdag: 3, donderdag: 4, vrijdag: 5, zaterdag: 6, zondag: 7,
+  // Shared abbreviations
+  mar: 2,
+};
+
+/** True for a weekday name or abbreviation in any of the supported languages. */
+export function isWeekdayName(name: string | undefined): boolean {
+  return Boolean(name && WEEKDAYS[normalizeWord(name)] !== undefined);
+}
+
+/** Two-digit year: 70–99 -> 19xx, otherwise 20xx. */
+export function expandYear(yy: string): number {
+  const n = Number(yy);
+  if (yy.length !== 2) return n;
+  return n >= 70 ? 1900 + n : 2000 + n;
+}
+
+/** Calendar date of an ISO 8601 ordinal date (1999-081), or null when out of range. */
+export function ordinalDate(year: number, dayOfYear: number): { y: number; mo: number; d: number } | null {
+  const days = isRealDate(year, 2, 29) ? 366 : 365;
+  if (!Number.isInteger(dayOfYear) || dayOfYear < 1 || dayOfYear > days) return null;
+  const t = new Date(Date.UTC(year, 0, dayOfYear));
+  return { y: t.getUTCFullYear(), mo: t.getUTCMonth() + 1, d: t.getUTCDate() };
+}
+
+/** Monday of ISO week 1 (the week holding 4 January), as UTC ms. */
+function isoWeekOneMonday(year: number): number {
+  const jan4 = Date.UTC(year, 0, 4);
+  const dow = (new Date(jan4).getUTCDay() + 6) % 7; // Monday = 0
+  return jan4 - dow * 86_400_000;
+}
+
+/**
+ * Calendar date of an ISO 8601 week date (1999-W13-2: Tuesday of week 13),
+ * or null when the week does not exist in that year. Weeks start on Monday
+ * (day 1) and week 1 is the week with the year's first Thursday.
+ */
+export function isoWeekDate(year: number, week: number, day: number): { y: number; mo: number; d: number } | null {
+  if (!Number.isInteger(week) || !Number.isInteger(day) || day < 1 || day > 7 || week < 1) return null;
+  const start = isoWeekOneMonday(year);
+  const weeks = Math.round((isoWeekOneMonday(year + 1) - start) / (7 * 86_400_000));
+  if (week > weeks) return null;
+  const t = new Date(start + ((week - 1) * 7 + (day - 1)) * 86_400_000);
+  return { y: t.getUTCFullYear(), mo: t.getUTCMonth() + 1, d: t.getUTCDate() };
 }
 
 /**
