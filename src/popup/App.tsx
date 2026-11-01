@@ -58,6 +58,16 @@ export function App(): JSX.Element {
     void savePreferences(next);
   }
 
+  function openWorldClock(): void {
+    const page = 'src/clock/index.html';
+    if (typeof chrome !== 'undefined' && chrome.runtime?.getURL && chrome.tabs?.create) {
+      const url = chrome.runtime.getURL(page);
+      void Promise.resolve(chrome.tabs.create({ url })).catch(() => window.open(url, '_blank', 'noopener'));
+      return;
+    }
+    window.open(new URL('../clock/index.html', window.location.href).href, '_blank', 'noopener');
+  }
+
   function openOptions(): void {
     if (typeof chrome !== 'undefined' && chrome.runtime?.openOptionsPage) {
       chrome.runtime.openOptionsPage();
@@ -86,6 +96,18 @@ export function App(): JSX.Element {
           </button>
         </div>
         <div className="tzx-head-actions">
+          <button
+            type="button"
+            className="tzx-icon-btn"
+            aria-label="Open world clock"
+            title="World clock"
+            onClick={openWorldClock}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false" style={{ display: 'block' }}>
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+            </svg>
+          </button>
           <button
             type="button"
             className="tzx-icon-btn"

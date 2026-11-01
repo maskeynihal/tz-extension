@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>World clock — TZ Converter</title>
+    <meta name="description" content="A free world clock and meeting planner. Live clocks for your timezones with day and night, the gap from home, working hours, and a time scrubber to plan across zones. Same app as the TZ Converter extension." />
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <link rel="stylesheet" href="./clock.css" />
+    <style>
+      /* Site chrome (nav + footer). The clock itself is styled by clock.css,
+         which follows the theme chosen in the app (System / Light / Dark). */
+      :root {
+        --ground: #ffffff; --border: #e6e7ec; --border-strong: #dcdee4;
+        --ink: #16181d; --body: #3a3d46; --muted: #6b6e78;
+        --accent: #4f46e5; --accent-ink: #ffffff;
+        --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      :root[data-theme='dark'] {
+        --ground: #0f1115; --border: #262930; --border-strong: #31343c;
+        --ink: #f3f4f6; --body: #c3c6ce; --muted: #8b8e98;
+        --accent: #8b8bf0; --accent-ink: #0b0b16;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']):not([data-theme='dark']) {
+          --ground: #0f1115; --border: #262930; --border-strong: #31343c;
+          --ink: #f3f4f6; --body: #c3c6ce; --muted: #8b8e98;
+          --accent: #8b8bf0; --accent-ink: #0b0b16;
+        }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--tzc-bg); color: var(--body); font-family: var(--font); -webkit-font-smoothing: antialiased; }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      a:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; }
+
+      header.nav { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--ground) 86%, transparent); backdrop-filter: saturate(140%) blur(10px); border-bottom: 1px solid var(--border); }
+      .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; max-width: 1440px; margin: 0 auto; padding: 0 clamp(16px, 3vw, 40px); }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--ink); font-size: 18px; }
+      .brand:hover { text-decoration: none; }
+      .brand .dot { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-grid; place-items: center; color: var(--accent-ink); font-size: 12px; font-weight: 800; }
+      .nav-links { display: flex; align-items: center; gap: 24px; font-size: 15px; }
+      .nav-links a { color: var(--body); }
+      .nav-links a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+      .nav-links a.btn, .btn { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+      .btn:hover { text-decoration: none; filter: brightness(1.06); }
+      @media (max-width: 720px) { .nav-links a:not(.btn):not([aria-current]) { display: none; } }
+
+      #clock-root .tzc-app { min-height: calc(100vh - 65px); min-height: calc(100dvh - 65px); }
+      footer { border-top: 1px solid var(--border); background: var(--ground); padding: 28px clamp(16px, 3vw, 40px); color: var(--muted); font-size: 14px; text-align: center; }
+      noscript p { max-width: 640px; margin: 48px auto; padding: 0 24px; color: var(--body); }
+    </style>
+  </head>
+  <body>
+    <header class="nav">
+      <div class="nav-inner">
+        <a class="brand" href="./index.html"><span class="dot" aria-hidden="true">TZ</span> TZ Converter</a>
+        <nav class="nav-links" aria-label="Site">
+          <a href="./index.html">Home</a>
+          <a href="./app.html">Converter</a>
+          <a href="./clock.html" aria-current="page">World clock</a>
+          <a class="btn" href="./index.html#install">Add to browser</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="clock-root" data-embed="site">
+      <noscript><p>The world clock needs JavaScript. Everything runs in your browser; nothing is sent anywhere.</p></noscript>
+    </main>
+
+    <footer>
+      © 2026 TZ Converter · Your zones are saved in this browser only ·
+      <a href="./privacy.html">Privacy</a> · <a href="https://github.com/maskeynihal/tz-extension">GitHub</a>
+    </footer>
+
+    <script type="module" src="./clock.js"></script>
+  </body>
+</html>

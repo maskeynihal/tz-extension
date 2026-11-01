@@ -37,16 +37,23 @@
       }
       ul { padding-left: 22px; }
       li { margin: 6px 0; }
-      .back { display: inline-block; margin-bottom: 28px; color: var(--accent); text-decoration: none; font-weight: 500; }
+      .back { display: inline-block; color: var(--accent); text-decoration: none; font-weight: 500; }
+      .top-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-bottom: 28px; font-size: 0.95rem; }
+      .top-links a:not(.back) { color: var(--body); text-decoration: none; }
+      .top-links a:not(.back):hover { color: var(--accent); text-decoration: underline; }
       footer { color: var(--muted); font-size: 0.9rem; margin-top: 48px; border-top: 1px solid var(--border); padding-top: 20px; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--raised); padding: 1px 5px; border-radius: 5px; }
     </style>
   </head>
   <body>
     <main>
-      <a class="back" href="./index.html">← TZ Converter</a>
+      <nav class="top-links" aria-label="Site">
+        <a class="back" href="./index.html">← TZ Converter</a>
+        <a href="./app.html">Converter</a>
+        <a href="./clock.html">World clock</a>
+      </nav>
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: 28 October 2026</p>
+      <p class="updated">Last updated: 1 November 2026</p>
 
       <p class="lead">
         <strong>TZ Converter collects no data.</strong> It makes no network
@@ -82,6 +89,13 @@
         your browser may sync it across your own devices through your browser
         account — we never see it and have no access to it. Uninstalling the
         extension removes it.
+      </p>
+      <p>
+        The website's online converter and world clock keep the same kind of
+        preferences (timezones, 12/24-hour clock, theme, day/month order) in
+        your browser's <code>localStorage</code> for this site, so they are
+        there next time. They are never sent anywhere. Clearing this site's
+        data in your browser removes them.
       </p>
 
       <h2>Permissions</h2>
