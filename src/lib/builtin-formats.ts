@@ -262,19 +262,46 @@ const RE_TIME = new RegExp(
 );
 
 /**
- * Scripture references look like times: "John 3:16", "Romans 8:28",
- * "Surah 2:255". Book names (and "verse", "chapter") just before a bare
- * H:MM make it chapter:verse. A list rather than "any capitalized word":
- * "Standup 9:00" and "Lunch 12:30" are times. Book names that are common
- * schedule words (Job, Acts, Numbers, Song) are left out.
+ * Scripture references look like times: "Romans 8:28", "Surah 2:255",
+ * "verse 3:16". Book names (and "verse", "chapter", "ch.", "v.") just before
+ * a bare H:MM make it chapter:verse. A list rather than "any capitalized
+ * word": "Standup 9:00" and "Lunch 12:30" are times. Book names that are
+ * common schedule words (Job, Acts, Numbers, Song) are left out, and books
+ * that are also given names are in NAME_BOOK below.
  */
 const SCRIPTURE_BEFORE = new RegExp(
-  String.raw`(?:^|[^${L}])(?:(?:Genesis|Exodus|Leviticus|Deuteronomy|Joshua|Judges|Ruth|Samuel|Kings|Chronicles|Ezra|Nehemiah|Esther|Psalms?|Proverbs|Ecclesiastes|Isaiah|Jeremiah|Lamentations|Ezekiel|Daniel|Hosea|Joel|Amos|Obadiah|Jonah|Micah|Nahum|Habakkuk|Zephaniah|Haggai|Zechariah|Malachi|Matthew|Mark|Luke|John|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians|Timothy|Titus|Philemon|Hebrews|James|Peter|Jude|Revelation|Gen|Exod|Deut|Matt|Rom|Cor|Gal|Eph|Phil|Heb|Rev|Ps|Prov|Isa|Jer|Ezek|Surah|Sura|Quran|Qur['’]an)\.?|[Vv]erses?|[Cc]hapter|[Cc]h\.)[ \t]+$`,
+  String.raw`(?:^|[^${L}])(?:(?:Genesis|Exodus|Leviticus|Deuteronomy|Judges|Kings|Chronicles|Nehemiah|Psalms?|Proverbs|Ecclesiastes|Lamentations|Ezekiel|Hosea|Obadiah|Nahum|Habakkuk|Zephaniah|Haggai|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians|Hebrews|Revelation|Gen|Exod|Deut|Rom|Cor|Gal|Eph|Heb|Rev|Ps|Prov|Jer|Ezek|Surah|Sura|Quran|Qur['’]an)\.?|[Vv]erses?|[Cc]hapter|[Cc]h\.|[Vv]v?\.)[ \t]+$`,
 );
+
+/**
+ * Books that are also given names: "Call John 3:30" and "Lunch with Peter
+ * 12:30" are times. They mean chapter:verse only with scripture context: a
+ * book number ("1 John 3:16", "2 Peter 1:5"), "verse"/"chapter"/"ch."/"v."
+ * before the name, or a verse range or list right after (verseAfter). A
+ * name opening the line before minutes that are not a multiple of five
+ * ("John 3:16") is also a verse; "Ruth 9:00" and "Daniel 9:15 standup" are
+ * times. Groups: lead (text before), num, ctx.
+ */
+const NAME_BOOK = 'Joshua|Samuel|Ruth|Ezra|Esther|Isaiah|Isa|Jeremiah|Daniel|Joel|Amos|Jonah|Micah|Zechariah|Malachi|Matthew|Matt|Mark|Luke|John|Timothy|Titus|Philemon|Phil|James|Peter|Jude';
+const NAME_BOOK_BEFORE = new RegExp(
+  String.raw`(?<lead>^|[^${L}\d])(?<num>(?:[1-3]|I{1,3}|First|Second|Third)[ \t]+)?(?<ctx>(?:[Vv]erses?|[Cc]hapter|[Cc]h\.|[Vv]v?\.)[ \t]+)?(?:${NAME_BOOK})\.?[ \t]+$`,
+);
+/** "3:16-18", "3:16–18", "3:16,18": a verse range or list, not a time range. */
+const VERSE_AFTER = /^(?:[-–—]|,(?=\d))\d{1,3}(?![\d:])/;
+
+function scriptureBefore(line: string, minutes: string, after: string): boolean {
+  if (SCRIPTURE_BEFORE.test(line)) return true;
+  const m = NAME_BOOK_BEFORE.exec(line);
+  if (!m) return false;
+  const g = m.groups ?? {};
+  if (g.num || g.ctx || VERSE_AFTER.test(after)) return true;
+  const opensLine = /^[\s"'“‘«([*>•–—-]*$/.test(line.slice(0, m.index + (g.lead ?? '').length));
+  return opensLine && Number(minutes) % 5 !== 0;
+}
 
 /** "odds of 1:30", "1:30 odds", "aspect ratio 4:30": a ratio, not a time. */
 const RATIO_WORD = 'odds|ratios?|scale|aspect|split|mix|proportions?';
-const RATIO_BEFORE = new RegExp(String.raw`(?<![${L}])(?:${RATIO_WORD})(?:[ \t]+(?:of|is|was|at|=))?[ \t:=]*$`, 'i');
+const RATIO_BEFORE = new RegExp(String.raw`(?<![${L}])(?:${RATIO_WORD})(?:[ \t]+(?:of|is|was|=))?[ \t:=]*$`, 'i');
 const RATIO_AFTER = new RegExp(String.raw`^[ \t]*(?:${RATIO_WORD})(?![${L}])`, 'i');
 
 /**
@@ -613,8 +640,10 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
         // with an impossible offset is not a date and a separate time;
         // refuse the whole thing.
         if (badOffset(zoneTok)) return VETO;
-        // "2024-03-22-001": a date followed by "-digits" is an id.
-        if (dateOnly && /^-\d/.test(src.slice(m.index + m[0].length))) return VETO;
+        // "2024-03-22-001": a date followed by "-digits" is an id, but
+        // "2024-03-22-2024-03-25" is a range of two dates.
+        const rest = src.slice(m.index + m[0].length);
+        if (dateOnly && /^-\d/.test(rest) && !/^-\d{4}-\d{2}-\d{2}(?!\d)/.test(rest)) return VETO;
         let zone: ResolvedZone | null = zoneTok ? resolveZoneToken(zoneTok) : null;
         let text = m[0];
         if (g.sp) {
@@ -864,8 +893,9 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
           if (/^\.\d/.test(src.slice(end))) return VETO;
           const before = src.slice(Math.max(0, m.index - 40), m.index);
           const line = before.slice(before.lastIndexOf('\n') + 1);
-          // "John 3:16", "odds of 1:30", "1:30 odds".
-          if (SCRIPTURE_BEFORE.test(line) || RATIO_BEFORE.test(line) || RATIO_AFTER.test(src.slice(end, end + 20))) {
+          // "Romans 8:28", "1 John 3:16", "odds of 1:30", "1:30 odds".
+          const after = src.slice(end, end + 20);
+          if (scriptureBefore(line, miTok, after) || RATIO_BEFORE.test(line) || RATIO_AFTER.test(after)) {
             return null;
           }
         }
@@ -894,7 +924,9 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
             formatLabel: 'Time of day',
           },
         );
-        return parsed ? { parsed, length: text.length } : null;
+        // An impossible time ("24:30", "10:59:60") refuses its whole span, so
+        // the offset after it ("+05:45") is not read as a time on its own.
+        return parsed ? { parsed, length: text.length } : VETO;
       }),
   },
 ];

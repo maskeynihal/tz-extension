@@ -226,20 +226,27 @@ describe('content script, round 2', () => {
 
 describe('layoutFloating', () => {
   type Box = { top: number; left: number; width: number; height: number };
-  const corner = 24;
+  // Round 3: the whole header row (FLOAT_HEADER, the default) is protected, not a 24 px corner.
+  const header = 40;
   const hits = (a: Box, b: Box): boolean =>
     a.left < b.left + b.width && a.left + a.width > b.left && a.top < b.top + b.height && a.top + a.height > b.top;
 
-  /** Every card's header corner is uncovered by the cards painted above it; all on screen and clear of the dock. */
+  /**
+   * Every card's header row is uncovered by the cards painted above it; all
+   * on screen and clear of the dock. With 15 cards at 390 px there is no room
+   * to keep every body clear of the dock too (14 header steps + a card is
+   * 820 px, 776 px are free above the dock), so there only headers must be.
+   */
   function check(boxes: Box[], vw: number, vh: number, dock: Box): void {
+    const tight = vw === 390 && boxes.length === 15;
     boxes.forEach((b, i) => {
       expect(b.left).toBeGreaterThanOrEqual(8);
       expect(b.top).toBeGreaterThanOrEqual(8);
       expect(b.left + b.width).toBeLessThanOrEqual(vw - 8);
       expect(b.top + b.height).toBeLessThanOrEqual(vh - 8);
-      expect(hits(b, dock)).toBe(false);
+      expect(hits(tight ? { ...b, height: header } : b, dock)).toBe(false);
       for (const later of boxes.slice(i + 1)) {
-        expect(hits(later, { top: b.top, left: b.left, width: corner, height: corner })).toBe(false);
+        expect(hits(later, { top: b.top, left: b.left, width: b.width, height: header })).toBe(false);
         // Never exactly on top of another.
         expect(later.top === b.top && later.left === b.left).toBe(false);
       }
@@ -298,8 +305,11 @@ describe('layoutFloating', () => {
     ]);
   });
 
-  it('cascades a card that would hide another one by FLOAT_STEP both ways', async () => {
-    const { layoutFloating, FLOAT_STEP } = await import('../src/content/index');
+  // Round 3: the FLOAT_STEP diagonal cascade (82,82) still covered the first
+  // card's header row; the card now goes to the nearest spot that clears it,
+  // just under that header (40 px + a 2 px gap).
+  it('moves a card that would hide another one just below that header', async () => {
+    const { layoutFloating, FLOAT_HEADER } = await import('../src/content/index');
     const at = layoutFloating(
       [
         { top: 50, left: 50, width: 300, height: 200 },
@@ -308,7 +318,7 @@ describe('layoutFloating', () => {
       { width: 1280, height: 800 },
       null,
     );
-    expect(at[1]).toEqual({ top: 50 + FLOAT_STEP, left: 50 + FLOAT_STEP });
+    expect(at[1]).toEqual({ top: 50 + FLOAT_HEADER + 2, left: 50 });
   });
 
   it('measures a selection by all its lines', async () => {

@@ -39,7 +39,10 @@ export function describeWallClock(
     // (Samoa's skipped day included).
     const before = offsetMinutesAt(epochMs - 26 * 3_600_000, zone);
     const written = viewInZone(epochMs + before * 60_000, 'UTC', hour12);
-    return `${shortTime(written.time)} doesn't exist on ${shortDay(written.date)} in ${place} (clocks jump forward); shown as ${shortTime(v.time)}.`;
+    // A jump across midnight (Samoa skipped all of 30 Dec 2011) lands on
+    // another day: say which.
+    const shown = v.date === written.date ? shortTime(v.time) : `${shortTime(v.time)} on ${shortDay(v.date)}`;
+    return `${shortTime(written.time)} doesn't exist on ${shortDay(written.date)} in ${place} (clocks jump forward); shown as ${shown}.`;
   }
   // A real abbreviation ("EDT", "BST") reads better than "GMT+1"; else the offset.
   const which = /^[A-Z]{2,5}$/.test(v.abbrev) ? v.abbrev : `UTC${v.offset}`;

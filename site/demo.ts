@@ -18,7 +18,7 @@ import {
 } from '../src/lib/storage';
 import { ZonePicker } from '../src/popup/ZonePicker';
 import { readingLabel } from './reading';
-import { readEpochInput, wallClockNote } from './convert';
+import { EPOCH_INPUT_HINT, readEpochInput, wallClockNote } from './convert';
 import {
   DEFAULT_PREFERENCES,
   type NumericDateOrder,
@@ -197,11 +197,10 @@ function mountDemo(): void {
     };
     if (mode === 'epoch') {
       // The Epoch tab reads one integer, like the popup's Epoch tab: 0 and
-      // negative values (before 1970) included.
+      // negative values back to 1900 included.
       const e = readEpochInput(raw);
       if (!e) {
-        hint.textContent =
-          "That isn't a Unix timestamp. Paste a whole number of seconds (like 1700000000) or milliseconds (13 digits); 0 and negative values work too.";
+        hint.textContent = EPOCH_INPUT_HINT;
         hint.className = 'demo-hint is-error';
         renderPicker();
         return;

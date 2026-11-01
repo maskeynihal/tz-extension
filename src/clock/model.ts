@@ -9,15 +9,29 @@ export const SCRUB_MIN_STEPS = -48;
 export const SCRUB_MAX_STEPS = 144;
 
 const STEP_MS = STEP_MINUTES * 60_000;
+const MINUTE_MS = 60_000;
 
 /**
  * The instant every card shows. Live (`steps === 0`) is the current time.
- * While planning it starts from the current quarter hour so planned times
- * land on :00 / :15 / :30 / :45 in every real-world zone.
+ * While planning with the slider it starts from the current quarter hour so
+ * planned times land on :00 / :15 / :30 / :45 in every real-world zone.
+ * `exact` (a "+24h"-style preset) starts from the current minute instead, so
+ * "+24h" from 12:43 is 12:43 tomorrow. Both hold still between minutes.
  */
-export function shownInstant(nowMs: number, steps: number): number {
+export function shownInstant(nowMs: number, steps: number, exact = false): number {
   if (steps === 0) return nowMs;
-  return Math.floor(nowMs / STEP_MS) * STEP_MS + steps * STEP_MS;
+  const unit = exact ? MINUTE_MS : STEP_MS;
+  return Math.floor(nowMs / unit) * unit + steps * STEP_MS;
+}
+
+/**
+ * Whole minutes from the current minute to the planned instant: the honest
+ * "from now" figure. A snapped plan from 12:43 at +24h is 12:30 tomorrow,
+ * which is 23h 47m away; an exact preset is 24h.
+ */
+export function minutesFromNow(nowMs: number, steps: number, exact = false): number {
+  if (steps === 0) return 0;
+  return Math.round((shownInstant(nowMs, steps, exact) - Math.floor(nowMs / MINUTE_MS) * MINUTE_MS) / MINUTE_MS);
 }
 
 /**

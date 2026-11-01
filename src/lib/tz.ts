@@ -1,5 +1,11 @@
-import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
-import { parseWallIso, wallFieldsToInstant, type WallInstant } from './wallclock';
+import {
+  offsetMinutes,
+  parseWallIso,
+  wallFieldsAt,
+  wallFieldsToInstant,
+  zoneAbbreviation,
+  type WallInstant,
+} from './wallclock';
 
 export type { WallInstant } from './wallclock';
 
@@ -124,7 +130,7 @@ function offsetLabel(minutes: number): string {
 export interface ResolvedZone {
   readonly id: string;
   readonly kind: 'iana' | 'offset' | 'abbr';
-  /** The time zone argument date-fns-tz understands: an IANA id or "+05:45". */
+  /** The time zone argument Intl understands (via wallclock.ts): an IANA id or "+05:45". */
   readonly tz: string;
   /** Short display name: "Asia/Kathmandu", "UTC+05:45", "PDT". */
   readonly short: string;
@@ -353,11 +359,8 @@ export interface ZoneGroup {
 
 /** Current UTC offset of a zone, e.g. "+05:45" (for list details). */
 function currentOffset(tz: string, at: number): string {
-  try {
-    return formatInTimeZone(new Date(at), tz, 'xxx');
-  } catch {
-    return '';
-  }
+  const m = offsetMinutes(tz, at);
+  return Number.isFinite(m) ? offsetString(m) : '';
 }
 
 /** "+05:45" → 345; null for anything else. */
@@ -1147,6 +1150,28 @@ const ODD_OFFSET_PLACES: ReadonlyMap<number, readonly string[]> = new Map([
   [825, ['Pacific/Chatham']],
 ]);
 
+/**
+ * Zones that show offset `minutes` on 1 January, 1 July or the 15th of some
+ * month of `year`, in listTimeZones order: every zone that constantOffset or
+ * usesOffset can accept that year. Cached per (minutes, year), because the
+ * scan probes up to 14 instants in each of about 400 zones and a save calls
+ * it every time when the home zone is an offset nobody uses (UTC+05:15).
+ */
+const offsetCandidates = new Map<string, readonly string[]>();
+
+function zonesOnOffset(minutes: number, year: number): readonly string[] {
+  const key = `${minutes}:${year}`;
+  const hit = offsetCandidates.get(key);
+  if (hit) return hit;
+  const probes = [Date.UTC(year, 0, 1), Date.UTC(year, 6, 1)];
+  for (let mo = 0; mo < 12; mo++) probes.push(Date.UTC(year, mo, 15));
+  // some() stops at the first probe on the offset.
+  const out = listTimeZones().filter((z) => probes.some((t) => offsetMinutesAt(t, z) === minutes));
+  if (offsetCandidates.size >= 64) offsetCandidates.clear(); // a few keys in practice; stay bounded
+  offsetCandidates.set(key, out);
+  return out;
+}
+
 /** The first of `zones` on `m` all year, else on it at `at`, else on it some time that year. */
 function pickOnOffset(zones: readonly string[], m: number, at: number): string | undefined {
   return (
@@ -1183,7 +1208,14 @@ export function ianaEquivalent(zone: string, at: number = Date.now()): string {
     if (isIana(etc)) return etc;
   }
   const known = (ODD_OFFSET_PLACES.get(m) ?? []).filter(isIana);
-  return pickOnOffset(known, m, at) ?? pickOnOffset(listTimeZones(), m, at) ?? 'UTC';
+  // The full scan only looks at zones seen on `m` that year (zonesOnOffset).
+  // That can miss a zone on `m` only briefly around `at` and at no probe
+  // date; such a zone would only have won the middle step of pickOnOffset.
+  return (
+    pickOnOffset(known, m, at) ??
+    pickOnOffset(zonesOnOffset(m, new Date(at).getUTCFullYear()), m, at) ??
+    'UTC'
+  );
 }
 
 /**
@@ -1240,21 +1272,30 @@ function tzOf(zone: string): string {
   return resolveZone(zone)?.tz ?? zone;
 }
 
-/** Format one instant (epoch ms) for display in one zone. */
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+/**
+ * Format one instant (epoch ms) for display in one zone. Built on Intl
+ * offsets and UTC getters only, so the browser's own timezone (and its DST
+ * gaps) never leaks into the result.
+ */
 export function viewInZone(epochMs: number, zone: string, hour12: boolean): ZoneView {
-  const date = new Date(epochMs);
-  const timePattern = hour12 ? 'h:mm:ss a' : 'HH:mm:ss';
   const r = resolveZone(zone);
   const tz = r?.tz ?? zone;
+  const w = wallFieldsAt(epochMs, tz);
+  if (!w) throw new RangeError(`Invalid time zone: ${zone}`);
+  const clock = hour12
+    ? `${w.h % 12 || 12}:${pad2(w.mi)}:${pad2(w.s)} ${w.h < 12 ? 'AM' : 'PM'}`
+    : `${pad2(w.h)}:${pad2(w.mi)}:${pad2(w.s)}`;
+  const date = `${String(w.y).padStart(4, '0')}-${pad2(w.mo)}-${pad2(w.d)}`;
   return {
     zone,
     label: r?.short ?? zone,
-    dateTime: formatInTimeZone(date, tz, `yyyy-MM-dd ${timePattern}`),
-    time: formatInTimeZone(date, tz, timePattern),
-    date: formatInTimeZone(date, tz, 'yyyy-MM-dd'),
-    offset: formatInTimeZone(date, tz, 'xxx'),
-    abbrev: r && r.kind !== 'iana' ? r.short : formatInTimeZone(date, tz, 'zzz'),
-    weekday: formatInTimeZone(date, tz, 'EEE'),
+    dateTime: `${date} ${clock}`,
+    time: clock,
+    date,
+    offset: offsetString(offsetMinutes(tz, epochMs)),
+    abbrev: r && r.kind !== 'iana' ? r.short : zoneAbbreviation(epochMs, tz),
+    weekday: WEEKDAYS[w.weekday] as string,
   };
 }
 
@@ -1262,10 +1303,8 @@ export function viewInZone(epochMs: number, zone: string, hour12: boolean): Zone
 export function offsetMinutesAt(epochMs: number, zone: string): number {
   const r = resolveZone(zone);
   if (r?.minutes !== undefined) return r.minutes;
-  const off = formatInTimeZone(new Date(epochMs), tzOf(zone), 'xxx');
-  const m = /^([+-])(\d{2}):(\d{2})$/.exec(off);
-  if (!m) return 0;
-  return (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
+  const m = offsetMinutes(tzOf(zone), epochMs);
+  return Number.isFinite(m) ? m : 0;
 }
 
 /**
@@ -1289,11 +1328,6 @@ export function wallClockToInstant(isoLocal: string, zone: string): WallInstant 
   const r = resolveZone(zone);
   if (!r) return null;
   return wallFieldsToInstant(fields, r.tz);
-}
-
-/** Convert an absolute instant to the wall-clock Date in a zone (for pickers). */
-export function epochMsToWallClock(epochMs: number, zone: string): Date {
-  return toZonedTime(new Date(epochMs), tzOf(zone));
 }
 
 /** ISO-8601 UTC string for an instant. */

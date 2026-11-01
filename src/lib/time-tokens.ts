@@ -458,11 +458,12 @@ export const MIN_YEAR = 1000;
  * Fold the two ISO 8601 clock values JS has no direct form for:
  * - 24:00[:00] is the end of the day, i.e. 00:00 of the next one (only with
  *   minutes, seconds and fraction all zero);
- * - a leap second, :60 (only in minute 59), reads as :59.999 so the date and
- *   minute stay as written.
+ * - a leap second, :60, reads as :59.999 so the date and minute stay as
+ *   written. Whether :60 can be real depends on the zone, so buildParsed
+ *   checks it (`leap`) once the instant is known.
  * Returns null when the fields are not a valid clock time.
  */
-function normalizeClock(w: WallClock): { fields: WallClock; extraMs: number } | null {
+function normalizeClock(w: WallClock): { fields: WallClock; extraMs: number; leap?: true } | null {
   const extraMs = w.ms !== undefined && Number.isFinite(w.ms) ? w.ms : 0;
   if (w.h < 0 || w.h > 24 || w.mi < 0 || w.mi > 59 || w.s < 0 || w.s > 60) return null;
   if (w.h === 24) {
@@ -474,8 +475,7 @@ function normalizeClock(w: WallClock): { fields: WallClock; extraMs: number } | 
     };
   }
   if (w.s === 60) {
-    if (w.mi !== 59) return null;
-    return { fields: { ...w, s: 59 }, extraMs: 999 };
+    return { fields: { ...w, s: 59 }, extraMs: 999, leap: true };
   }
   return { fields: w, extraMs };
 }
@@ -511,6 +511,10 @@ export function buildParsed(
     if (!meta.dateOnly) wallClock = hit.wallClock;
   }
   if (!Number.isFinite(epochMs)) return null;
+  // Leap seconds are inserted at 23:59:60 UTC, so ":60" is real only when
+  // the written :59 second is the last second of a UTC day ("23:59:60Z",
+  // "05:44:60 +05:45"); "10:59:60" in UTC is not a time.
+  if (clock.leap && (epochMs + 1000) % 86_400_000 !== 0) return null;
   const base: ParsedTime = {
     ...(wallClock ? { wallClock } : {}),
     epochMs: epochMs + clock.extraMs,

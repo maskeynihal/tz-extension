@@ -205,18 +205,28 @@ export function sanitize(input: unknown): Preferences {
  * - PREFS_EXTRAS_KEY ("extras"): the full homeZone and targetZones, the
  *   fields 0.6.x drops (cardSize, lastCardSize, numericDateOrder), and a
  *   fingerprint of the legacy homeZone and targetZones just written.
- * - Both items carry the same random write id `w`. 0.6.x's sanitize drops
- *   unknown fields, so a legacy item written by 0.6.x has no `w`.
+ * - Both items carry the same random write id `w` and write time `t` (ms,
+ *   strictly above every write time this context wrote or read). 0.6.x's
+ *   sanitize drops unknown fields, so a legacy item written by 0.6.x has
+ *   neither.
  *
  * Reading (fromSyncItems):
  * - No extras: the legacy item as is.
  * - Legacy carries a `w` (written by this build): if it equals extras' `w`,
  *   both come from one write, so use extras' full zone values. If it differs,
  *   the two items come from two different writes of this build and one of
- *   them has not arrived yet (sync can deliver them separately). No old
- *   device was involved, so use extras' full zone values rather than merging
- *   (merging would bring back a zone just removed on another device); the
- *   item still in flight settles it when it lands.
+ *   them has not arrived yet (sync can deliver them separately); `t` says
+ *   which is newer:
+ *   - extras newer, equal `t`, or `t` missing on either: use extras' full
+ *     zone values (merging would bring back a zone just removed on another
+ *     device).
+ *   - legacy newer: legacy is the truth for IANA ids. targetZones is
+ *     mergeTargets(legacy, extras) as below; homeZone is legacy's, unless it
+ *     equals the fingerprint of extras' home (the newer write kept that home,
+ *     so extras' full value, e.g. abbr:PT, still applies).
+ *     Known gap: a new-style id removed by the newer write shows until its
+ *     extras lands, since the legacy item cannot say it is gone.
+ *   The item still in flight settles it when it lands.
  * - Legacy has no `w` (0.6.x wrote it, or a build older than the write id):
  *   - homeZone: if the legacy value still matches its fingerprint, nobody
  *     else changed it, so use the full value from extras. Otherwise an old
@@ -267,9 +277,11 @@ export function toSyncItems(prefs: Preferences): Record<string, unknown> {
   // reader without extras still finds them.
   const legacy: Preferences = { ...clean, homeZone, targetZones };
   const w = writeId();
+  const t = writeTime();
   const extras = {
     v: 1,
     w,
+    t,
     homeZone: clean.homeZone,
     targetZones: clean.targetZones,
     cardSize: clean.cardSize,
@@ -278,7 +290,28 @@ export function toSyncItems(prefs: Preferences): Record<string, unknown> {
     fpHome: fingerprint(homeZone),
     fpTargets: fingerprint(targetZones),
   };
-  return { [KEY]: { ...legacy, w }, [EXTRAS_KEY]: extras };
+  return { [KEY]: { ...legacy, w, t }, [EXTRAS_KEY]: extras };
+}
+
+/** Largest write time written or seen in this context (see writeTime). */
+let lastWriteTime = 0;
+
+/**
+ * Write time for a new write: Date.now(), but always above every write time
+ * this context has written or read, so a write made after reading another
+ * device's items orders after them even when that device's clock is ahead.
+ */
+function writeTime(): number {
+  lastWriteTime = Math.max(Date.now(), lastWriteTime + 1);
+  return lastWriteTime;
+}
+
+/** Raise lastWriteTime to the write times found in stored items. */
+function noteWriteTimes(items: Record<string, unknown> | undefined): void {
+  for (const k of [KEY, EXTRAS_KEY]) {
+    const t = record(items?.[k])?.t;
+    if (isWriteTime(t) && t > lastWriteTime) lastWriteTime = t;
+  }
 }
 
 /** A fresh id shared by the two items of one write. */
@@ -319,6 +352,34 @@ export function fromSyncItems(items: Record<string, unknown> | undefined | null)
   const out: Record<string, unknown> = { ...(legacy ?? {}) };
   // A write id on the legacy item means this build wrote it, not 0.6.x.
   const newWriter = typeof legacy?.w === 'string' && typeof extras.w === 'string';
+  if (newWriter && legacy && legacy.w !== extras.w && isWriteTime(legacy.t) && isWriteTime(extras.t) && legacy.t > extras.t) {
+    // The legacy item of a newer write arrived before its extras: legacy is
+    // the truth for IANA values, extras only adds the new-style ids back.
+    if (typeof legacy.homeZone !== 'string' || !isLegacyZone(legacy.homeZone) || fingerprint(legacy.homeZone) === extras.fpHome) {
+      out.homeZone = extras.homeZone;
+    }
+    if (!Array.isArray(legacy.targetZones)) out.targetZones = extras.targetZones;
+    else if (Array.isArray(extras.targetZones)) out.targetZones = mergeTargets(legacy.targetZones, extras.targetZones);
+  } else {
+    // Same write, extras newer, write times missing, or an old device's legacy item.
+    readZones(out, legacy, extras, newWriter);
+  }
+  for (const f of EXTRA_FIELDS) if (extras[f] !== undefined) out[f] = extras[f];
+  return sanitize(out);
+}
+
+/** True for a usable write time `t`. */
+function isWriteTime(t: unknown): t is number {
+  return typeof t === 'number' && Number.isSafeInteger(t) && t > 0;
+}
+
+/** Zone rules for every case but "legacy is from a newer write than extras". */
+function readZones(
+  out: Record<string, unknown>,
+  legacy: Record<string, unknown> | null,
+  extras: Record<string, unknown>,
+  newWriter: boolean,
+): void {
   if (!legacy || newWriter || typeof legacy.homeZone !== 'string' || fingerprint(legacy.homeZone) === extras.fpHome) {
     out.homeZone = extras.homeZone;
   }
@@ -332,8 +393,6 @@ export function fromSyncItems(items: Record<string, unknown> | undefined | null)
   } else if (Array.isArray(extras.targetZones)) {
     out.targetZones = mergeTargets(legacy.targetZones, extras.targetZones);
   }
-  for (const f of EXTRA_FIELDS) if (extras[f] !== undefined) out[f] = extras[f];
-  return sanitize(out);
 }
 
 /**
@@ -344,6 +403,7 @@ let known: { readonly area: chrome.storage.StorageArea; readonly items: Record<s
 
 function remember(area: chrome.storage.StorageArea, items: Record<string, unknown> | undefined): void {
   known = { area, items: { [KEY]: items?.[KEY], [EXTRAS_KEY]: items?.[EXTRAS_KEY] } };
+  noteWriteTimes(items);
 }
 
 export async function loadPreferences(): Promise<Preferences> {

@@ -362,6 +362,182 @@ test.describe('v2 features', () => {
     await page.close();
   });
 
+  /**
+   * A page of `n` dates 138 px apart (as in the round-3 QA report), each
+   * pinned from its own card, at the given viewport size.
+   */
+  async function pinMany(n: number, width: number, height: number): Promise<Page> {
+    await setPrefs({ targetZones: ['UTC', 'America/New_York'], cardSize: 'full', hour12: false });
+    const page = await openPage(
+      Array.from(
+        { length: n },
+        (_, i) =>
+          `<p id="p${i}" style="margin-top:${i ? 120 : 20}px">Item ${i} <span>2024-01-${String(i + 10).padStart(2, '0')} 12:00 UTC</span> x</p>`,
+      ).join(''),
+    );
+    await page.setViewportSize({ width, height });
+    for (let i = 0; i < n; i++) {
+      await page.evaluate((i) => {
+        window.getSelection()?.removeAllRanges();
+        document.querySelector(`#p${i}`)?.scrollIntoView({ block: 'center' });
+        const r = document.createRange();
+        r.selectNodeContents(document.querySelector(`#p${i} span`)!);
+        window.getSelection()?.addRange(r);
+      }, i);
+      await page.dispatchEvent(`#p${i} span`, 'mouseup');
+      await expect(card(page)).toBeVisible({ timeout: 5000 });
+      await card(page).getByLabel('Pin to page').click();
+      await expect(page.locator('.tz-extension-pin-host')).toHaveCount(i + 1);
+    }
+    await page.evaluate(() => {
+      window.getSelection()?.removeAllRanges();
+      window.scrollTo(0, 0);
+    });
+    await page.waitForTimeout(100);
+    return page;
+  }
+
+  /** For each card: how many of its header buttons are what sits under their centre, of how many, and its box. */
+  async function headerReach(page: Page): Promise<Array<{ hit: number; of: number; box: number[] }>> {
+    return page.evaluate(() =>
+      Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((host) => {
+        const root = host.shadowRoot!;
+        const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('.tzx-head button'));
+        const hit = buttons.filter((b) => {
+          const r = b.getBoundingClientRect();
+          const x = r.left + r.width / 2;
+          const y = r.top + r.height / 2;
+          return document.elementFromPoint(x, y) === host && root.elementFromPoint(x, y)?.closest('button') === b;
+        }).length;
+        const r = host.getBoundingClientRect();
+        return { hit, of: buttons.length, box: [r.left, r.top, r.width, r.height].map(Math.round) };
+      }),
+    );
+  }
+
+  for (const [width, height] of [
+    [390, 844],
+    [1280, 800],
+  ] as const) {
+    test(`at ${width} px, "Unpin all" with 5 pins leaves every header button clickable, and "Pin all" puts each card back by its date`, async () => {
+      const page = await pinMany(5, width, height);
+      const pins = page.locator('.tz-extension-pin-host');
+      const pinnedTops = await pins.evaluateAll((hosts) => hosts.map((h) => Math.round(h.getBoundingClientRect().top)));
+      const sources = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('p span')).map((s) => Math.round(s.getBoundingClientRect().bottom)),
+      );
+      await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
+      await expect(pins.locator('.tzx-card.floating')).toHaveCount(5);
+      const reach = await headerReach(page);
+      for (const r of reach) {
+        expect(r.of, JSON.stringify(reach)).toBe(3);
+        expect(r.hit, JSON.stringify(reach)).toBe(r.of);
+        // Wholly on screen, at the height it has once floating.
+        expect(r.box[1]! + r.box[3]!, JSON.stringify(reach)).toBeLessThanOrEqual(height);
+      }
+
+      await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Pin all to page' }).click();
+      await expect(pins.locator('.tzx-card.floating')).toHaveCount(0);
+      const tops = await pins.evaluateAll((hosts) => hosts.map((h) => Math.round(h.getBoundingClientRect().top)));
+      // Back where they were pinned: 8 px below their own date.
+      expect(tops).toEqual(pinnedTops);
+      tops.forEach((t, i) => expect(Math.abs(t - (sources[i]! + 8)), `card ${i}: ${tops} vs ${sources}`).toBeLessThanOrEqual(1));
+      await page.close();
+    });
+  }
+
+  test('at 1280 px, "Unpin all" with 15 pins leaves every header button clickable and every card on screen', async () => {
+    test.setTimeout(90_000);
+    const page = await pinMany(15, 1280, 800);
+    await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
+    await expect(page.locator('.tz-extension-pin-host .tzx-card.floating')).toHaveCount(15);
+    const reach = await headerReach(page);
+    for (const r of reach) {
+      expect(r.hit, JSON.stringify(reach)).toBe(r.of);
+      expect(r.box[1]! + r.box[3]!, JSON.stringify(reach)).toBeLessThanOrEqual(800);
+    }
+    await page.close();
+  });
+
+  test('"Minimize all" then "Expand all" gives every card back its width', async () => {
+    const page = await pinMany(3, 1280, 800);
+    const pins = page.locator('.tz-extension-pin-host');
+    const widths = (): Promise<number[]> =>
+      pins.evaluateAll((hosts) => hosts.map((h) => Math.round(h.getBoundingClientRect().width)));
+    const dock = page.locator('#tz-extension-pin-dock');
+    const before = await widths();
+    await dock.getByRole('button', { name: 'Minimize all' }).click();
+    await expect(pins.locator('.tzx-card.compact')).toHaveCount(3);
+    await dock.getByRole('button', { name: 'Expand all' }).click();
+    await expect(pins.locator('.tzx-card.compact')).toHaveCount(0);
+    expect(await widths()).toEqual(before);
+    // Floating, and one card on its own.
+    await dock.getByRole('button', { name: 'Unpin all' }).click();
+    await expect(pins.locator('.tzx-card.floating')).toHaveCount(3);
+    await dock.getByRole('button', { name: 'Minimize all' }).click();
+    await dock.getByRole('button', { name: 'Expand all' }).click();
+    await expect(pins.locator('.tzx-card.compact')).toHaveCount(0);
+    expect(await widths()).toEqual(before);
+    const first = pins.first().locator('.tzx-card');
+    await first.getByLabel('Make compact').click();
+    await first.getByLabel('Expand card').click();
+    expect(await widths()).toEqual(before);
+    await page.close();
+  });
+
+  test('closing a card with Escape gives focus back to the page control that had it', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full' });
+    const page = await openPage('<p id="t">Standup at 1700000000 today.</p><button id="f">Notes</button>');
+    const open = async (): Promise<void> => {
+      await page.locator('#f').focus();
+      await page.evaluate(() => {
+        const r = document.createRange();
+        r.selectNodeContents(document.getElementById('t')!);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(r);
+      });
+      await page.dispatchEvent('#t', 'mouseup');
+      await expect(card(page)).toBeVisible({ timeout: 5000 });
+      // The button keeps focus; the user tabs from it into the card.
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe('f');
+    };
+    const active = (): Promise<string> => page.evaluate(() => document.activeElement?.id ?? '');
+
+    // From a card button.
+    await open();
+    await page.keyboard.press('Tab');
+    await expect.poll(active).toBe('tz-extension-popover-host');
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toHaveCount(0);
+    expect(await active()).toBe('f');
+
+    // From the card's zone search.
+    await page.mouse.click(5, 5);
+    await open();
+    const search = card(page).getByRole('combobox', { name: 'Add a timezone' });
+    await search.focus();
+    // Focus opens its list; the first Escape shuts it, the next closes the card.
+    if ((await search.getAttribute('aria-expanded')) === 'true') {
+      await page.keyboard.press('Escape');
+      await expect(search).toHaveAttribute('aria-expanded', 'false');
+    }
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toHaveCount(0);
+    expect(await active()).toBe('f');
+
+    // A card that took focus from no one leaves it on the body, without scrolling.
+    await page.mouse.click(5, 5);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.locator('#t').click({ clickCount: 3 });
+    await expect.poll(active).toBe('tz-extension-popover-host');
+    const y = await page.evaluate(() => window.scrollY);
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toHaveCount(0);
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    expect(await page.evaluate(() => window.scrollY)).toBe(y);
+    await page.close();
+  });
+
   test('pin dock: minimize, expand, unpin, pin, close all and undo', async () => {
     const page = await openPage('<p id="a">1700000000</p><p id="b" style="margin-top:300px">2024-01-02T10:00:00Z</p>');
     for (const id of ['#a', '#b']) {

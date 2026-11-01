@@ -305,13 +305,15 @@ describe('sync across versions: two items', () => {
     expect(p.homeZone).toBe('abbr:PT');
   });
 
-  it('partial delivery the other way: newer legacy with the previous extras shows the previous zones until extras land', () => {
+  it('partial delivery the other way: newer legacy with the previous extras already drops the removed zone', () => {
     const start: Preferences = { ...NEW_STYLE, targetZones: ['Europe/London', 'UTC+05:45', 'Asia/Tokyo'] };
     const before = toSyncItems(start);
     const next: Preferences = { ...start, targetZones: ['UTC+05:45', 'Asia/Tokyo'] };
     const after = toSyncItems(next);
     const mixed = { [PREFS_KEY]: after[PREFS_KEY], [PREFS_EXTRAS_KEY]: before[PREFS_EXTRAS_KEY] };
-    expect(fromSyncItems(mixed).targetZones).toEqual(start.targetZones);
+    // The legacy item is newer (larger write time), so its IANA list wins and
+    // London stays removed; UTC+05:45 comes back from extras.
+    expect(fromSyncItems(mixed).targetZones).toEqual(next.targetZones);
     expect(fromSyncItems({ ...mixed, [PREFS_EXTRAS_KEY]: after[PREFS_EXTRAS_KEY] }).targetZones).toEqual(next.targetZones);
   });
 

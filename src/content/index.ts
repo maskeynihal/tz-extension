@@ -1,4 +1,5 @@
 import { createRoot, type Root } from 'react-dom/client';
+import { flushSync } from 'react-dom';
 import { createElement } from 'react';
 import { parseTimes, SCAN_LIMIT } from '../lib/parse';
 import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
@@ -141,6 +142,11 @@ interface Pin {
   compact: boolean;
   /** Pinned to the page (scrolls with it) or floating on screen. */
   placement: 'pinned' | 'floating';
+  /**
+   * The width the card had at full size (e.g. "245px"), so expanding it from
+   * compact gives back that size. Null until known.
+   */
+  fullWidth: string | null;
   render(): void;
 }
 const pins = new Set<Pin>();
@@ -385,6 +391,11 @@ export interface CardBox {
   readonly left: number;
   readonly width: number;
   readonly height: number;
+  /**
+   * Height of its header row (grip, number and buttons), from the card's top
+   * edge. FLOAT_HEADER when not given.
+   */
+  readonly header?: number;
 }
 /** A viewport rectangle (the dock's). */
 export interface ViewRect {
@@ -393,27 +404,152 @@ export interface ViewRect {
   readonly right: number;
   readonly bottom: number;
 }
-/** Step between cascaded floating cards, both ways. */
+/** Step between cards the page still gathers near the top right. */
 export const FLOAT_STEP = 32;
 /**
- * The top-left square of a card (its grip and number) that no card painted
- * above it may cover, so every card's header can still be grabbed.
+ * Height of a card's header row (grip, number and every header button) when
+ * it cannot be measured. No card painted above a card may cover any of it.
  */
-export const FLOAT_CORNER = 24;
+export const FLOAT_HEADER = 40;
+/** Gap between the steps of a staircase of cards. */
+const STAIR_GAP = 2;
+/** Spacing of the grid of spots the layout tries, in px. */
+const FIT_GRID = 16;
 
 interface FitView {
   readonly width: number;
   readonly height: number;
 }
 
+type Spot = { top: number; left: number };
+
+/** Height of a card's header row (never more than the card). */
+function headOf(b: CardBox): number {
+  return Math.max(0, Math.min(b.height, b.header ?? FLOAT_HEADER));
+}
+function boxRect(top: number, left: number, width: number, height: number): ViewRect {
+  return { top, left, right: left + width, bottom: top + height };
+}
+function overlaps(a: ViewRect, b: ViewRect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+/**
+ * How strictly a card keeps out of the dock: wholly, or (when there is no
+ * room for that) only with its header, so the dock covers part of its body.
+ */
+type DockRule = 'card' | 'header';
+
+/**
+ * The spot for `card` nearest to where it wants to be, among the wanted spot,
+ * a FIT_GRID grid and the edges of the other cards, such that: it is on
+ * screen; it covers no header of a card in `below` (painted under it); no
+ * card in `above` (painted over it) covers its own header; and it keeps out
+ * of the dock per `rule`. Null when there is no such spot.
+ */
+function nearestSpot(
+  card: CardBox,
+  below: readonly CardBox[],
+  above: readonly CardBox[],
+  view: FitView,
+  dock: ViewRect | null,
+  rule: DockRule,
+): Spot | null {
+  const w = card.width;
+  const h = card.height;
+  const head = headOf(card);
+  const maxL = Math.max(MARGIN, view.width - w - MARGIN);
+  const maxT = Math.max(MARGIN, view.height - h - MARGIN);
+  const clampL = (x: number): number => Math.min(Math.max(MARGIN, x), maxL);
+  const clampT = (y: number): number => Math.min(Math.max(MARGIN, y), maxT);
+  const heads = below.map((b) => boxRect(b.top, b.left, b.width, headOf(b)));
+  const tops = above.map((a) => boxRect(a.top, a.left, a.width, a.height));
+  const ok = (top: number, left: number): boolean => {
+    const me = boxRect(top, left, w, h);
+    const myHead = boxRect(top, left, w, head);
+    if (dock && overlaps(rule === 'card' ? me : myHead, dock)) return false;
+    for (const b of heads) if (overlaps(me, b)) return false;
+    for (const a of tops) if (overlaps(myHead, a)) return false;
+    return true;
+  };
+
+  const start = { top: clampT(card.top), left: clampL(card.left) };
+  if (ok(start.top, start.left)) return start;
+
+  const ys = new Set<number>([start.top, MARGIN, maxT]);
+  const xs = new Set<number>([start.left, MARGIN, maxL]);
+  for (let y = MARGIN; y <= maxT; y += FIT_GRID) ys.add(y);
+  for (let x = MARGIN; x <= maxL; x += FIT_GRID) xs.add(x);
+  for (const b of below) {
+    ys.add(b.top + headOf(b) + STAIR_GAP); // just under its header
+    ys.add(b.top - h - STAIR_GAP); // just above it
+    xs.add(b.left);
+    xs.add(b.left + b.width + MARGIN); // beside it, either side
+    xs.add(b.left - w - MARGIN);
+  }
+  for (const a of above) {
+    ys.add(a.top + a.height + STAIR_GAP);
+    xs.add(a.left + a.width + MARGIN);
+    xs.add(a.left - w - MARGIN);
+  }
+  if (dock) {
+    ys.add(dock.top - MARGIN - (rule === 'card' ? h : head));
+    xs.add(dock.left - MARGIN - w);
+  }
+  const ysOk = [...ys].filter((y) => y >= MARGIN && y <= maxT);
+  const xsOk = [...xs].filter((x) => x >= MARGIN && x <= maxL);
+  let best: Spot | null = null;
+  let bestD = Infinity;
+  for (const top of ysOk) {
+    const dy = top - start.top;
+    for (const left of xsOk) {
+      const dx = left - start.left;
+      const d = dx * dx + dy * dy;
+      if (d < bestD && ok(top, left)) {
+        best = { top, left };
+        bestD = d;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * When the screen has no room for every card with its header clear of the
+ * others: a staircase in columns, each card one header height below the one
+ * before, so bodies overlap but headers do not. Columns sit side by side
+ * without overlapping; when there are not enough of them, the steps shrink
+ * evenly (the only case where headers can overlap). Headers stay clear of
+ * the dock; bodies may run under it.
+ */
+function staircase(cards: readonly CardBox[], view: FitView, dock: ViewRect | null): Spot[] {
+  const n = cards.length;
+  if (n === 0) return [];
+  const wMax = Math.max(...cards.map((c) => c.width));
+  const hMax = Math.max(...cards.map((c) => c.height));
+  const headMax = Math.max(...cards.map(headOf));
+  let lastTop = view.height - MARGIN - hMax;
+  if (dock) lastTop = Math.min(lastTop, dock.top - MARGIN - headMax);
+  const span = Math.max(0, lastTop - MARGIN);
+  const step = headMax + STAIR_GAP;
+  const cap = Math.floor(span / step) + 1;
+  const cols = Math.max(1, Math.floor((view.width - MARGIN) / (wMax + MARGIN)));
+  const roomy = n <= cols * cap;
+  const perCol = roomy ? cap : Math.ceil(n / cols);
+  const used = roomy ? step : perCol > 1 ? span / (perCol - 1) : 0;
+  return cards.map((_, k) => ({
+    top: Math.round(MARGIN + (k % perCol) * used),
+    left: MARGIN + Math.floor(k / perCol) * (wMax + MARGIN),
+  }));
+}
+
 /**
  * Where a floating card of `card`'s size goes, as close to `card.top/left`
  * as possible. Cards in `below` are painted under it: it must not cover
- * their top-left corner. Cards in `above` are painted over it: they must not
- * cover its corner. It stays on screen and clear of the dock. Tries, in
- * order: the wanted spot; a cascade from it (down-right, down-left, up-right,
- * FLOAT_STEP a step); columns from the top left; and as a last resort a
- * FLOAT_CORNER step down-right of the last card below (wrapping on screen).
+ * their header row. Cards in `above` are painted over it: they must not
+ * cover its header row. It stays on screen and clear of the dock (only its
+ * header, when nothing else fits). As a last resort it goes one header
+ * height below the last card below.
  */
 export function fitFloating(
   card: CardBox,
@@ -421,83 +557,41 @@ export function fitFloating(
   above: readonly CardBox[],
   view: FitView,
   dock: ViewRect | null,
-): { top: number; left: number } {
-  const w = card.width;
-  const h = card.height;
-  const maxL = Math.max(MARGIN, view.width - w - MARGIN);
-  const maxT = Math.max(MARGIN, view.height - h - MARGIN);
-  const clampL = (x: number): number => Math.min(Math.max(MARGIN, x), maxL);
-  const clampT = (y: number): number => Math.min(Math.max(MARGIN, y), maxT);
-  const hits = (a: ViewRect, b: ViewRect): boolean =>
-    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  const rect = (top: number, left: number, width: number, height: number): ViewRect => ({
-    top,
-    left,
-    right: left + width,
-    bottom: top + height,
-  });
-  const corner = (b: { top: number; left: number }): ViewRect => rect(b.top, b.left, FLOAT_CORNER, FLOAT_CORNER);
-  const ok = (top: number, left: number): boolean => {
-    const me = rect(top, left, w, h);
-    if (dock && hits(me, dock)) return false;
-    for (const b of below) if (hits(me, corner(b))) return false;
-    const mine = corner({ top, left });
-    for (const a of above) if (hits(mine, rect(a.top, a.left, a.width, a.height))) return false;
-    return true;
-  };
-  const fits = (top: number, left: number): boolean => top >= MARGIN && top <= maxT && left >= MARGIN && left <= maxL;
-
-  const start = { top: clampT(card.top), left: clampL(card.left) };
-  // Out of the dock's way, straight up, when it would sit on it.
-  if (dock && hits(rect(start.top, start.left, w, h), dock) && dock.top - MARGIN - h >= MARGIN) {
-    start.top = dock.top - MARGIN - h;
-  }
-  if (ok(start.top, start.left)) return start;
-
-  for (const [dx, dy] of [
-    [1, 1],
-    [-1, 1],
-    [1, -1],
-  ] as const) {
-    for (let k = 1; ; k++) {
-      const top = start.top + dy * k * FLOAT_STEP;
-      const left = start.left + dx * k * FLOAT_STEP;
-      if (!fits(top, left)) break;
-      if (ok(top, left)) return { top, left };
-    }
-  }
-  for (let left = MARGIN; left <= maxL; left += FLOAT_STEP) {
-    for (let top = MARGIN; top <= maxT; top += FLOAT_STEP) {
-      if (ok(top, left)) return { top, left };
-    }
-  }
-  // No spot leaves every corner free (very many cards on a small screen):
-  // step off the last card below, so at least that one is not hidden.
+): Spot {
+  const at =
+    nearestSpot(card, below, above, view, dock, 'card') ?? nearestSpot(card, below, above, view, dock, 'header');
+  if (at) return at;
+  const maxL = Math.max(MARGIN, view.width - card.width - MARGIN);
+  const maxT = Math.max(MARGIN, view.height - card.height - MARGIN);
   const last = below[below.length - 1];
-  if (!last) return start;
-  let top = last.top + FLOAT_CORNER;
-  let left = last.left + FLOAT_CORNER;
-  if (top > maxT) top = MARGIN;
-  if (left > maxL) left = MARGIN;
-  return { top, left };
+  if (!last) return { top: Math.min(Math.max(MARGIN, card.top), maxT), left: Math.min(Math.max(MARGIN, card.left), maxL) };
+  return {
+    top: Math.min(last.top + headOf(last) + STAIR_GAP, maxT),
+    left: Math.min(Math.max(MARGIN, last.left), maxL),
+  };
 }
 
 /**
- * Lay out floating cards given in painting order (later ones on top), each
- * as close as it can stay to where it wants to be, so that none hides
- * another's header. See fitFloating.
+ * Lay out floating cards given in painting order (later ones on top) so that
+ * no card covers the header row of a card under it, every card is wholly on
+ * screen, and each stays as close as it can to where it wants to be. When
+ * that leaves no room for some card, the cards form a staircase instead.
  */
-export function layoutFloating(
-  cards: readonly CardBox[],
-  view: FitView,
-  dock: ViewRect | null,
-): Array<{ top: number; left: number }> {
-  const placed: CardBox[] = [];
-  return cards.map((card) => {
-    const at = fitFloating(card, placed, [], view, dock);
-    placed.push({ ...at, width: card.width, height: card.height });
-    return at;
-  });
+export function layoutFloating(cards: readonly CardBox[], view: FitView, dock: ViewRect | null): Spot[] {
+  // First every card clear of the dock; then, if that runs out of room,
+  // cards that do not fit otherwise may put their body under it.
+  for (const relaxed of [false, true]) {
+    const placed: CardBox[] = [];
+    for (const card of cards) {
+      const at =
+        nearestSpot(card, placed, [], view, dock, 'card') ??
+        (relaxed ? nearestSpot(card, placed, [], view, dock, 'header') : null);
+      if (!at) break;
+      placed.push({ ...card, ...at });
+    }
+    if (placed.length === cards.length) return placed.map(({ top, left }) => ({ top, left }));
+  }
+  return staircase(cards, view, dock);
 }
 
 /** The dock's viewport rect, when it is on the page. */
@@ -635,7 +729,33 @@ function teardownTransient(): void {
   if (tHost && tHost.parentNode) tHost.parentNode.removeChild(tHost);
   tHost = null;
   tState = null;
+  returnFocus = null;
   document.removeEventListener('scroll', onScroll, true);
+}
+
+/**
+ * The page element that had focus before the transient card took it, to
+ * give focus back to when the user closes the card from the keyboard.
+ */
+let returnFocus: HTMLElement | null = null;
+
+/** The page element (not ours, not body) that has focus now. */
+function pageFocus(): HTMLElement | null {
+  const a = document.activeElement;
+  if (!(a instanceof HTMLElement) || a === document.body || a === document.documentElement) return null;
+  return inOurUi(a) ? null : a;
+}
+
+/** Focus entering the transient card from the page: remember where from. */
+function onTransientFocusIn(e: FocusEvent): void {
+  const from = e.relatedTarget;
+  if (from instanceof HTMLElement && from !== document.body && !inOurUi(from)) returnFocus = from;
+}
+
+/** A new transient host: note the page focus now, and follow focus moving into it. */
+function watchFocus(host: HTMLElement): void {
+  returnFocus = pageFocus();
+  host.addEventListener('focusin', onTransientFocusIn);
 }
 
 /**
@@ -651,11 +771,27 @@ function selectionKey(text: string, rect: DOMRect): string {
   return `${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}:${text}`;
 }
 
-/** User-facing dismissal: also clears the live (transient) highlight. */
-function dismissTransient(): void {
+/**
+ * User-facing dismissal: also clears the live (transient) highlight. With
+ * `giveFocusBack` (Escape or the close button) and focus inside the card,
+ * focus returns to the page element that had it before the card took it,
+ * when that element is still there and can take focus; else it stays on
+ * the body, and the page does not scroll either way.
+ */
+function dismissTransient(giveFocusBack = false): void {
+  const host = tHost;
+  const active = document.activeElement;
+  const focusInCard = !!host && !!active && (active === host || host.contains(active));
+  const back = returnFocus;
   if (tHost && shownKey) dismissedKey = shownKey;
   clearLiveHighlight();
   teardownTransient();
+  if (!giveFocusBack || !focusInCard || !back || !back.isConnected) return;
+  try {
+    back.focus({ preventScroll: true });
+  } catch {
+    /* not focusable: focus stays on the body */
+  }
 }
 
 function onScroll(): void {
@@ -719,7 +855,7 @@ function onKeyDown(e: KeyboardEvent): void {
     const origin = e.composedPath()[0];
     if (isTextField(origin) && !isIdleZoneSearch(origin)) return;
   }
-  dismissTransient();
+  dismissTransient(true);
 }
 
 /**
@@ -728,7 +864,7 @@ function onKeyDown(e: KeyboardEvent): void {
  */
 function onKeyDownBubble(e: KeyboardEvent): void {
   if (e.key !== 'Escape' || !fromOurUi(e)) return;
-  dismissTransient();
+  dismissTransient(true);
 }
 
 /** The transient card's content, kept so it can re-render in place. */
@@ -769,7 +905,7 @@ function paintTransient(): void {
         rememberSize(st.compact);
         paintTransient();
       },
-      onClose: dismissTransient,
+      onClose: () => dismissTransient(true),
       onDragStart: (e) => startDrag(hostEl, e, true),
       onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
         // Persist as the global default, then re-read this value with it.
@@ -803,6 +939,7 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, 
     shadow.appendChild(mount);
     document.body.appendChild(tHost);
     positionFixed(tHost, rect);
+    watchFocus(tHost);
 
     // Capture a document-space point for the pin, from the current scroll.
     tState = {
@@ -839,6 +976,8 @@ interface PinSpec {
   readonly box?: { readonly top: number; readonly left: number };
   /** Width the card was fixed at (see lockWidth), to restore. */
   readonly width?: string;
+  /** Width it had at full size (see setCompact), to restore. */
+  readonly fullWidth?: string | null;
   /** Highlight slot (number and color) to take back, when it is free. */
   readonly slot?: number;
 }
@@ -857,17 +996,16 @@ function currentPagePos(pin: Pin): { x: number; y: number } {
 }
 
 /**
- * Step a page point down-right until no other card sits within 48 px of it,
- * so a new or re-pinned card never lands on top of another one. Compares
- * against where the other cards are now, not where they were first placed.
+ * Step a page point down-right until none of `others` sits within 48 px of
+ * it, so a new or re-pinned card never lands on top of another one. Compares
+ * against where those cards are now, not where they were first placed.
  */
-function cascadeFrom(pageX: number, pageY: number, skip?: Pin): { x: number; y: number } {
+function cascadeFrom(pageX: number, pageY: number, others: Iterable<Pin>): { x: number; y: number } {
   let px = pageX;
   let py = pageY;
   const tooClose = (): boolean => {
     const left = clampPageLeft(px);
-    for (const p of pins) {
-      if (p === skip) continue;
+    for (const p of others) {
       const at = currentPagePos(p);
       if (Math.abs(at.x - left) < 48 && Math.abs(at.y - py) < 48) return true;
     }
@@ -900,70 +1038,111 @@ function styleNum(el: HTMLElement, prop: 'top' | 'left', fallback: number): numb
 
 /**
  * Fix a card's width at what it is now, so it keeps it when it moves between
- * pinned and floating (the "floating" tag must not make it wider).
+ * pinned and floating (the "floating" tag must not make it wider). At full
+ * size, that is also the width it gets back after being compact.
  */
-function lockWidth(host: HTMLElement): void {
-  const w = host.getBoundingClientRect().width;
-  if (w > 0) host.style.setProperty('width', `${Math.ceil(w)}px`, 'important');
+function lockWidth(pin: Pin): void {
+  const w = pin.host.getBoundingClientRect().width;
+  if (w <= 0) return;
+  const px = `${Math.ceil(w)}px`;
+  pin.host.style.setProperty('width', px, 'important');
+  if (!pin.compact) pin.fullWidth = px;
 }
 
-/** Let a card size to its content again (it changed size: compact ↔ full). */
-function unlockWidth(host: HTMLElement): void {
-  host.style.removeProperty('width');
+/**
+ * Switch a card between compact and full. Compact sizes to its content;
+ * full gets back the width it had at full size (so "Expand" restores the
+ * card as it was), or sizes to its content when that is not known.
+ */
+function setCompact(pin: Pin, compact: boolean): void {
+  if (pin.compact === compact) return;
+  if (compact) {
+    const locked = pin.host.style.getPropertyValue('width');
+    const w = pin.host.getBoundingClientRect().width;
+    const full = locked || (w > 0 ? `${Math.ceil(w)}px` : '');
+    if (full) pin.fullWidth = full;
+    pin.host.style.removeProperty('width');
+  } else if (pin.fullWidth) {
+    pin.host.style.setProperty('width', pin.fullWidth, 'important');
+  } else {
+    pin.host.style.removeProperty('width');
+  }
+  pin.compact = compact;
+  pin.render();
 }
 
-/** Viewport box of a card, clamped so the whole card is on screen. */
-function clampToViewport(host: HTMLElement): { top: number; left: number } {
+/** Render a card now, so it can be measured in its new state right away. */
+function renderNow(pin: Pin): void {
+  flushSync(() => pin.render());
+}
+
+/** Height of a card's header row, from the card's top edge (FLOAT_HEADER when it cannot be measured). */
+function headerHeight(host: HTMLElement): number {
+  const head = host.shadowRoot?.querySelector('.tzx-head')?.getBoundingClientRect();
   const r = host.getBoundingClientRect();
-  const w = r.width || CARD_MAX_W;
-  const h = r.height || EST_HEIGHT;
-  const top = Math.min(Math.max(MARGIN, r.top), Math.max(MARGIN, window.innerHeight - h - MARGIN));
-  const left = Math.min(Math.max(MARGIN, r.left), Math.max(MARGIN, window.innerWidth - w - MARGIN));
-  return avoidDock({ top, left }, w, h);
+  if (!head || !head.height) return FLOAT_HEADER;
+  return Math.ceil(head.bottom - r.top);
+}
+
+/** A card's viewport box as laid out: the position we set, the measured size. */
+function floatBox(host: HTMLElement): CardBox {
+  const b = host.getBoundingClientRect();
+  return {
+    top: styleNum(host, 'top', b.top),
+    left: styleNum(host, 'left', b.left),
+    width: b.width || CARD_MAX_W,
+    height: b.height || EST_HEIGHT,
+    header: headerHeight(host),
+  };
+}
+
+/**
+ * Turn a card into a floating one where it is on screen now, at its current
+ * width, and render it at once: the "floating" look can change its height,
+ * and the layout needs the height it has once it floats.
+ */
+function floatInPlace(pin: Pin): { top: number; left: number } {
+  const r = pin.host.getBoundingClientRect();
+  lockWidth(pin);
+  applyBox(pin.host, 'fixed', r.top, r.left);
+  pin.placement = 'floating';
+  renderNow(pin);
+  return { top: r.top, left: r.left };
 }
 
 /**
  * Pin ↔ float. Floating keeps the card where it is on screen (brought into
- * view). Pinning puts it back next to its source text when that text is
- * still on the page, else where it is now, in page coordinates.
+ * view, clear of the other floating cards' headers). Pinning puts it back
+ * next to its source text when that text is still on the page (stepping off
+ * the cards in `others`, by default every other card), else where it is now,
+ * in page coordinates.
  */
-function setPlacement(pin: Pin, placement: 'pinned' | 'floating'): void {
+function setPlacement(pin: Pin, placement: 'pinned' | 'floating', others?: Iterable<Pin>): void {
   if (pin.placement === placement) return;
-  lockWidth(pin.host);
   if (placement === 'floating') {
-    const { top, left } = clampToViewport(pin.host);
-    const r = pin.host.getBoundingClientRect();
-    const size = { width: r.width || CARD_MAX_W, height: r.height || EST_HEIGHT };
-    // Keep clear of the other floating cards' headers (painted in page order).
+    const wanted = floatInPlace(pin);
+    // Painted in page order: earlier cards are under this one, later ones over it.
     const list = Array.from(pins);
     const i = list.indexOf(pin);
-    const boxOf = (p: Pin): CardBox => {
-      const b = p.host.getBoundingClientRect();
-      return {
-        top: styleNum(p.host, 'top', b.top),
-        left: styleNum(p.host, 'left', b.left),
-        width: b.width || CARD_MAX_W,
-        height: b.height || EST_HEIGHT,
-      };
-    };
     const floating = (p: Pin): boolean => p !== pin && p.placement === 'floating';
     const at = fitFloating(
-      { top, left, ...size },
-      list.slice(0, i).filter(floating).map(boxOf),
-      list.slice(i + 1).filter(floating).map(boxOf),
+      { ...floatBox(pin.host), ...wanted },
+      list.slice(0, i).filter(floating).map((p) => floatBox(p.host)),
+      list.slice(i + 1).filter(floating).map((p) => floatBox(p.host)),
       { width: window.innerWidth, height: window.innerHeight },
       dockRect(),
     );
     applyBox(pin.host, 'fixed', at.top, at.left);
+    return;
+  }
+  lockWidth(pin);
+  const anchor = sourceAnchor(pin.range);
+  if (anchor) {
+    const at = cascadeFrom(anchor.x, anchor.y, others ?? Array.from(pins).filter((p) => p !== pin));
+    positionAbsolute(pin.host, at.x, at.y);
   } else {
-    const anchor = sourceAnchor(pin.range);
-    if (anchor) {
-      const at = cascadeFrom(anchor.x, anchor.y, pin);
-      positionAbsolute(pin.host, at.x, at.y);
-    } else {
-      const r = pin.host.getBoundingClientRect();
-      applyBox(pin.host, 'absolute', r.top + window.scrollY, r.left + window.scrollX);
-    }
+    const r = pin.host.getBoundingClientRect();
+    applyBox(pin.host, 'absolute', r.top + window.scrollY, r.left + window.scrollX);
   }
   pin.placement = placement;
   pin.render();
@@ -999,7 +1178,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
     // on the page), cascade it down-right so every pinned card stays visible.
     let px = spec.pageX;
     let py = spec.pageY;
-    if (!spec.box) ({ x: px, y: py } = cascadeFrom(px, py));
+    if (!spec.box) ({ x: px, y: py } = cascadeFrom(px, py, pins));
     const placement = spec.placement ?? 'pinned';
     if (spec.box) applyBox(host, placement === 'floating' ? 'fixed' : 'absolute', spec.box.top, spec.box.left);
     else positionAbsolute(host, px, py);
@@ -1018,6 +1197,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
       count: spec.count,
       compact: spec.compact,
       placement,
+      fullWidth: spec.fullWidth ?? null,
       render: () => {
         root.render(
           createElement(Popover, {
@@ -1034,10 +1214,8 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
               refreshDock();
             },
             onToggleCompact: () => {
-              pin.compact = !pin.compact;
+              setCompact(pin, !pin.compact);
               rememberSize(pin.compact);
-              unlockWidth(host);
-              pin.render();
               refreshDock();
             },
             onTogglePlacement: () => {
@@ -1125,16 +1303,12 @@ function specOf(pin: Pin): PinSpec {
     slot: pin.slot,
     box: Number.isFinite(top) && Number.isFinite(left) ? { top, left } : measured,
     width: pin.host.style.getPropertyValue('width') || undefined,
+    fullWidth: pin.fullWidth,
   };
 }
 
 function setAllCompact(compact: boolean): void {
-  for (const pin of pins) {
-    if (pin.compact === compact) continue;
-    pin.compact = compact;
-    unlockWidth(pin.host);
-    pin.render();
-  }
+  for (const pin of pins) setCompact(pin, compact);
   rememberSize(compact);
   refreshDock();
 }
@@ -1143,39 +1317,45 @@ function togglePlacementAll(): void {
   const list = Array.from(pins);
   const allFloating = list.every((p) => p.placement === 'floating');
   if (allFloating) {
-    for (const pin of list) setPlacement(pin, 'pinned');
+    // Each card goes back next to its own source, stepping off only the
+    // cards already put back in this pass (at their new spots), not off
+    // where the others still float.
+    const placed: Pin[] = [];
+    for (const pin of list) {
+      setPlacement(pin, 'pinned', placed);
+      placed.push(pin);
+    }
     refreshDock();
     return;
   }
   // Every card floats. Cards on screen want to stay where they are; the ones
-  // scrolled away gather near the top right. Then lay them all out (in page
-  // order, later ones painted on top) so no card hides another's header.
+  // scrolled away gather near the top right.
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   let gathered = 0;
-  const wanted: CardBox[] = list.map((pin) => {
+  const wanted = list.map((pin) => {
     const r = pin.host.getBoundingClientRect();
     const width = r.width || CARD_MAX_W;
-    const height = r.height || EST_HEIGHT;
     const offscreen = r.bottom < 0 || r.top > vh;
     if (pin.placement === 'pinned' && offscreen) {
-      const top = 64 + gathered * FLOAT_STEP;
-      const left = vw - width - 24 - gathered * FLOAT_STEP;
+      const at = { top: 64 + gathered * FLOAT_STEP, left: vw - width - 24 - gathered * FLOAT_STEP };
       gathered += 1;
-      return { top, left, width, height };
+      return at;
     }
-    return { top: r.top, left: r.left, width, height };
+    return { top: r.top, left: r.left };
   });
-  const at = layoutFloating(wanted, { width: vw, height: vh }, dockRect());
+  // Float them first, so the layout uses the size each has once floating.
+  for (const pin of list) {
+    if (pin.placement !== 'floating') floatInPlace(pin);
+    else lockWidth(pin);
+  }
+  // Lay them all out in page order (later ones painted on top), so no card
+  // covers another's header row.
+  const boxes: CardBox[] = list.map((pin, i) => ({ ...floatBox(pin.host), ...wanted[i] }));
+  const at = layoutFloating(boxes, { width: vw, height: vh }, dockRect());
   list.forEach((pin, i) => {
     const box = at[i];
-    if (!box) return;
-    lockWidth(pin.host);
-    applyBox(pin.host, 'fixed', box.top, box.left);
-    if (pin.placement !== 'floating') {
-      pin.placement = 'floating';
-      pin.render();
-    }
+    if (box) applyBox(pin.host, 'fixed', box.top, box.left);
   });
   refreshDock();
 }
@@ -1307,13 +1487,14 @@ function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
     shadow.appendChild(mount);
     document.body.appendChild(tHost);
     positionFixed(tHost, rect);
+    watchFocus(tHost);
     const hostEl = tHost;
     tRoot = createRoot(mount);
     tRoot.render(
       createElement(NoMatchCard, {
         text,
         truncated,
-        onClose: dismissTransient,
+        onClose: () => dismissTransient(true),
         onDragStart: (e) => startDrag(hostEl, e, true),
         onOpenSettings: () => {
           const msg: OpenOptionsMessage = { type: 'tzx/open-options', section: 'formats' };

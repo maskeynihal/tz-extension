@@ -112,6 +112,68 @@ export function wallFieldsToInstant(w: WallFields, tz: string): WallInstant | nu
   return Number.isFinite(here) ? { epochMs: local - here } : null;
 }
 
+/** Offset of `tz` from UTC at an instant, in whole minutes toward zero (NaN when unknown). */
+export function offsetMinutes(tz: string, ms: number): number {
+  const off = offsetAt(tz, ms);
+  return Number.isFinite(off) ? Math.trunc(off / 60_000) : NaN;
+}
+
+/** Wall-clock fields of an instant in `tz`, plus the weekday (0 = Sunday). Null when the zone is unknown. */
+export function wallFieldsAt(ms: number, tz: string): (WallFields & { readonly weekday: number }) | null {
+  const off = offsetAt(tz, ms);
+  if (!Number.isFinite(off)) return null;
+  // The instant shifted by the offset, read with UTC getters: no host zone involved.
+  const d = new Date(Math.floor(ms / 1000) * 1000 + off);
+  return {
+    y: d.getUTCFullYear(),
+    mo: d.getUTCMonth() + 1,
+    d: d.getUTCDate(),
+    h: d.getUTCHours(),
+    mi: d.getUTCMinutes(),
+    s: d.getUTCSeconds(),
+    weekday: d.getUTCDay(),
+  };
+}
+
+/**
+ * English locales tried for a zone's short name. en-US knows the North
+ * American names (EDT, PST, HST); en-GB the European ones (BST, CET, CEST);
+ * en-AU the Australian and New Zealand ones (AEDT, LHST, NZDT); en-IN IST.
+ * Every one of them falls back to "GMT+5:45"-style names.
+ */
+const ABBR_LOCALES = ['en-US', 'en-GB', 'en-AU', 'en-IN'] as const;
+const abbrFormatters = new Map<string, Intl.DateTimeFormat | null>();
+
+function abbrIn(locale: string, tz: string, ms: number): string {
+  const key = `${locale}|${tz}`;
+  let f = abbrFormatters.get(key);
+  if (f === undefined) {
+    try {
+      f = new Intl.DateTimeFormat(locale, { timeZone: tz, timeZoneName: 'short' });
+    } catch {
+      f = null;
+    }
+    if (abbrFormatters.size > 2000) abbrFormatters.clear();
+    abbrFormatters.set(key, f);
+  }
+  return f?.formatToParts(new Date(ms)).find((p) => p.type === 'timeZoneName')?.value ?? '';
+}
+
+/**
+ * The short name of `tz` at an instant: a letter abbreviation when any of
+ * ABBR_LOCALES has one ("EDT", "BST", "AEDT"), else the GMT-offset form
+ * ("GMT+5:45"). Empty when the zone is unknown.
+ */
+export function zoneAbbreviation(ms: number, tz: string): string {
+  let fallback = '';
+  for (const locale of ABBR_LOCALES) {
+    const name = abbrIn(locale, tz, ms);
+    if (/^[A-Z]{2,5}$/.test(name)) return name;
+    fallback ||= name;
+  }
+  return fallback;
+}
+
 /** Parse "YYYY-MM-DDTHH:mm[:ss]" into fields; null when it isn't that shape. */
 export function parseWallIso(iso: string): WallFields | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(iso);

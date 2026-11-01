@@ -17,6 +17,7 @@ import {
   diffFromHome,
   formatDiff,
   makeHome,
+  minutesFromNow,
   moveItem,
   relativeDay,
   shownInstant,
@@ -122,6 +123,8 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
   prefsRef.current = prefs;
   const now = useNow();
   const [steps, setSteps] = useState(0);
+  // A preset ("+24h") plans from the current minute; the slider snaps to quarter hours.
+  const [exact, setExact] = useState(false);
   const [scrubbed, setScrubbed] = useState(false);
   const [status, setStatus] = useState('');
   const [dragOrder, setDragOrder] = useState<string[] | null>(null);
@@ -176,7 +179,7 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
   const othersRef = useRef(others);
   othersRef.current = others;
 
-  const instant = shownInstant(now, steps);
+  const instant = shownInstant(now, steps, exact);
   const planning = steps !== 0;
 
   // --- FLIP animation + focus restore after reorders. ---
@@ -535,13 +538,15 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
           </section>
           <Scrubber
             steps={steps}
+            exact={exact}
             nowMs={now}
             home={home}
             hour12={hour12}
             scrubbed={scrubbed}
-            onChange={(s) => {
+            onChange={(s, isExact = false) => {
               setScrubbed(true);
               setSteps(s);
+              setExact(isExact && s !== 0);
             }}
             idBase={titleId}
           />
@@ -606,11 +611,13 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
 
 interface ScrubberProps {
   readonly steps: number;
+  /** The plan came from a preset and starts at the current minute, not the quarter hour. */
+  readonly exact: boolean;
   readonly nowMs: number;
   readonly home: string;
   readonly hour12: boolean;
   readonly scrubbed: boolean;
-  readonly onChange: (steps: number) => void;
+  readonly onChange: (steps: number, exact?: boolean) => void;
   readonly idBase: string;
 }
 
@@ -629,14 +636,15 @@ function planText(instant: number, home: string, hour12: boolean): string {
   return `${day} ${face.main}${face.meridiem ? ` ${face.meridiem}` : ''} in ${zonePlace(home)}`;
 }
 
-function Scrubber({ steps, nowMs, home, hour12, scrubbed, onChange, idBase }: ScrubberProps): JSX.Element {
+function Scrubber({ steps, exact, nowMs, home, hour12, scrubbed, onChange, idBase }: ScrubberProps): JSX.Element {
   const planning = steps !== 0;
-  // Quarter-hour precision is all the summary needs, so it only changes when
-  // the slider moves or a new quarter hour starts, never every second.
-  const quarter = Math.floor(nowMs / (STEP_MINUTES * 60_000));
-  const instant = shownInstant(quarter * STEP_MINUTES * 60_000, steps);
+  // Minute precision is all the summary needs, so it only changes when the
+  // slider moves or a new minute starts, never every second.
+  const minuteMs = Math.floor(nowMs / 60_000) * 60_000;
+  const instant = shownInstant(minuteMs, steps, exact);
   const plan = useMemo(() => planText(instant, home, hour12), [instant, home, hour12]);
-  const fromNow = formatDiff(steps * STEP_MINUTES);
+  // The real distance from now: a snapped slider plan is not a round number.
+  const fromNow = formatDiff(minutesFromNow(minuteMs, steps, exact));
   const valueText = planning ? `${plan}, ${fromNow ?? ''} from now` : 'Now';
   const live = planning ? `Planning ${plan}, ${fromNow ?? ''} from now.` : scrubbed ? 'Showing the current time.' : '';
   const span = SCRUB_MAX_STEPS - SCRUB_MIN_STEPS;
@@ -644,7 +652,18 @@ function Scrubber({ steps, nowMs, home, hour12, scrubbed, onChange, idBase }: Sc
   const inputId = `${idBase}-scrub`;
 
   return (
-    <section className="tzc-panel tzc-scrub" aria-labelledby={`${idBase}-scrub-h`}>
+    <section
+      className="tzc-panel tzc-scrub"
+      aria-labelledby={`${idBase}-scrub-h`}
+      // Escape returns to now from any control in the planner (the slider,
+      // a preset, the Now button), as the hint says.
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' || !planning) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onChange(0);
+      }}
+    >
       <div className="tzc-scrub-head">
         <h2 className="tzc-panel-title" id={`${idBase}-scrub-h`}>
           Plan a time
@@ -688,7 +707,6 @@ function Scrubber({ steps, nowMs, home, hour12, scrubbed, onChange, idBase }: Sc
             let next: number | null = null;
             if (e.key === 'PageUp') next = steps + 4;
             else if (e.key === 'PageDown') next = steps - 4;
-            else if (e.key === 'Escape' && planning) next = 0;
             if (next === null) return;
             e.preventDefault();
             onChange(Math.max(SCRUB_MIN_STEPS, Math.min(SCRUB_MAX_STEPS, next)));
@@ -705,8 +723,8 @@ function Scrubber({ steps, nowMs, home, hour12, scrubbed, onChange, idBase }: Sc
                 type="button"
                 className="tzc-scale-btn"
                 aria-label={scaleLabel(h)}
-                aria-pressed={steps === target}
-                onClick={() => onChange(target)}
+                aria-pressed={steps === target && (exact || target === 0)}
+                onClick={() => onChange(target, true)}
               >
                 {h === 0 ? 'Now' : `${h > 0 ? '+' : '−'}${Math.abs(h)}h`}
               </button>

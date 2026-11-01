@@ -10,6 +10,18 @@ export interface EpochTabProps {
 
 type UnitMode = 'auto' | EpochUnit;
 
+/**
+ * The error for input parseEpoch refuses, stating its real rule
+ * (src/lib/epoch.ts): 1900-01-01 … 9999-12-31 UTC, and in auto mode up to 11
+ * digits are seconds, 12 or more milliseconds. Checked in tests/ui-r3.test.tsx.
+ */
+export function epochErrorText(mode: UnitMode): string {
+  const range = 'for a time from 1900-01-01 to 9999-12-31 UTC';
+  if (mode === 'seconds') return `Enter a valid epoch: a whole number of seconds ${range}.`;
+  if (mode === 'milliseconds') return `Enter a valid epoch: a whole number of milliseconds ${range}.`;
+  return `Enter a valid epoch: a whole number ${range}. Auto reads up to 11 digits as seconds and 12 or more as milliseconds; pick a unit to change that.`;
+}
+
 function toLocalInputValue(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
@@ -24,7 +36,7 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
     if (raw.trim().length === 0) return { error: null as string | null, epochMs: null as number | null, unit: null as EpochUnit | null };
     const forced = mode === 'auto' ? undefined : mode;
     const r = parseEpoch(raw, forced);
-    if (!r) return { error: 'Enter a valid epoch (integer, in range 1900–9999).', epochMs: null, unit: null };
+    if (!r) return { error: epochErrorText(mode), epochMs: null, unit: null };
     return { error: null, epochMs: r.epochMs, unit: r.unit };
   }, [raw, mode]);
 

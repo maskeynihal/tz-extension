@@ -402,7 +402,10 @@ export function Popover({
       <div className="tzx-head" onPointerDown={onDragStart} title="Drag to move">
         <span className="tzx-title">
           <span className="tzx-grip" aria-hidden>⋮⋮</span>
-          TZ{compact ? '' : ' Converter'}
+          {/* Floating cards say "TZ" too, so the "floating" tag fits on the
+              title line and the header (which other cards keep clear of)
+              stays one line tall. */}
+          TZ{compact || where === 'floating' ? '' : ' Converter'}
           {pinned && pinNumber !== undefined && (
             <span
               className="tzx-pinbadge"
