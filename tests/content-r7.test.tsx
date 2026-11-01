@@ -86,7 +86,7 @@ const button = (root: ShadowRoot, label: string): HTMLButtonElement => {
   if (!b) throw new Error(`no button "${label}"`);
   return b;
 };
-const live = (root: ShadowRoot = transient()): string => root.querySelector('[aria-live="polite"]')?.textContent ?? '';
+const live = (root: ShadowRoot = transient()): string => root.querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent ?? '';
 const quoted = (root: ShadowRoot = transient()): string => root.querySelector('.tzx-src span')?.textContent ?? '';
 const marked = (name = 'tz-extension-match'): Range | undefined => highlights.get(name)?.ranges[0];
 const px = (el: HTMLElement, prop: 'top' | 'left'): number => parseFloat(el.style.getPropertyValue(prop));
@@ -504,7 +504,7 @@ describe('Popover, round 7', () => {
     const step = container.querySelector('.tzx-step') as HTMLElement;
     expect(step).toBeTruthy();
     expect(step.getAttribute('title')).toBe('Text past the first 50,000 characters is not read');
-    expect(step.querySelector('[aria-live="polite"]')?.textContent?.startsWith(text)).toBe(true);
+    expect(step.querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent?.startsWith(text)).toBe(true);
     for (const b of step.querySelectorAll('button')) expect(b.disabled).toBe(true);
   });
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { DEFAULT_PREFERENCES, type Preferences } from '../types';
-import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
+import type { Preferences } from '../types';
+import { useSyncedPreferences } from '../lib/use-synced-prefs';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { getBuildInfo } from '../lib/build-info';
 import { Converter } from './Converter';
@@ -11,26 +11,9 @@ type Tab = 'converter' | 'epoch';
 const BUILD = getBuildInfo();
 
 export function App(): JSX.Element {
-  const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFERENCES);
+  // Own-write echoes are skipped, so quick reorders never jump back.
+  const { prefs, loaded, saveError, update: updatePrefs } = useSyncedPreferences();
   const [tab, setTab] = useState<Tab>('converter');
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    void loadPreferences().then((p) => {
-      if (alive) {
-        setPrefs(p);
-        setLoaded(true);
-      }
-    });
-    const unsub = onPreferencesChanged((p) => {
-      if (alive) setPrefs(p);
-    });
-    return () => {
-      alive = false;
-      unsub();
-    };
-  }, []);
 
   // Paint the chosen theme; when following the OS, re-apply on OS flips.
   useEffect(() => {
@@ -41,22 +24,13 @@ export function App(): JSX.Element {
 
   function setHour12(hour12: boolean): void {
     if (prefs.hour12 === hour12) return;
-    const next: Preferences = { ...prefs, hour12 };
-    setPrefs(next);
-    void savePreferences(next);
+    updatePrefs({ ...prefs, hour12 });
   }
 
   function cycleTheme(): void {
     const order: Preferences['theme'][] = ['system', 'light', 'dark'];
     const i = order.indexOf(prefs.theme);
-    const next: Preferences = { ...prefs, theme: order[(i + 1) % order.length] ?? 'system' };
-    setPrefs(next);
-    void savePreferences(next);
-  }
-
-  function updatePrefs(next: Preferences): void {
-    setPrefs(next);
-    void savePreferences(next);
+    updatePrefs({ ...prefs, theme: order[(i + 1) % order.length] ?? 'system' });
   }
 
   function openWorldClock(): void {
@@ -145,12 +119,19 @@ export function App(): JSX.Element {
         </div>
       </header>
 
+      {saveError && (
+        // A failed save goes back to what is stored; say why it snapped back.
+        <p className="tzx-error" role="alert">
+          {saveError}
+        </p>
+      )}
+
       {!loaded ? (
         <p className="tzx-loading">Loading…</p>
       ) : tab === 'converter' ? (
         <Converter prefs={prefs} onPrefsChange={updatePrefs} />
       ) : (
-        <EpochTab prefs={prefs} />
+        <EpochTab prefs={prefs} onPrefsChange={updatePrefs} />
       )}
 
       <footer className="tzx-foot" title={BUILD.builtAt ? `Built ${BUILD.builtAt}` : undefined}>

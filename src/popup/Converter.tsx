@@ -3,6 +3,7 @@ import type { Preferences } from '../types';
 import { resolveLocalZone } from '../types';
 import { viewInZone, isValidZone, sameZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from './ZonePicker';
+import { SortableList } from '../options/SortableZoneList';
 import { readWallInput } from './wallnote';
 
 export interface ConverterProps {
@@ -59,6 +60,9 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
   }
   function removeTarget(zone: string): void {
     onPrefsChange({ ...prefs, targetZones: prefs.targetZones.filter((z) => z !== zone) });
+  }
+  function reorderTargets(next: string[]): void {
+    onPrefsChange({ ...prefs, targetZones: next });
   }
 
   // Compare through sameZone: the engine may report a legacy name
@@ -120,12 +124,19 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
         </p>
       ) : (
         <>
-          <div className="tzx-results">
-            {prefs.targetZones.map((zone) => {
+          <SortableList
+            items={prefs.targetZones}
+            label="Converted times"
+            itemLabel={zoneLabel}
+            className="tzx-results"
+            itemClassName="tzx-result-card tzx-result-sortable"
+            onReorder={reorderTargets}
+            onRemove={removeTarget}
+            render={(zone, ctx) => {
               const v = viewInZone(result.epochMs as number, zone, prefs.hour12);
               const isLocal = sameZone(zone, LOCAL_ZONE);
               return (
-                <div className="tzx-result-card" key={zone}>
+                <div className="tzx-result-body">
                   <div className="tzx-result-head">
                     <div className="tzx-result-zone">
                       {zoneLabel(zone)}
@@ -137,7 +148,7 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
                       className="tzx-icon-btn tzx-result-del"
                       aria-label={`Remove ${zoneLabel(zone)}`}
                       title={`Remove ${zoneLabel(zone)}`}
-                      onClick={() => removeTarget(zone)}
+                      onClick={ctx.remove}
                     >
                       ✕
                     </button>
@@ -148,8 +159,8 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
                   <div className="tzx-result-big">{v.time}</div>
                 </div>
               );
-            })}
-          </div>
+            }}
+          />
           <div className="tzx-field" style={{ marginTop: 10, marginBottom: 0 }}>
             <ZonePicker
               label="Add a timezone"

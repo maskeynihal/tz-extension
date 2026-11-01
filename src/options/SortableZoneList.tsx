@@ -36,8 +36,15 @@ export interface SortableListProps {
   readonly onRemove?: (item: string) => void;
   /** Height covered at the top of the viewport (a sticky bar), for auto-scroll. */
   readonly topInset?: number;
+  /**
+   * Scroll the window while a row is dragged near a viewport edge (default
+   * true). Off for lists in a card on someone else's page, where scrolling
+   * that page would be unexpected.
+   */
+  readonly autoScroll?: boolean;
   readonly className?: string;
-  readonly itemClassName?: string;
+  /** Extra classes for a row; a function gets the row's item. */
+  readonly itemClassName?: string | ((item: string) => string);
 }
 
 interface DragState {
@@ -46,6 +53,8 @@ interface DragState {
   readonly from: number;
   readonly seq: string;
   readonly handle: HTMLElement;
+  /** Where the "grabbing" cursor class goes: the page root, or the shadow host. */
+  readonly grabEl: Element;
   readonly rows: readonly HTMLElement[];
   /** Row centers relative to the list top, without transforms. */
   readonly centers: readonly number[];
@@ -82,6 +91,30 @@ type PendingFocus = { readonly kind: 'element'; readonly el: HTMLElement; readon
 /** Distance from a viewport edge where dragging starts to scroll the page. */
 const EDGE_PX = 56;
 const MAX_SCROLL_PX = 18;
+
+/**
+ * The document or shadow root a node lives in. A list inside a shadow root
+ * (the in-page card) sees its own focus there: `document.activeElement` only
+ * names the shadow host.
+ */
+function rootOf(node: Node): Document | ShadowRoot {
+  const root = node.getRootNode();
+  return typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot ? root : document;
+}
+
+/** The focused element as seen from inside `node`'s root. */
+function activeIn(node: Node): Element | null {
+  return rootOf(node).activeElement;
+}
+
+/**
+ * Where the "grabbing" class goes while dragging: the page's root element, or
+ * the shadow host, so a list on another site's page never marks that page.
+ */
+function grabTargetOf(node: Node): Element {
+  const root = rootOf(node);
+  return root instanceof Document ? root.documentElement : root.host;
+}
 
 function rowsOf(list: HTMLElement): HTMLElement[] {
   return Array.from(list.children).filter((c): c is HTMLElement => c instanceof HTMLElement && c.dataset.sortKey !== undefined);
@@ -125,6 +158,8 @@ function GripIcon(): JSX.Element {
  */
 export function SortableList(props: SortableListProps): JSX.Element {
   const { items, label, itemLabel, render, className, itemClassName } = props;
+  const extraClass = (item: string): string =>
+    (typeof itemClassName === 'function' ? itemClassName(item) : itemClassName) ?? '';
   const latest = useRef(props);
   latest.current = props;
 
@@ -241,7 +276,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     const to = index + dir;
     if (!list || key === undefined || to < 0 || to >= current.length || drag.current || grabRef.current) return;
     if (exiting.current.has(key)) return;
-    const active = document.activeElement;
+    const active = activeIn(list);
     pendingFocus.current =
       active instanceof HTMLElement && list.contains(active) ? { kind: 'element', el: active, key } : null;
     pendingFrom.current = centersOf(list);
@@ -255,7 +290,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     if (!onRemove || !list || exiting.current.has(key) || drag.current || grabRef.current) return;
     const index = current.indexOf(key);
     const row = rowFor(key);
-    const active = document.activeElement;
+    const active = list ? activeIn(list) : null;
     pendingFocus.current = row && active instanceof Node && row.contains(active) ? { kind: 'index', index } : null;
     announce(`Removed ${nameOf(key)}`);
     if (!row) {
@@ -307,7 +342,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     window.removeEventListener('keydown', d.onKey, true);
     if (d.scrollRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(d.scrollRaf);
     d.scrollRaf = 0;
-    document.documentElement.classList.remove('tzx-sort-grabbing');
+    d.grabEl.classList.remove('tzx-sort-grabbing');
     if (listRef.current) delete listRef.current.dataset.sorting;
     try {
       if (d.handle.hasPointerCapture?.(d.pointerId)) d.handle.releasePointerCapture(d.pointerId);
@@ -456,12 +491,16 @@ export function SortableList(props: SortableListProps): JSX.Element {
       from,
       seq,
       handle,
+      grabEl: grabTargetOf(handle),
       rows,
       centers,
       step: own.height + gap,
       startY: e.clientY - listRect.top,
-      minDy: -ownTop,
-      maxDy: listBottom - (ownTop + own.height),
+      // The row stops at the list's edges, but always gets just past the first
+      // and last row centers: rows of different heights (a border on all but
+      // the first) must not leave the ends out of reach.
+      minDy: Math.min(-ownTop, (centers[0] ?? 0) - (centers[from] ?? 0) - 1),
+      maxDy: Math.max(listBottom - (ownTop + own.height), (centers[centers.length - 1] ?? 0) - (centers[from] ?? 0) + 1),
       shifts: rows.map(() => 0),
       onKey: onDragKeyDown,
       target: from,
@@ -470,7 +509,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     };
     row.dataset.sortDragging = seq;
     list.dataset.sorting = '';
-    document.documentElement.classList.add('tzx-sort-grabbing');
+    drag.current.grabEl.classList.add('tzx-sort-grabbing');
     window.addEventListener('keydown', drag.current.onKey, true);
   }
 
@@ -480,7 +519,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     e.preventDefault();
     d.lastClientY = e.clientY;
     updateDrag();
-    if (!d.scrollRaf && scrollSpeed(e.clientY) !== 0 && typeof requestAnimationFrame === 'function') {
+    if (!d.scrollRaf && latest.current.autoScroll !== false && scrollSpeed(e.clientY) !== 0 && typeof requestAnimationFrame === 'function') {
       d.scrollRaf = requestAnimationFrame(autoScrollStep);
     }
   }
@@ -503,7 +542,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
   /** Keep focus on the held row's handle across the re-render that moves it. */
   function keepFocus(key: string): void {
     const list = listRef.current;
-    const active = document.activeElement;
+    const active = list ? activeIn(list) : null;
     pendingFocus.current =
       list && active instanceof HTMLElement && list.contains(active) ? { kind: 'element', el: active, key } : null;
   }
@@ -616,7 +655,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     window.setTimeout(() => {
       if (grabRef.current !== g) return;
       const handle = rowFor(g.key)?.querySelector('[data-sort-handle]');
-      if (handle && document.activeElement === handle) return;
+      if (handle && activeIn(handle) === handle) return;
       cancelGrab(false);
     }, 0);
   }
@@ -666,7 +705,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     if (focus?.kind === 'element') {
       const el = focus.el;
       if (el.isConnected && !(el instanceof HTMLButtonElement && el.disabled)) {
-        if (document.activeElement !== el) el.focus();
+        if (activeIn(el) !== el) el.focus();
       } else {
         focusHandle(rowFor(focus.key));
       }
@@ -707,7 +746,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
               data-sort-key={item}
               // A row held from the keyboard looks lifted, like a pointer drag.
               data-sort-dragging={held ? 'key' : undefined}
-              className={`tzx-sort-item${itemClassName ? ` ${itemClassName}` : ''}`}
+              className={`tzx-sort-item${extraClass(item) ? ` ${extraClass(item)}` : ''}`}
               tabIndex={-1}
               onKeyDown={(e) => onRowKeyDown(e, index)}
             >
@@ -721,10 +760,27 @@ export function SortableList(props: SortableListProps): JSX.Element {
                 aria-pressed={held}
                 onKeyDown={(e) => onHandleKeyDown(e, item)}
                 onBlur={() => onHandleBlur(item)}
-                onPointerDown={(e) => onPointerDown(e, item)}
-                onPointerMove={onPointerMove}
-                onPointerUp={(e) => onPointerEnd(e, 'drop')}
-                onPointerCancel={(e) => onPointerEnd(e, 'cancel')}
+                // A grip's pointer events stop bubbling here, so bubble-phase
+                // listeners of a page around the list (the in-page card sits
+                // on other sites) never take a row drag for one of their own.
+                // Capture-phase page listeners still see it, as with any
+                // element.
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  onPointerDown(e, item);
+                }}
+                onPointerMove={(e) => {
+                  e.stopPropagation();
+                  onPointerMove(e);
+                }}
+                onPointerUp={(e) => {
+                  e.stopPropagation();
+                  onPointerEnd(e, 'drop');
+                }}
+                onPointerCancel={(e) => {
+                  e.stopPropagation();
+                  onPointerEnd(e, 'cancel');
+                }}
                 // Capture can be taken away without a pointerup or
                 // pointercancel (e.g. the handle re-renders or the window loses
                 // the pointer). Our own release after a drop fires this too,

@@ -98,7 +98,7 @@ const button = (root: ShadowRoot, label: string): HTMLButtonElement => {
   if (!b) throw new Error(`no button "${label}"`);
   return b;
 };
-const live = (): string => transient().querySelector('[aria-live="polite"]')?.textContent ?? '';
+const live = (): string => transient().querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent ?? '';
 const src = (): string => transient().querySelector('.tzx-src span')?.textContent ?? '';
 const marked = (): Range | undefined => highlights.get('tz-extension-match')?.ranges[0];
 
@@ -430,7 +430,7 @@ describe('Popover, round 5', () => {
     );
     const step = container.querySelector('.tzx-step.mini');
     expect(step).toBeTruthy();
-    expect(step?.querySelector('[aria-live="polite"]')?.textContent).toBe('Time 1/2');
+    expect(step?.querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent).toBe('Time 1/2');
     expect(step?.textContent).not.toContain('times in selection');
     fireEvent.click(container.querySelector('button[aria-label="Next time"]') as HTMLButtonElement);
     expect(onStep).toHaveBeenCalledWith(1);
@@ -445,7 +445,7 @@ describe('Popover, round 5', () => {
     // Round 7 (QA G7): up to 500 times are listed now, so 25 listed with
     // more in the selection means the text ran past what is read.
     expect(step.getAttribute('title')).toBe('Text past the first 50,000 characters is not read');
-    expect(step.querySelector('[aria-live="polite"]')?.textContent).toBe('Time 1 of 25+. Text past the first 50,000 characters is not read');
+    expect(step.querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent).toBe('Time 1 of 25+. Text past the first 50,000 characters is not read');
     expect(stepCountText(0, 25, true)).toBe('1 of 25+');
     expect(stepCountText(4, 7)).toBe('5 of 7');
     expect(moreTimesText(24, true)).toBe('+24 or more times in selection');

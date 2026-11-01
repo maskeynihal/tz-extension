@@ -86,7 +86,7 @@ const button = (root: ShadowRoot, label: string): HTMLButtonElement => {
   if (!b) throw new Error(`no button "${label}"`);
   return b;
 };
-const live = (root: ShadowRoot = transient()): string => root.querySelector('[aria-live="polite"]')?.textContent ?? '';
+const live = (root: ShadowRoot = transient()): string => root.querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent ?? '';
 const quoted = (root: ShadowRoot = transient()): string => root.querySelector('.tzx-src span')?.textContent ?? '';
 const marked = (name: string): Range | undefined => highlights.get(name)?.ranges[0];
 const px = (el: HTMLElement, prop: 'top' | 'left'): number => parseFloat(el.style.getPropertyValue(prop));

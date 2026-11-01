@@ -6,6 +6,7 @@ import { MAX_LISTED, MAX_READ_CHARS } from '../lib/read-times';
 // The DST note shares one wording with the popup and the website.
 import { wallClockNote } from '../lib/wall-note';
 import { ZonePicker, ZONE_PICKER_CSS } from '../popup/ZonePicker';
+import { SortableList } from '../options/SortableZoneList';
 import type { ShortcutLabel } from '../background/commands';
 
 /** Where a card lives: the transient card, pinned to a spot on the page, or floating on screen. */
@@ -319,6 +320,39 @@ const STYLE = `
 :host([data-tz-theme='dark']) .tzx-nomatch p, :host([data-tz-theme='dark']) .tzx-fmt { color: #a0a3ac; }
 :host([data-tz-theme='dark']) .tzx-nomatch .tzx-quote { color: #f3f4f6; }
 :host([data-tz-theme='dark']) .tzx-linkbtn { background: #1b1d24; border-color: #33353d; color: #9d9dea; }
+/* Reorderable zone rows (full cards): a grip, then the zone and its time. */
+ul.tzx-rows { list-style: none; margin: 0; padding: 0; position: relative; }
+li.tzx-row { display: flex; align-items: center; gap: 2px; position: relative; margin-left: -6px; padding-right: 2px; }
+.tzx-rowbody { flex: 1; min-width: 0; }
+.tzx-sort-handle {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 30px; margin: 0 2px 0 0; padding: 0;
+  border: none; border-radius: 5px; background: transparent; color: #898c96;
+  cursor: grab; touch-action: none; transition: color 0.12s, background 0.12s;
+}
+.tzx-sort-handle svg { width: 8px; height: 13px; }
+.tzx-sort-handle:hover { color: #5b5e68; background: #f1f2f5; }
+.tzx-sort-handle:focus-visible { outline: 2px solid #1313ba; outline-offset: 0; color: #1313ba; }
+li.tzx-row[data-sort-dragging] { z-index: 2; background: #ffffff; border-radius: 6px; box-shadow: 0 0 0 1px #e6e7ec, 0 6px 18px rgba(15,17,21,0.16); }
+li.tzx-row[data-sort-dragging] + li.tzx-row { border-top-color: transparent; }
+li.tzx-row[data-sort-dragging] .tzx-sort-handle { color: #1313ba; }
+li.tzx-row[data-sort-exit] { overflow: hidden; pointer-events: none; }
+:host(.tzx-sort-grabbing), :host(.tzx-sort-grabbing) * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
+:host([data-tz-theme='dark']) .tzx-sort-handle { color: #74777f; }
+:host([data-tz-theme='dark']) li.tzx-row[data-sort-dragging] + li.tzx-row { border-top-color: transparent; }
+:host([data-tz-theme='dark']) .tzx-sort-handle:hover { color: #e7e8ec; background: #22242b; }
+:host([data-tz-theme='dark']) .tzx-sort-handle:focus-visible { outline-color: #9d9dea; color: #9d9dea; }
+:host([data-tz-theme='dark']) li.tzx-row[data-sort-dragging] { background: #22242b; box-shadow: 0 0 0 1px #3a3d46, 0 6px 18px rgba(0,0,0,0.5); }
+:host([data-tz-theme='dark']) li.tzx-row[data-sort-dragging] .tzx-sort-handle { color: #9d9dea; }
+@media (prefers-color-scheme: dark) {
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-sort-handle { color: #74777f; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) li.tzx-row[data-sort-dragging] + li.tzx-row { border-top-color: transparent; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-sort-handle:hover { color: #e7e8ec; background: #22242b; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-sort-handle:focus-visible { outline-color: #9d9dea; color: #9d9dea; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) li.tzx-row[data-sort-dragging] { background: #22242b; box-shadow: 0 0 0 1px #3a3d46, 0 6px 18px rgba(0,0,0,0.5); }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) li.tzx-row[data-sort-dragging] .tzx-sort-handle { color: #9d9dea; }
+}
+@media (prefers-reduced-motion: reduce) { .tzx-sort-handle { transition: none; } }
 ${ZONE_PICKER_CSS}
 .tzx-btn svg { display: block; }
 .tzx-card-picker input { font-size: 12px; }
@@ -429,6 +463,31 @@ export function Popover({
   }
   function removeZone(zone: string): void {
     setZones((prev) => prev.filter((z) => z !== zone));
+  }
+
+  /** One zone's name and time; `remove` (full cards) adds the remove button. */
+  function zoneRow(zone: string, remove?: () => void): JSX.Element {
+    const v = viewInZone(parsed.epochMs, zone, prefs.hour12);
+    const isLocal = sameZone(zone, LOCAL_ZONE);
+    const name = zoneLabel(zone);
+    return (
+      <>
+        <div className="tzx-zonewrap">
+          <span className="tzx-zone" title={resolveZone(zone)?.long ?? name}>{name}</span>
+          {isLocal && <span className="tzx-localtag" title="Your local timezone">LOCAL</span>}
+          {remove && (
+            <button className="tzx-del" aria-label={`Remove ${name}`} title={`Remove ${name}`} onClick={remove}>
+              ×
+            </button>
+          )}
+        </div>
+        <div className="tzx-val">
+          {!compact && <span className="tzx-date">{v.date}</span>}
+          <span className="tzx-time">{compact ? v.time : `${v.weekday} ${v.time}`}</span>
+          <span className="tzx-off">{v.offset}</span>
+        </div>
+      </>
+    );
   }
 
   // Day/month labels come from the calendar fields as written in the text, so
@@ -612,36 +671,28 @@ export function Popover({
       )}
       {compact && orderPicker}
 
-      {zones.map((zone) => {
-        const v = viewInZone(parsed.epochMs, zone, prefs.hour12);
-        const isLocal = sameZone(zone, LOCAL_ZONE);
-        const name = zoneLabel(zone);
-        return (
-          <div className={`tzx-row${isLocal ? ' local' : ''}`} key={zone}>
-            <div className="tzx-zonewrap">
-              <span className="tzx-zone" title={resolveZone(zone)?.long ?? name}>{name}</span>
-              {isLocal && <span className="tzx-localtag" title="Your local timezone">LOCAL</span>}
-              {!compact && (
-                <button
-                  className="tzx-del"
-                  aria-label={`Remove ${name}`}
-                  title={`Remove ${name}`}
-                  onClick={() => removeZone(zone)}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-            <div className="tzx-val">
-              {!compact && <span className="tzx-date">{v.date}</span>}
-              <span className="tzx-time">
-                {compact ? v.time : `${v.weekday} ${v.time}`}
-              </span>
-              <span className="tzx-off">{v.offset}</span>
-            </div>
+      {compact ? (
+        // Compact cards are times only: no grips, no remove buttons.
+        zones.map((zone) => (
+          <div className={`tzx-row${sameZone(zone, LOCAL_ZONE) ? ' local' : ''}`} key={zone}>
+            {zoneRow(zone)}
           </div>
-        );
-      })}
+        ))
+      ) : (
+        // Drag a grip (or Space/Enter, arrows, Space/Enter) to reorder this
+        // card's zones. Like adding and removing here, it changes this card only.
+        <SortableList
+          items={zones}
+          label="Times in your zones"
+          itemLabel={zoneLabel}
+          className="tzx-rows"
+          itemClassName={(zone) => `tzx-row${sameZone(zone, LOCAL_ZONE) ? ' local' : ''}`}
+          autoScroll={false}
+          onReorder={(next) => setZones(next)}
+          onRemove={removeZone}
+          render={(zone, ctx) => <div className="tzx-rowbody">{zoneRow(zone, ctx.remove)}</div>}
+        />
+      )}
 
       {stepper}
       {!compact && matchCount > 1 && !onStep && (

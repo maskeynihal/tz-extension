@@ -335,7 +335,7 @@ test.describe('v2 features', () => {
     await page.locator('#t').click({ clickCount: 3 });
     await expect(card(page)).toBeVisible({ timeout: 5000 });
     const src = card(page).locator('.tzx-src > span').first();
-    const status = card(page).locator('[aria-live="polite"]');
+    const status = card(page).locator('.tzx-stepcount[aria-live="polite"]');
     const marked = (): Promise<string> =>
       page.evaluate(() => {
         const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get('tz-extension-match');
@@ -361,7 +361,7 @@ test.describe('v2 features', () => {
     const pin = page.locator('.tz-extension-pin-host .tzx-card');
     await expect(pin.locator('.tzx-src > span').first()).toHaveText('“2024-03-25”');
     // Round 6 (QA F12): the pin keeps the stepper, on the step it was pinned at.
-    await expect(pin.locator('[aria-live="polite"]')).toHaveText('Time 2 of 2');
+    await expect(pin.locator('.tzx-stepcount[aria-live="polite"]')).toHaveText('Time 2 of 2');
     await page.waitForTimeout(600);
     await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
     await page.close();
@@ -462,7 +462,7 @@ test.describe('v2 features', () => {
       '<p id="t">Standup 09:00 UTC, review 13:30 UTC, deploy 2024-04-02 18:00 UTC</p>' +
         '<p id="w">See John 3:16. Call at 3:16 today, or at 10:00\n        UTC tomorrow</p>',
     );
-    const status = card(page).locator('[aria-live="polite"]');
+    const status = card(page).locator('.tzx-stepcount[aria-live="polite"]');
     await page.locator('#t').click({ clickCount: 3 });
     await expect(card(page)).toBeVisible({ timeout: 5000 });
     await expect(status).toHaveText('Time 3 of 3');
@@ -514,7 +514,7 @@ test.describe('v2 features', () => {
       document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
     });
     await expect(card(page)).toBeVisible({ timeout: 5000 });
-    const status = card(page).locator('[aria-live="polite"]');
+    const status = card(page).locator('.tzx-stepcount[aria-live="polite"]');
     await expect(status).toHaveText('Time 1 of 30');
     const box = (): Promise<{ top: number; bottom: number; card: { top: number; bottom: number } } | null> =>
       page.evaluate(() => {
@@ -1018,7 +1018,7 @@ test.describe('v2 features', () => {
     })).toBe('MEET 10:00 UTC THEN 3PM EST, DEPLOY 2024-04-02 18:00 UTC');
     await selectAll(page, 'up');
     await expect(card(page)).toBeVisible({ timeout: 5000 });
-    const status = card(page).locator('[aria-live="polite"]');
+    const status = card(page).locator('.tzx-stepcount[aria-live="polite"]');
     await expect(status).toHaveText('Time 3 of 3');
     await expect.poll(() => highlightText(page)).toBe('2024-04-02 18:00 utc');
     await card(page).getByRole('button', { name: 'Next time' }).click();
@@ -1074,7 +1074,7 @@ test.describe('v2 features', () => {
     await expect(page.locator('.tz-extension-pin-host')).toHaveCount(1);
     await selectAll(page, 'l2');
     await expect(card(page)).toBeVisible({ timeout: 5000 });
-    const status = card(page).locator('[aria-live="polite"]');
+    const status = card(page).locator('.tzx-stepcount[aria-live="polite"]');
     if ((await status.textContent())?.includes('1 of 2')) await card(page).getByRole('button', { name: 'Next time' }).click();
     await expect(status).toHaveText('Time 2 of 2');
     await card(page).getByRole('button', { name: 'Pin to page' }).click();
@@ -1106,10 +1106,10 @@ test.describe('v2 features', () => {
     await expect(card(page)).toBeVisible({ timeout: 5000 });
     await card(page).getByRole('button', { name: 'Pin to page' }).click();
     const pin = page.locator('.tz-extension-pin-host .tzx-card');
-    await expect(pin.locator('[aria-live="polite"]')).toHaveText('Time 3 of 3');
+    await expect(pin.locator('.tzx-stepcount[aria-live="polite"]')).toHaveText('Time 3 of 3');
     await expect.poll(() => highlightText(page, 'tz-pin-0')).toBe('2024-04-02 18:00 UTC');
     await pin.getByRole('button', { name: 'Next time' }).click();
-    await expect(pin.locator('[aria-live="polite"]')).toHaveText('Time 1 of 3');
+    await expect(pin.locator('.tzx-stepcount[aria-live="polite"]')).toHaveText('Time 1 of 3');
     await expect.poll(() => highlightText(page, 'tz-pin-0')).toBe('09:00 UTC');
     await page.close();
   });
@@ -1132,7 +1132,7 @@ test.describe('v2 features', () => {
     // Nearest the mouse (y = 300).
     expect(Math.abs((mark!.top + mark!.bottom) / 2 - 300)).toBeLessThan(40);
     // Step past the bottom of the screen: the time lands at least 40 px clear of the edge.
-    const status = card(page).locator('[aria-live="polite"]');
+    const status = card(page).locator('.tzx-stepcount[aria-live="polite"]');
     let moved = false;
     for (let i = 0; i < 20; i++) {
       const before = await page.evaluate(() => window.scrollY);
@@ -1204,7 +1204,7 @@ test.describe('v2 features', () => {
     );
     await page.setViewportSize({ width: 1280, height: 700 });
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(700);
-    const status = card(page).locator('[aria-live="polite"]');
+    const status = card(page).locator('.tzx-stepcount[aria-live="polite"]');
     await selectAll(page, 'pane', { x: 200, y: 100 });
     await expect(card(page)).toBeVisible({ timeout: 5000 });
     await expect(status).toHaveText(/^Time \d+ of 60$/);
@@ -1344,7 +1344,7 @@ test.describe('v2 features', () => {
     await page.evaluate(() => window.getSelection()?.removeAllRanges());
     await selectAll(page, 'chat', { x: 200, y: (at.top + at.bottom) / 2 });
     await expect(card(page)).toBeVisible({ timeout: 5000 });
-    await expect(card(page).locator('[aria-live="polite"]')).toHaveText(/^Time \d+ of 120$/);
+    await expect(card(page).locator('.tzx-stepcount[aria-live="polite"]')).toHaveText(/^Time \d+ of 120$/);
     await page.close();
   });
 
@@ -1456,7 +1456,7 @@ test.describe('v2 features', () => {
       expect(await pinLines(page, n)).toEqual(Array(n).fill(true));
       await page.evaluate(() => window.scrollTo(0, 0));
       const first = page.locator('.tz-extension-pin-host').first();
-      const status = first.locator('[aria-live="polite"]');
+      const status = first.locator('.tzx-stepcount[aria-live="polite"]');
       // Step through all three times of line 1; the card never leaves the screen.
       for (let s = 0; s < 3; s++) {
         const was = (await status.textContent()) ?? '';

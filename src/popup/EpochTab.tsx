@@ -3,9 +3,12 @@ import type { Preferences } from '../types';
 import { parseEpoch, toEpochSeconds, toEpochMillis, type EpochUnit } from '../lib/epoch';
 import { viewInZone, toIsoUtc, isValidZone, zoneLabel } from '../lib/tz';
 import { readWallInput } from './wallnote';
+import { SortableList } from '../options/SortableZoneList';
 
 export interface EpochTabProps {
   readonly prefs: Preferences;
+  /** Persist a preferences change; given, the zone rows can be dragged into a new order. */
+  readonly onPrefsChange?: (next: Preferences) => void;
 }
 
 type UnitMode = 'auto' | EpochUnit;
@@ -50,7 +53,7 @@ function nowInput(zone: string): ReverseInput {
   return { value: wallInputSeconds(ms, zone), zone, exactMs: ms };
 }
 
-export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
+export function EpochTab({ prefs, onPrefsChange }: EpochTabProps): JSX.Element {
   // --- Forward: epoch -> times ---
   const [raw, setRaw] = useState('');
   const [mode, setMode] = useState<UnitMode>('auto');
@@ -96,6 +99,19 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
     return { error: null, s: toEpochSeconds(epochMs), ms: toEpochMillis(epochMs), note: r.note };
   }, [rev, prefs.hour12]);
 
+  function zoneResult(zone: string): JSX.Element {
+    const v = viewInZone(parsed.epochMs as number, zone, prefs.hour12);
+    return (
+      <>
+        <div className="tzx-result-zone">
+          {zoneLabel(zone)} <span className="tzx-off">{v.offset}</span>
+        </div>
+        <div className="tzx-result-time">{v.weekday}, {v.date}</div>
+        <div className="tzx-result-big">{v.time}</div>
+      </>
+    );
+  }
+
   return (
     <section className="tzx-pane">
       <div className="tzx-field">
@@ -135,18 +151,23 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
             <div className="tzx-result-big tzx-mono">{toIsoUtc(parsed.epochMs)}</div>
             <div className="tzx-result-time">detected: {parsed.unit}</div>
           </div>
-          {prefs.targetZones.map((zone) => {
-            const v = viewInZone(parsed.epochMs as number, zone, prefs.hour12);
-            return (
+          {onPrefsChange ? (
+            <SortableList
+              items={prefs.targetZones}
+              label="Times in your zones"
+              itemLabel={zoneLabel}
+              className="tzx-results"
+              itemClassName="tzx-result-card tzx-result-sortable"
+              onReorder={(next) => onPrefsChange({ ...prefs, targetZones: next })}
+              render={(zone) => <div className="tzx-result-body">{zoneResult(zone)}</div>}
+            />
+          ) : (
+            prefs.targetZones.map((zone) => (
               <div className="tzx-result-card" key={zone}>
-                <div className="tzx-result-zone">
-                  {zoneLabel(zone)} <span className="tzx-off">{v.offset}</span>
-                </div>
-                <div className="tzx-result-time">{v.weekday}, {v.date}</div>
-                <div className="tzx-result-big">{v.time}</div>
+                {zoneResult(zone)}
               </div>
-            );
-          })}
+            ))
+          )}
         </div>
       ) : null}
 

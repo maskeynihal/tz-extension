@@ -1588,6 +1588,8 @@ function onKeyDown(e: KeyboardEvent): void {
     if (dockHost && e.target instanceof Node && dockHost.contains(e.target)) return;
     const origin = e.composedPath()[0];
     if (isTextField(origin) && !isIdleZoneSearch(origin)) return;
+    // A zone row picked up from the keyboard: Escape puts it back first.
+    if (origin instanceof Element && origin.closest('[data-sort-handle][aria-pressed="true"]')) return;
   }
   dismissTransient(true);
 }

@@ -362,6 +362,14 @@ h3.tzx-field-label { margin: 0 0 6px; }
 }
 .tzx-sort-item[data-sort-dragging] .tzx-sort-handle { color: var(--tz-brand); }
 .tzx-sort-item[data-sort-exit] { overflow: hidden; pointer-events: none; }
+
+/* Converted-time cards in the popup: a grip on the left, the card body beside it. */
+ul.tzx-results { list-style: none; margin: 0; padding: 0; }
+.tzx-result-card.tzx-result-sortable { display: flex; align-items: center; gap: 4px; padding-left: 4px; }
+.tzx-result-sortable .tzx-sort-handle { align-self: stretch; height: auto; margin: -6px 0; }
+.tzx-result-body { flex: 1; min-width: 0; }
+.tzx-result-sortable[data-sort-dragging] { background: var(--tz-surface-raised); }
+.tzx-result-sortable[data-sort-dragging] .tzx-sort-handle { background: transparent; }
 .tzx-sort-grabbing, .tzx-sort-grabbing * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
 
 @media (max-width: 520px) {
