@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { Preferences } from '../types';
 import { resolveLocalZone } from '../types';
-import { viewInZone, wallClockToEpochMs, epochMsToWallClock, isValidZone } from '../lib/tz';
+import { viewInZone, wallClockToEpochMs, epochMsToWallClock, isValidZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from './ZonePicker';
 
 export interface ConverterProps {
@@ -71,7 +71,7 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
       <div className="tzx-field">
         <span className="tzx-field-label">Source timezone</span>
         <div className="tzx-row-inline" style={{ alignItems: 'center', marginBottom: 6 }}>
-          <div className="tzx-current-zone" style={{ margin: 0, flex: 1 }}>{sourceZone}</div>
+          <div className="tzx-current-zone" style={{ margin: 0, flex: 1 }}>{zoneLabel(sourceZone)}</div>
           <button
             type="button"
             className={sourceIsLocal ? 'tzx-chip tzx-chip-on' : 'tzx-chip'}
@@ -108,15 +108,15 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
                 <div className="tzx-result-card" key={zone}>
                   <div className="tzx-result-head">
                     <div className="tzx-result-zone">
-                      {zone}
+                      {zoneLabel(zone)}
                       {isLocal && <span className="tzx-localtag">LOCAL</span>}{' '}
                       <span className="tzx-off">{v.offset}</span>
                     </div>
                     <button
                       type="button"
                       className="tzx-icon-btn tzx-result-del"
-                      aria-label={`Remove ${zone}`}
-                      title={`Remove ${zone}`}
+                      aria-label={`Remove ${zoneLabel(zone)}`}
+                      title={`Remove ${zoneLabel(zone)}`}
                       onClick={() => removeTarget(zone)}
                     >
                       ✕

@@ -26,6 +26,14 @@ export interface ParsedTime {
   readonly formatId?: string;
   /** Human-readable name of the format that matched, shown in the popover. */
   readonly formatLabel?: string;
+  /**
+   * Set when a numeric date could be day-first or month-first (03/04/2024).
+   * `order` is the reading used for epochMs; `alternate` is the other one.
+   */
+  readonly dateOrder?: {
+    readonly order: NumericDateOrder;
+    readonly alternate: { readonly epochMs: number; readonly order: NumericDateOrder };
+  };
 }
 
 export type ParseKind =
@@ -97,6 +105,39 @@ export interface Preferences {
    * the right-click "Convert" menu item opens it.
    */
   readonly selectToConvert: boolean;
+  /** Size a card opens at: compact, full, or whatever was used last. */
+  readonly cardSize: CardSize;
+  /** The size the user last switched a card to (used when cardSize is 'last'). */
+  readonly lastCardSize: 'compact' | 'full';
+  /**
+   * How to read a numeric date whose day and month could swap (03/04/2024).
+   * Unambiguous dates (a part above 12) ignore this.
+   */
+  readonly numericDateOrder: NumericDateOrder;
+}
+
+/** Card size on open. */
+export type CardSize = 'compact' | 'full' | 'last';
+
+/** Day-first (22/03/1999) or month-first (03/22/1999). */
+export type NumericDateOrder = 'dmy' | 'mdy';
+
+/** Month-first for US-style locales, day-first elsewhere. */
+export function localeDateOrder(): NumericDateOrder {
+  try {
+    const lang =
+      (typeof navigator !== 'undefined' && (navigator.language || navigator.languages?.[0])) ||
+      Intl.DateTimeFormat().resolvedOptions().locale;
+    // Ask the locale itself which comes first.
+    const parts = new Intl.DateTimeFormat(lang, { day: '2-digit', month: '2-digit', year: 'numeric' }).formatToParts(
+      new Date(Date.UTC(2000, 10, 22)),
+    );
+    const d = parts.findIndex((p) => p.type === 'day');
+    const m = parts.findIndex((p) => p.type === 'month');
+    return m >= 0 && d >= 0 && m < d ? 'mdy' : 'dmy';
+  } catch {
+    return 'dmy';
+  }
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -109,6 +150,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   customFormats: [],
   disabledFormats: [],
   selectToConvert: true,
+  cardSize: 'last',
+  lastCardSize: 'full',
+  numericDateOrder: localeDateOrder(),
 };
 
 export function resolveLocalZone(): string {

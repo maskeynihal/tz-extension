@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { Preferences } from '../types';
 import { parseEpoch, toEpochSeconds, toEpochMillis, type EpochUnit } from '../lib/epoch';
-import { viewInZone, toIsoUtc, wallClockToEpochMs, isValidZone } from '../lib/tz';
+import { viewInZone, toIsoUtc, wallClockToEpochMs, isValidZone, zoneLabel } from '../lib/tz';
 
 export interface EpochTabProps {
   readonly prefs: Preferences;
@@ -86,7 +86,7 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
             return (
               <div className="tzx-result-card" key={zone}>
                 <div className="tzx-result-zone">
-                  {zone} <span className="tzx-off">{v.offset}</span>
+                  {zoneLabel(zone)} <span className="tzx-off">{v.offset}</span>
                 </div>
                 <div className="tzx-result-time">{v.weekday}, {v.date}</div>
                 <div className="tzx-result-big">{v.time}</div>
@@ -99,7 +99,7 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
       <hr className="tzx-sep" />
 
       <div className="tzx-field">
-        <label htmlFor="tzx-rev">Reverse: date &amp; time → epoch ({prefs.homeZone})</label>
+        <label htmlFor="tzx-rev">Reverse: date &amp; time → epoch ({zoneLabel(prefs.homeZone)})</label>
         <input
           id="tzx-rev"
           type="datetime-local"

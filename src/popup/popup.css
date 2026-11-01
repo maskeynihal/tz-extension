@@ -260,3 +260,14 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 .tzx-ref-table th, .tzx-ref-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .tzx-ref-table th { color: var(--muted); font-weight: var(--tz-fw-semibold); }
 .tzx-warn { color: var(--tz-warning); }
+
+/* Grouped zone picker */
+.tzx-listbox ul { list-style: none; margin: 0; padding: 0; }
+.tzx-optgroup-label {
+  font-size: var(--tz-fs-xs); font-weight: var(--tz-fw-bold); letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--muted); padding: 8px 9px 3px;
+  position: sticky; top: -4px; background: var(--bg);
+}
+.tzx-opt { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.tzx-opt-detail { color: var(--muted); font-size: var(--tz-fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tzx-opt-active .tzx-opt-detail { color: rgba(255, 255, 255, 0.8); }

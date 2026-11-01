@@ -1,5 +1,11 @@
 import { fromZonedTime } from 'date-fns-tz';
 import type { DateOnlyPolicy, ParsedTime, ParseKind } from '../types';
+import { resolveZone } from './tz';
+
+/** The date-fns-tz / Intl argument for any zone id (IANA, UTC±hh:mm, abbr:XXX). */
+function tzArg(zone: string): string {
+  return resolveZone(zone)?.tz ?? zone;
+}
 
 /**
  * Shared building blocks for the built-in and custom format matchers: month
@@ -198,9 +204,11 @@ export function todayIn(zone: string | number, nowMs: number = Date.now()): { y:
     const t = new Date(nowMs + zone * 60_000);
     return { y: t.getUTCFullYear(), mo: t.getUTCMonth() + 1, d: t.getUTCDate() };
   }
+  const fixed = resolveZone(zone)?.minutes;
+  if (fixed !== undefined) return todayIn(fixed, nowMs);
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: zone,
+      timeZone: tzArg(zone),
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -221,8 +229,13 @@ export function todayIn(zone: string | number, nowMs: number = Date.now()): { y:
 export function dateOnlyTime(policy: DateOnlyPolicy, assumedZone: string): { h: number; mi: number; s: number } {
   if (policy === 'now') {
     try {
+      const fixed = resolveZone(assumedZone)?.minutes;
+      if (fixed !== undefined) {
+        const t = new Date(Date.now() + fixed * 60_000);
+        return { h: t.getUTCHours(), mi: t.getUTCMinutes(), s: t.getUTCSeconds() };
+      }
       const parts = new Intl.DateTimeFormat('en-GB', {
-        timeZone: assumedZone,
+        timeZone: tzArg(assumedZone),
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
@@ -281,7 +294,7 @@ export function buildParsed(
   let epochMs: number;
   try {
     if (zone?.offsetIso) epochMs = Date.parse(`${isoLocal(w)}${zone.offsetIso}`);
-    else epochMs = fromZonedTime(isoLocal(w), zone?.iana ?? assumedZone).getTime();
+    else epochMs = fromZonedTime(isoLocal(w), zone?.iana ?? tzArg(assumedZone)).getTime();
   } catch {
     return null;
   }

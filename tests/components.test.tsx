@@ -17,6 +17,9 @@ const prefs: Preferences = {
   customFormats: [],
   disabledFormats: [],
   selectToConvert: true,
+  cardSize: 'full',
+  lastCardSize: 'full',
+  numericDateOrder: 'dmy',
 };
 
 describe('EpochTab', () => {

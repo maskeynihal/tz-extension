@@ -21,6 +21,21 @@ function area(): StorageArea {
   return chrome.storage.sync ?? chrome.storage.local;
 }
 
+/**
+ * Outside the extension (the website), settings live in localStorage under
+ * the same key and shape.
+ */
+function web(): Storage | undefined {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : undefined;
+  } catch {
+    return undefined; // blocked (privacy mode / sandboxed iframe)
+  }
+}
+
+/** Same-tab subscribers for the localStorage backend (the storage event only fires in other tabs). */
+const webListeners = new Set<(p: Preferences) => void>();
+
 export const MAX_CUSTOM_FORMATS = 30;
 export const MAX_LABEL = 60;
 
@@ -126,12 +141,25 @@ export function sanitize(input: unknown): Preferences {
     customFormats,
     disabledFormats,
     selectToConvert,
+    cardSize: obj.cardSize === 'compact' || obj.cardSize === 'full' || obj.cardSize === 'last' ? obj.cardSize : base.cardSize,
+    lastCardSize: obj.lastCardSize === 'compact' || obj.lastCardSize === 'full' ? obj.lastCardSize : base.lastCardSize,
+    numericDateOrder:
+      obj.numericDateOrder === 'dmy' || obj.numericDateOrder === 'mdy' ? obj.numericDateOrder : base.numericDateOrder,
   };
 }
 
 export async function loadPreferences(): Promise<Preferences> {
   const a = area();
-  if (!a) return DEFAULT_PREFERENCES;
+  if (!a) {
+    const w = web();
+    if (!w) return DEFAULT_PREFERENCES;
+    try {
+      const raw = w.getItem(KEY);
+      return sanitize(raw ? JSON.parse(raw) : undefined);
+    } catch {
+      return DEFAULT_PREFERENCES;
+    }
+  }
   try {
     const got = await a.get(KEY);
     return sanitize(got?.[KEY]);
@@ -147,7 +175,18 @@ export async function loadPreferences(): Promise<Preferences> {
  */
 export async function savePreferences(prefs: Preferences): Promise<SaveResult> {
   const a = area();
-  if (!a) return { ok: true };
+  if (!a) {
+    const w = web();
+    if (!w) return { ok: true };
+    try {
+      const clean = sanitize(prefs);
+      w.setItem(KEY, JSON.stringify(clean));
+      for (const l of webListeners) l(clean);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: `Could not save settings: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
   try {
     await a.set({ [KEY]: sanitize(prefs) });
     return { ok: true };
@@ -167,7 +206,22 @@ export async function savePreferences(prefs: Preferences): Promise<SaveResult> {
 /** Subscribe to external changes (other tabs/windows). Returns an unsubscribe fn. */
 export function onPreferencesChanged(cb: (prefs: Preferences) => void): () => void {
   if (!hasChromeStorage() || typeof chrome.storage.onChanged === 'undefined') {
-    return () => {};
+    if (!web() || typeof window === 'undefined') return () => {};
+    // Other tabs: the storage event. This tab: our own listener set.
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key !== KEY) return;
+      try {
+        cb(sanitize(e.newValue ? JSON.parse(e.newValue) : undefined));
+      } catch {
+        /* ignore malformed */
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    webListeners.add(cb);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      webListeners.delete(cb);
+    };
   }
   const listener = (
     changes: { [k: string]: chrome.storage.StorageChange },
