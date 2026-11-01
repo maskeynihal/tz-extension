@@ -185,7 +185,7 @@ describe('content script, round 4', () => {
     await selectWithMouse('two');
     const root = transient();
     const src = (): string => root.querySelector('.tzx-src span')?.textContent ?? '';
-    const live = (): string => root.querySelector('[aria-live="polite"]')?.textContent ?? '';
+    const live = (): string => root.querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent ?? '';
     const marked = (): string => highlights.get('tz-extension-match')?.ranges[0]?.toString() ?? '';
     expect(src()).toBe('“2024-03-22”');
     expect(live()).toBe('Time 1 of 2');
@@ -220,7 +220,7 @@ describe('content script, round 4', () => {
     await load({ numericDateOrder: 'mdy' });
     await selectWithMouse('dm');
     mouseClick(button(transient(), 'Next time'));
-    await vi.waitFor(() => expect(transient().querySelector('[aria-live="polite"]')?.textContent).toBe('Time 2 of 2'));
+    await vi.waitFor(() => expect(transient().querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent).toBe('Time 2 of 2'));
     mouseClick(button(transient(), 'Pin to page'));
     const pin = pinHosts()[0] as HTMLElement;
     await vi.waitFor(() => expect(pin.shadowRoot?.querySelector('.tzx-order-btn')).toBeTruthy());
@@ -298,7 +298,7 @@ describe('Popover, round 4', () => {
     );
     const group = container.querySelector('[role="group"][aria-label="Times in selection"]');
     expect(group).toBeTruthy();
-    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('Time 2 of 3');
+    expect(container.querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent).toBe('Time 2 of 3');
     // Buttons keep the page selection like every other card control.
     const next = container.querySelector('button[aria-label="Next time"]') as HTMLButtonElement;
     expect(fireEvent.mouseDown(next)).toBe(false);

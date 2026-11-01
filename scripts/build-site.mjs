@@ -7,13 +7,15 @@
 //                              src/clock/mount.tsx)
 // Both website entries call enableWebStorageBackend() first, so settings live in
 // the site's localStorage. The extension's own entries never do.
-// Both import the extension's real libs. Shared code (React, tz, storage) is
-// split into docs/chunks/. HTML pages and assets are copied verbatim, and a
-// .nojekyll marker is written. This does not type-check; `npm run build:site`
-// runs tsc first.
+// Both import the extension's real libs. Each entry is one self-contained
+// classic script (IIFE, no ES modules, no shared chunks): browsers refuse
+// module scripts on file:// pages, so with modules the converter and the clock
+// stayed blank when docs/*.html was opened from disk. HTML pages and assets are
+// copied verbatim, and a .nojekyll marker is written. This does not
+// type-check; `npm run build:site` runs tsc first.
 import { build } from 'esbuild';
-import { mkdirSync, copyFileSync, writeFileSync, cpSync, existsSync, rmSync, readdirSync } from 'node:fs';
-import { resolve, dirname, relative } from 'node:path';
+import { mkdirSync, copyFileSync, writeFileSync, cpSync, existsSync, rmSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -23,14 +25,13 @@ const PAGES = ['index.html', 'app.html', 'clock.html', 'privacy.html'];
 
 mkdirSync(outDir, { recursive: true });
 
-const result = await build({
+await build({
   entryPoints: {
     demo: resolve(siteDir, 'demo.ts'),
     clock: resolve(siteDir, 'clock.ts'),
   },
   bundle: true,
-  splitting: true,
-  format: 'esm',
+  format: 'iife',
   target: 'es2022',
   minify: true,
   sourcemap: false,
@@ -38,20 +39,13 @@ const result = await build({
   loader: { '.css': 'css' },
   define: { 'process.env.NODE_ENV': '"production"' },
   outdir: outDir,
-  chunkNames: 'chunks/[name]-[hash]',
   logLevel: 'info',
-  metafile: true,
   absWorkingDir: root,
 });
 
-// Chunk names carry content hashes; drop the previous build's so they do not
-// pile up. Done only after a successful build, so a failed one leaves the last
-// good docs/ intact.
-const chunksDir = resolve(outDir, 'chunks');
-const built = new Set(Object.keys(result.metafile.outputs).map((f) => relative(chunksDir, resolve(root, f))));
-for (const f of existsSync(chunksDir) ? readdirSync(chunksDir) : []) {
-  if (!built.has(f)) rmSync(resolve(chunksDir, f), { force: true });
-}
+// Earlier builds split shared code into docs/chunks/; nothing loads it now.
+// Removed only after a successful build, so a failed one leaves docs/ intact.
+rmSync(resolve(outDir, 'chunks'), { recursive: true, force: true });
 
 for (const page of PAGES) copyFileSync(resolve(siteDir, page), resolve(outDir, page));
 // Copy static assets (screenshots, video) if present.
@@ -61,4 +55,4 @@ if (existsSync(resolve(siteDir, 'assets'))) {
 // GitHub Pages: skip Jekyll so files/underscores are served verbatim.
 writeFileSync(resolve(outDir, '.nojekyll'), '');
 
-console.log(`[site] built to docs/ (${PAGES.join(' + ')} + demo.js + clock.js/css + chunks + assets)`);
+console.log(`[site] built to docs/ (${PAGES.join(' + ')} + demo.js + clock.js/css + assets)`);

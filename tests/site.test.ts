@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve } from 'node:path';
 import { readingLabel } from '../site/reading';
 import { parseTimes } from '../src/lib/parse';
 import type { ParsedTime } from '../src/types';
@@ -82,22 +82,28 @@ describe('website pages', () => {
         if (!existsSync(resolve(docs, ref))) missing.push(`${page} -> ${ref}`);
       }
     }
-    const scripts = [
-      ...readdirSync(docs).filter((f) => f.endsWith('.js')),
-      ...readdirSync(resolve(docs, 'chunks')).map((f) => `chunks/${f}`),
-    ];
-    for (const js of scripts) {
-      const src = readFileSync(resolve(docs, js), 'utf8');
-      for (const m of src.matchAll(/(?:from|import)\s*\(?\s*["'](\.{1,2}\/[^"']+)["']/g)) {
-        const ref = m[1] as string;
-        if (!existsSync(resolve(docs, dirname(js), ref))) missing.push(`${js} -> ${ref}`);
-      }
-    }
     expect(missing).toEqual([]);
     // The two entries were actually built.
     expect(existsSync(resolve(docs, 'demo.js'))).toBe(true);
     expect(existsSync(resolve(docs, 'clock.js'))).toBe(true);
     expect(existsSync(resolve(docs, 'clock.css'))).toBe(true);
+  });
+
+  // Browsers block module scripts (and their imports) on file:// pages, which
+  // left the converter and the clock blank when docs/*.html was opened from
+  // disk. The site ships classic, self-contained scripts instead.
+  it('pages load classic scripts that import nothing, so they also work from file://', () => {
+    const docs = resolve(root, 'docs');
+    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html']) {
+      for (const dir of ['site', 'docs']) {
+        expect(readFileSync(resolve(root, dir, page), 'utf8'), `${dir}/${page}`).not.toMatch(/<script[^>]*type=["']module["']/);
+      }
+    }
+    for (const js of readdirSync(docs).filter((f) => f.endsWith('.js'))) {
+      const src = readFileSync(resolve(docs, js), 'utf8');
+      expect(src, js).not.toMatch(/(?:^|[;}\s])import\s*[\s{*("']|(?:^|[;}\s])export\s*[{*]/);
+    }
+    expect(existsSync(resolve(docs, 'chunks'))).toBe(false);
   });
 });
 

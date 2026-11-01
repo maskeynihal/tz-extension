@@ -56,7 +56,7 @@ const transient = (): ShadowRoot => {
 };
 const pinHosts = (): HTMLElement[] => Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host'));
 const quoted = (): string => transient().querySelector('.tzx-src span')?.textContent ?? '';
-const live = (): string => transient().querySelector('[aria-live="polite"]')?.textContent ?? '';
+const live = (): string => transient().querySelector('.tzx-stepcount[aria-live="polite"]')?.textContent ?? '';
 
 async function select(id: string, expectCard = true): Promise<void> {
   const el = document.getElementById(id);

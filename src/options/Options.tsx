@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_PREFERENCES, resolveLocalZone, type Preferences } from '../types';
-import { loadPreferences, onPreferencesChanged, sanitize, savePreferences } from '../lib/storage';
+import { resolveLocalZone, type Preferences } from '../types';
+import { useSyncedPreferences } from '../lib/use-synced-prefs';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { resolveZone, sameZone, viewInZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from '../popup/ZonePicker';
@@ -8,9 +8,6 @@ import { FormatsSection, Switch } from './Formats';
 import { SettingsNav, useScrollSpy, type NavSection } from './SettingsNav';
 import { SortableList } from './SortableZoneList';
 import { prefersReducedMotion } from './motion';
-
-/** How long to wait for our own write to echo back before giving up on it. */
-const ECHO_TTL_MS = 10_000;
 
 const SECTIONS: readonly NavSection[] = [
   { id: 'general', label: 'General' },
@@ -62,56 +59,17 @@ function Segmented<T extends string>({
 }
 
 export function Options(): JSX.Element {
-  const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFERENCES);
-  const [loaded, setLoaded] = useState(false);
+  const { prefs, loaded, saveError, update } = useSyncedPreferences();
   const [now, setNow] = useState(() => Date.now());
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<string>('general');
   const [stickyHeight, setStickyHeight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const stickyRef = useRef<HTMLDivElement>(null);
-  // Our own writes echo back through storage.onChanged. Keep the writes that
-  // have not echoed yet, in order, and skip exactly those echoes; anything else
-  // is a change made elsewhere (the popup, the in-page card, another settings
-  // tab) and is applied. Entries expire in case the browser drops an echo.
-  const inFlight = useRef<Array<{ key: string; at: number }>>([]);
-  const prefsKey = useRef<string>('');
+  // Own-write echoes are filtered in useSyncedPreferences.
 
   useEffect(() => {
-    let alive = true;
-    void loadPreferences().then((p) => {
-      if (alive) {
-        prefsKey.current = JSON.stringify(p);
-        setPrefs(p);
-        setLoaded(true);
-      }
-    });
-    // Pick up changes made elsewhere (the popup, the in-page card, another tab).
-    const unsub = onPreferencesChanged((p) => {
-      if (!alive) return;
-      const key = JSON.stringify(p);
-      const now = Date.now();
-      inFlight.current = inFlight.current.filter((w) => now - w.at < ECHO_TTL_MS);
-      const i = inFlight.current.findIndex((w) => w.key === key);
-      if (i >= 0) {
-        inFlight.current.splice(0, i + 1);
-        // Our own write landed last: if something else was shown meanwhile,
-        // storage now holds ours, so show it.
-        if (inFlight.current.length === 0 && key !== prefsKey.current) {
-          prefsKey.current = key;
-          setPrefs(p);
-        }
-        return;
-      }
-      prefsKey.current = key;
-      setPrefs(p);
-    });
     const t = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => {
-      alive = false;
-      unsub();
-      window.clearInterval(t);
-    };
+    return () => window.clearInterval(t);
   }, []);
 
   // Paint the chosen theme; when following the OS, re-apply on OS flips.
@@ -163,28 +121,6 @@ export function Options(): JSX.Element {
   const homeExclude = useMemo(() => [prefs.homeZone], [prefs.homeZone]);
   const homeSuggested = useMemo(() => suggestedZones(homeExclude), [homeExclude]);
   const targetSuggested = useMemo(() => suggestedZones(prefs.targetZones), [prefs.targetZones]);
-
-  function update(next: Preferences): void {
-    const key = JSON.stringify(sanitize(next));
-    setPrefs(next);
-    // The browser only reports real changes, so an unchanged write never echoes.
-    if (key !== prefsKey.current) inFlight.current.push({ key, at: Date.now() });
-    prefsKey.current = key;
-    void savePreferences(next).then((r) => {
-      if (r.ok) {
-        setSaveError(null);
-        return;
-      }
-      // Not saved: show why, and go back to what is actually stored so the
-      // page never claims a setting that the extension is not using.
-      setSaveError(r.error);
-      inFlight.current = inFlight.current.filter((w) => w.key !== key);
-      void loadPreferences().then((p) => {
-        prefsKey.current = JSON.stringify(p);
-        setPrefs(p);
-      });
-    });
-  }
 
   function goToSection(id: string): void {
     const section = document.getElementById(id);
