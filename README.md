@@ -28,7 +28,13 @@ https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/demo-real.mp4
 4. **Right-click to convert.** Select text, right-click, and choose **Convert “…” with TZ Converter**. Works even when automatic select-to-convert is off, and says so when the selection holds no time it recognizes.
 5. **Formats you control.** The settings page lists every built-in format (with its regular expression) and lets you switch any of them off. Add your own formats with tokens such as `DD/MM/YYYY HH:mm`, `MMM D, YYYY h:mm A` or `DD.MM.YYYY [um] HH:mm`, or with a raw regex using named groups. A live tester shows which format matches a piece of text.
 
-Settings also cover: home zone, target zones (add, reorder, remove), 12/24-hour clock, theme, the date-only time policy, keeping the selection highlighted, and **Convert when I select text** (turn it off to convert only from the right-click menu). Everything is persisted via `chrome.storage`.
+6. **Hundreds of date layouts.** Every layout in the [Talend/Qlik date format list](https://help.qlik.com/talend/en-US/data-preparation-user-guide/8.0/list-of-date-and-date-time-formats) is recognized: numeric dates in any order and separator (`22/03/1999`, `3/22/99 5:06 AM`, `22.03.1999 um 05:06 MEZ`, `1999.03.22.`), compact (`19990322`), ISO ordinal and week dates, `[Europe/Paris]` zones, the Unix `date` output, written dates in English, German, French, Spanish, Italian, Portuguese and Dutch, and Chinese/Japanese dates. When a date like `03/04/2024` could be read day-first or month-first, the card lets you pick and remembers the choice.
+7. **Copy-friendly.** Your selection is never removed: select a paragraph that contains a time and you can still copy all of it.
+8. **Zones your way.** Every zone list is searchable and grouped: IANA cities, fixed offsets (`UTC+05:45`, `UTC−08:00`), abbreviations (`PDT`, `EDT`, `CET`, `IST`, `AEST`…) and the DST-aware `PT`, `MT`, `CT`, `ET`.
+9. **Pins with a dock.** Pin cards to compare times; once something is pinned, a small dock offers Minimize all, Expand all, Unpin all (float the cards on screen so they stay in view) and Close all with Undo.
+10. **World clock.** A full-page board of all your zones: live times, difference from home, today/tomorrow, day or night, working hours, and a scrubber to plan a time across zones. Open it from the popup, or [online](https://maskeynihal.github.io/tz-extension/clock.html).
+
+Settings (tabbed: General · Cards · Timezones · Formats) also cover: home zone, target zones (drag to reorder, add, remove), 12/24-hour clock, theme, card size on open (compact, full or last used), numeric date order, the date-only time policy, highlighting the matched text, and **Convert when I select text** (turn it off to convert only from the right-click menu). Everything is persisted via `chrome.storage`; the website keeps the same settings in `localStorage`.
 
 ### Custom format tokens
 

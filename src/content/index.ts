@@ -9,11 +9,19 @@ import {
   type Ack,
   type OpenOptionsMessage,
 } from '../lib/messages';
-import { DEFAULT_PREFERENCES, type DateOnlyPolicy, type ParsedTime, type Preferences } from '../types';
+import {
+  DEFAULT_PREFERENCES,
+  type DateOnlyPolicy,
+  type NumericDateOrder,
+  type ParsedTime,
+  type Preferences,
+} from '../types';
 import { NoMatchCard, Popover } from './Popover';
+import { PinDock } from './PinDock';
 
 const TRANSIENT_HOST_ID = 'tz-extension-popover-host';
 const PIN_HOST_CLASS = 'tz-extension-pin-host';
+const DOCK_HOST_ID = 'tz-extension-pin-dock';
 const DEBOUNCE_MS = 200;
 const CARD_MAX_W = 360;
 const MARGIN = 8;
@@ -29,13 +37,41 @@ let debounceTimer: number | undefined;
 let lastContextPoint: { x: number; y: number } | null = null;
 
 /** Parse with every current preference that affects matching. */
-function parseWithPrefs(text: string, policy: DateOnlyPolicy = prefs.dateOnlyPolicy): ParsedTime[] {
+function parseWithPrefs(text: string): ParsedTime[] {
   return parseTimes(text, {
     assumedZone: prefs.homeZone,
-    dateOnlyPolicy: policy,
+    dateOnlyPolicy: prefs.dateOnlyPolicy,
     customFormats: prefs.customFormats,
     disabledFormats: prefs.disabledFormats,
+    numericDateOrder: prefs.numericDateOrder,
   });
+}
+
+/** Save a preference change made from a card, keeping the in-memory copy current. */
+function patchPrefs(patch: Partial<Preferences>): void {
+  prefs = { ...prefs, ...patch };
+  void savePreferences(prefs);
+}
+
+/** Size a new card opens at, per the "card size on open" setting. */
+function opensCompact(): boolean {
+  const size = prefs.cardSize === 'last' ? prefs.lastCardSize : prefs.cardSize;
+  return size === 'compact';
+}
+
+/** Remember the size the user just switched a card to (for "Last used"). */
+function rememberSize(compact: boolean): void {
+  const size = compact ? 'compact' : 'full';
+  if (prefs.lastCardSize !== size) patchPrefs({ lastCardSize: size });
+}
+
+/**
+ * Re-read a card's text after the user changed how it should be read (the
+ * date-only time or the day/month order), and return the new best match.
+ */
+function reparse(srcText: string): { parsed: ParsedTime; count: number } | null {
+  const again = parseWithPrefs(srcText);
+  return again[0] ? { parsed: again[0], count: again.length } : null;
 }
 
 /**
@@ -59,13 +95,20 @@ let tRoot: Root | null = null;
 interface Pin {
   readonly host: HTMLDivElement;
   readonly root: Root;
-  /** Document-space anchor (page coords, not viewport) so it scrolls with content. */
+  /** Document-space anchor (page coords, not viewport) where it was first placed. */
   readonly pageX: number;
   readonly pageY: number;
   /** Highlight slot index (color + number) this pin owns. */
   readonly slot: number;
   /** The highlighted range for this pin, so it can be restored/cleared. */
   readonly range: Range | null;
+  readonly srcText: string;
+  parsed: ParsedTime;
+  count: number;
+  compact: boolean;
+  /** Pinned to the page (scrolls with it) or floating on screen. */
+  placement: 'pinned' | 'floating';
+  render(): void;
 }
 const pins = new Set<Pin>();
 /** Which pin slots are currently in use (one highlight color each). */
@@ -190,25 +233,28 @@ function narrowRangeToToken(range: Range, token: string): Range {
 /** The live (transient) popover's highlight on its selected token. */
 let liveRange: Range | null = null;
 
+/**
+ * Remember the matched text's range (pins mark it in their color) and, when
+ * "highlight the matched text" is on, mark it now. The page's own selection
+ * is never touched, so the user can still copy exactly what they selected,
+ * short or long.
+ */
 function setLiveHighlight(range: Range, token: string): void {
+  try {
+    liveRange = narrowRangeToToken(range, token).cloneRange();
+  } catch {
+    liveRange = null;
+    return;
+  }
   if (!prefs.keepSelection) return;
   const reg = highlightRegistry();
   const Ctor = HighlightCtor();
   if (!reg || !Ctor) return;
   try {
     ensureHighlightStyle();
-    liveRange = narrowRangeToToken(range, token).cloneRange();
     reg.set(LIVE_HL, new Ctor(liveRange));
-    // Collapse the native selection so our marker is the visible one.
-    window.setTimeout(() => {
-      try {
-        window.getSelection()?.removeAllRanges();
-      } catch {
-        /* ignore */
-      }
-    }, 0);
   } catch {
-    liveRange = null;
+    /* highlights unavailable */
   }
 }
 
@@ -330,6 +376,9 @@ function startDrag(
   startEvent: PointerEvent | React.PointerEvent,
   fixedPos: boolean,
 ): void {
+  // Only drag from the header itself, not its buttons.
+  const t = ('nativeEvent' in startEvent ? startEvent.nativeEvent : startEvent).composedPath?.()[0];
+  if (t instanceof Element && t.closest('button, input, select')) return;
   const native = 'nativeEvent' in startEvent ? startEvent.nativeEvent : startEvent;
   hostEl.dataset.tzxDragged = '1';
   const rect = hostEl.getBoundingClientRect();
@@ -360,6 +409,7 @@ function teardownTransient(): void {
   }
   if (tHost && tHost.parentNode) tHost.parentNode.removeChild(tHost);
   tHost = null;
+  tState = null;
   document.removeEventListener('scroll', onScroll, true);
 }
 
@@ -392,10 +442,7 @@ function onDocMouseDown(e: MouseEvent): void {
   // A fresh (non-Shift) click starts a new selection gesture: selecting the
   // same text again on purpose should show the card again.
   if (e.button === 0 && !e.shiftKey) {
-    const inCard =
-      e.target instanceof Node &&
-      ((tHost !== null && tHost.contains(e.target)) || Array.from(pins).some((p) => p.host.contains(e.target as Node)));
-    if (!inCard) dismissedKey = null;
+    if (!(e.target instanceof Node && inOurUi(e.target))) dismissedKey = null;
   }
   // Clicking outside the transient card dismisses it. Pinned cards are ignored
   // (each manages its own close button).
@@ -405,7 +452,75 @@ function onDocMouseDown(e: MouseEvent): void {
 }
 
 function onKeyDown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') dismissTransient();
+  if (e.key !== 'Escape') return;
+  // Escape inside a card's own fields (the timezone search) closes that list first.
+  const origin = e.composedPath()[0];
+  if (origin instanceof Element && origin.closest('input, select, textarea') && origin.getRootNode() instanceof ShadowRoot) {
+    const host = (origin.getRootNode() as ShadowRoot).host;
+    if (inOurUi(host)) return;
+  }
+  dismissTransient();
+}
+
+/** The transient card's content, kept so it can re-render in place. */
+interface TransientState {
+  readonly rect: DOMRect;
+  readonly srcText: string;
+  readonly pageX: number;
+  readonly pageY: number;
+  parsed: ParsedTime;
+  count: number;
+  compact: boolean;
+}
+let tState: TransientState | null = null;
+
+function paintTransient(): void {
+  const st = tState;
+  const hostEl = tHost;
+  if (!st || !tRoot || !hostEl) return;
+  tRoot.render(
+    createElement(Popover, {
+      parsed: st.parsed,
+      matchCount: st.count,
+      prefs,
+      pinned: false,
+      compact: st.compact,
+      onPin: () =>
+        createPin({
+          parsed: st.parsed,
+          count: st.count,
+          srcText: st.srcText,
+          pageX: st.pageX,
+          pageY: st.pageY,
+          compact: st.compact,
+          range: liveRange ? liveRange.cloneRange() : null,
+        }),
+      onToggleCompact: () => {
+        st.compact = !st.compact;
+        rememberSize(st.compact);
+        paintTransient();
+      },
+      onClose: dismissTransient,
+      onDragStart: (e) => startDrag(hostEl, e, true),
+      onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
+        // Persist as the global default, then re-read this value with it.
+        patchPrefs({ dateOnlyPolicy: policy });
+        const again = reparse(st.srcText);
+        if (!again) return;
+        st.parsed = again.parsed;
+        st.count = again.count;
+        paintTransient();
+      },
+      onDateOrder: (order: NumericDateOrder) => {
+        patchPrefs({ numericDateOrder: order });
+        const again = reparse(st.srcText);
+        if (!again) return;
+        st.parsed = again.parsed;
+        st.count = again.count;
+        paintTransient();
+      },
+    }),
+  );
 }
 
 function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, srcText: string): void {
@@ -421,31 +536,18 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, 
     positionFixed(tHost, rect);
 
     // Capture a document-space point for the pin, from the current scroll.
-    const pageX = rect.left + window.scrollX;
-    const pageY = rect.bottom + MARGIN + window.scrollY;
-    const hostEl = tHost;
-
+    tState = {
+      rect,
+      srcText,
+      pageX: rect.left + window.scrollX,
+      pageY: rect.bottom + MARGIN + window.scrollY,
+      parsed,
+      count: matchCount,
+      compact: opensCompact(),
+    };
     tRoot = createRoot(mount);
-    tRoot.render(
-      createElement(Popover, {
-        parsed,
-        matchCount,
-        prefs,
-        pinned: false,
-        onPin: () => pinCard(parsed, matchCount, pageX, pageY, srcText, false),
-        onPinCompact: () => pinCard(parsed, matchCount, pageX, pageY, srcText, true),
-        onClose: dismissTransient,
-        onDragStart: (e) => startDrag(hostEl, e, true),
-        onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
-          // Persist as the global default, then re-parse this value with it.
-          prefs = { ...prefs, dateOnlyPolicy: policy };
-          void savePreferences(prefs);
-          const again = parseWithPrefs(srcText, policy);
-          if (again[0]) renderTransient(rect, again[0], again.length, srcText);
-        },
-      }),
-    );
-    refitFixed(hostEl, rect);
+    paintTransient();
+    refitFixed(tHost, rect);
     document.addEventListener('scroll', onScroll, true);
   } catch {
     teardownTransient();
@@ -454,19 +556,50 @@ function renderTransient(rect: DOMRect, parsed: ParsedTime, matchCount: number, 
 
 // --- Pin lifecycle --------------------------------------------------------
 
-function pinCard(
-  parsed: ParsedTime,
-  matchCount: number,
-  pageX: number,
-  pageY: number,
-  srcText: string,
-  compact: boolean,
-): void {
+/** Everything needed to (re)create a pinned card, e.g. for "Close all" → Undo. */
+interface PinSpec {
+  readonly parsed: ParsedTime;
+  readonly count: number;
+  readonly srcText: string;
+  readonly pageX: number;
+  readonly pageY: number;
+  readonly compact: boolean;
+  readonly range: Range | null;
+  readonly placement?: 'pinned' | 'floating';
+  /** Exact host position to restore (viewport for floating, page for pinned). */
+  readonly box?: { readonly top: number; readonly left: number };
+}
+
+/** Viewport box of a card, clamped so the whole card is on screen. */
+function clampToViewport(host: HTMLElement): { top: number; left: number } {
+  const r = host.getBoundingClientRect();
+  const w = r.width || CARD_MAX_W;
+  const h = r.height || EST_HEIGHT;
+  const top = Math.min(Math.max(MARGIN, r.top), Math.max(MARGIN, window.innerHeight - h - MARGIN));
+  const left = Math.min(Math.max(MARGIN, r.left), Math.max(MARGIN, window.innerWidth - w - MARGIN));
+  return { top, left };
+}
+
+/** Pin ↔ float, keeping the card exactly where it is on screen (floats are brought into view). */
+function setPlacement(pin: Pin, placement: 'pinned' | 'floating'): void {
+  if (pin.placement === placement) return;
+  if (placement === 'floating') {
+    const { top, left } = clampToViewport(pin.host);
+    applyBox(pin.host, 'fixed', top, left);
+  } else {
+    const r = pin.host.getBoundingClientRect();
+    applyBox(pin.host, 'absolute', r.top + window.scrollY, r.left + window.scrollX);
+  }
+  pin.placement = placement;
+  pin.render();
+}
+
+function createPin(spec: PinSpec): Pin | null {
   try {
-    // Allocate this pin's own highlight slot and promote the live highlight to
-    // it, so the selected text stays marked in the pin's own color.
+    // Allocate this pin's own highlight slot and mark its text in that color,
+    // so the selected text stays tied to the card.
     const slot = nextSlot();
-    const range = liveRange ? liveRange.cloneRange() : null;
+    const range = spec.range;
     setPinHighlight(slot, range);
     const color = pinColor(slot);
 
@@ -479,59 +612,97 @@ function pinCard(
     document.body.appendChild(host);
     // If this pin would land on top of an existing one (values close together
     // on the page), cascade it down-right so every pinned card stays visible.
-    let px = pageX;
-    let py = pageY;
-    let guard = 0;
-    const tooClose = (): boolean => {
-      for (const p of pins) {
-        if (Math.abs(p.pageX - px) < 48 && Math.abs(p.pageY - py) < 48) return true;
+    let px = spec.pageX;
+    let py = spec.pageY;
+    if (!spec.box) {
+      let guard = 0;
+      const tooClose = (): boolean => {
+        for (const p of pins) {
+          if (Math.abs(p.pageX - px) < 48 && Math.abs(p.pageY - py) < 48) return true;
+        }
+        return false;
+      };
+      while (tooClose() && guard++ < 12) {
+        px += 36;
+        py += 36;
       }
-      return false;
-    };
-    while (tooClose() && guard++ < 12) {
-      px += 36;
-      py += 36;
     }
-    positionAbsolute(host, px, py);
+    const placement = spec.placement ?? 'pinned';
+    if (spec.box) applyBox(host, placement === 'floating' ? 'fixed' : 'absolute', spec.box.top, spec.box.left);
+    else positionAbsolute(host, px, py);
 
     const root = createRoot(mount);
-    const pin: Pin = { host, root, pageX: px, pageY: py, slot, range };
-    pins.add(pin);
-
-    let isCompact = compact;
-    const renderPin = (p: ParsedTime, count: number): void => {
-      root.render(
-        createElement(Popover, {
-          parsed: p,
-          matchCount: count,
-          prefs,
-          pinned: true,
-          compact: isCompact,
-          pinNumber: slot + 1,
-          pinDot: color.dot,
-          onClose: () => removePin(pin),
-          onToggleCompact: () => {
-            isCompact = !isCompact;
-            renderPin(p, count);
-          },
-          onDragStart: (e) => startDrag(host, e, false),
-          onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
-            prefs = { ...prefs, dateOnlyPolicy: policy };
-            void savePreferences(prefs);
-            const again = parseWithPrefs(srcText, policy);
-            if (again[0]) renderPin(again[0], again.length);
-          },
-        }),
-      );
+    const pin: Pin = {
+      host,
+      root,
+      pageX: px,
+      pageY: py,
+      slot,
+      range,
+      srcText: spec.srcText,
+      parsed: spec.parsed,
+      count: spec.count,
+      compact: spec.compact,
+      placement,
+      render: () => {
+        root.render(
+          createElement(Popover, {
+            parsed: pin.parsed,
+            matchCount: pin.count,
+            prefs,
+            pinned: true,
+            placement: pin.placement,
+            compact: pin.compact,
+            pinNumber: slot + 1,
+            pinDot: color.dot,
+            onClose: () => {
+              removePin(pin);
+              refreshDock();
+            },
+            onToggleCompact: () => {
+              pin.compact = !pin.compact;
+              rememberSize(pin.compact);
+              pin.render();
+              refreshDock();
+            },
+            onTogglePlacement: () => {
+              setPlacement(pin, pin.placement === 'pinned' ? 'floating' : 'pinned');
+              refreshDock();
+            },
+            onDragStart: (e) => startDrag(host, e, pin.placement === 'floating'),
+            onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
+              patchPrefs({ dateOnlyPolicy: policy });
+              const again = reparse(pin.srcText);
+              if (!again) return;
+              pin.parsed = again.parsed;
+              pin.count = again.count;
+              pin.render();
+            },
+            onDateOrder: (order: NumericDateOrder) => {
+              patchPrefs({ numericDateOrder: order });
+              const again = reparse(pin.srcText);
+              if (!again) return;
+              pin.parsed = again.parsed;
+              pin.count = again.count;
+              pin.render();
+            },
+          }),
+        );
+      },
     };
-    renderPin(parsed, matchCount);
+    pins.add(pin);
+    pin.render();
 
     // The value is pinned in its own slot; drop the transient card and its live
     // amber highlight (the pin's colored highlight has taken over).
     clearLiveHighlight();
     teardownTransient();
+    closedPins = null;
+    refreshDock();
+    return pin;
   } catch {
     /* restricted page — ignore */
+    return null;
   }
 }
 
@@ -546,6 +717,151 @@ function removePin(pin: Pin): void {
   // Free this pin's highlight slot and clear its colored mark.
   clearPinHighlight(pin.slot);
   usedSlots.delete(pin.slot);
+}
+
+// --- Pin dock: bulk actions for every pinned card --------------------------
+
+let dockHost: HTMLDivElement | null = null;
+let dockRoot: Root | null = null;
+/** Cards closed by "Close all", kept until the undo offer ends. */
+let closedPins: PinSpec[] | null = null;
+
+function specOf(pin: Pin): PinSpec {
+  const r = pin.host.getBoundingClientRect();
+  return {
+    parsed: pin.parsed,
+    count: pin.count,
+    srcText: pin.srcText,
+    pageX: pin.pageX,
+    pageY: pin.pageY,
+    compact: pin.compact,
+    range: pin.range,
+    placement: pin.placement,
+    box:
+      pin.placement === 'floating'
+        ? { top: r.top, left: r.left }
+        : { top: r.top + window.scrollY, left: r.left + window.scrollX },
+  };
+}
+
+function setAllCompact(compact: boolean): void {
+  for (const pin of pins) {
+    if (pin.compact === compact) continue;
+    pin.compact = compact;
+    pin.render();
+  }
+  rememberSize(compact);
+  refreshDock();
+}
+
+function togglePlacementAll(): void {
+  const list = Array.from(pins);
+  const allFloating = list.every((p) => p.placement === 'floating');
+  const target = allFloating ? 'pinned' : 'floating';
+  // Floating cards gather in view: cascade the ones that were off screen.
+  let cascade = 0;
+  for (const pin of list) {
+    if (pin.placement === target) continue;
+    const before = pin.host.getBoundingClientRect();
+    setPlacement(pin, target);
+    if (target === 'floating') {
+      const offscreen = before.bottom < 0 || before.top > window.innerHeight;
+      if (offscreen) {
+        const top = Math.min(window.innerHeight - EST_HEIGHT - MARGIN, 64 + cascade * 28);
+        const left = Math.max(MARGIN, window.innerWidth - CARD_MAX_W - 24 - cascade * 28);
+        applyBox(pin.host, 'fixed', Math.max(MARGIN, top), left);
+        cascade += 1;
+      }
+    }
+  }
+  refreshDock();
+}
+
+function closeAllPins(): void {
+  const list = Array.from(pins);
+  if (list.length === 0) return;
+  closedPins = list.map(specOf);
+  for (const pin of list) removePin(pin);
+  refreshDock();
+}
+
+function undoCloseAll(): void {
+  const specs = closedPins;
+  closedPins = null;
+  if (!specs) return;
+  for (const spec of specs) createPin(spec);
+  refreshDock();
+}
+
+function dismissUndo(): void {
+  closedPins = null;
+  refreshDock();
+}
+
+/** Show, update or remove the dock to match the pinned cards. */
+function refreshDock(): void {
+  const count = pins.size;
+  if (count === 0 && !closedPins) {
+    if (dockRoot) {
+      try {
+        dockRoot.unmount();
+      } catch {
+        /* gone */
+      }
+    }
+    dockHost?.remove();
+    dockHost = null;
+    dockRoot = null;
+    return;
+  }
+  try {
+    if (!dockHost || !dockHost.isConnected) {
+      dockHost = document.createElement('div');
+      dockHost.id = DOCK_HOST_ID;
+      const shadow = dockHost.attachShadow({ mode: 'open' });
+      const mount = document.createElement('div');
+      shadow.appendChild(mount);
+      document.body.appendChild(dockHost);
+      for (const [k, v] of Object.entries({
+        position: 'fixed',
+        right: '16px',
+        bottom: '16px',
+        left: 'auto',
+        top: 'auto',
+        margin: '0',
+        padding: '0',
+        'z-index': '2147483647',
+      })) {
+        dockHost.style.setProperty(k, v, 'important');
+      }
+      dockRoot = createRoot(mount);
+    }
+    applyHostTheme(dockHost);
+    const list = Array.from(pins);
+    dockRoot?.render(
+      createElement(PinDock, {
+        count,
+        compactCount: list.filter((p) => p.compact).length,
+        floatingCount: list.filter((p) => p.placement === 'floating').length,
+        closed: closedPins ? closedPins.length : null,
+        onMinimizeAll: () => setAllCompact(true),
+        onExpandAll: () => setAllCompact(false),
+        onTogglePlacementAll: togglePlacementAll,
+        onCloseAll: closeAllPins,
+        onUndo: undoCloseAll,
+        onDismissUndo: dismissUndo,
+      }),
+    );
+  } catch {
+    /* restricted page */
+  }
+}
+
+/** True when the node is inside one of our own cards, pins or the dock. */
+function inOurUi(node: Node): boolean {
+  if (tHost?.contains(node) || dockHost?.contains(node)) return true;
+  for (const p of pins) if (p.host.contains(node)) return true;
+  return false;
 }
 
 // --- Selection handling ---------------------------------------------------
@@ -614,6 +930,8 @@ function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
 /** Read the active selection from the page OR from an input/textarea. */
 function readSelection(): { text: string; rect: DOMRect; range: Range | null } | null {
   const active = document.activeElement;
+  // Typing in a card's own search box is not a page selection.
+  if (active && inOurUi(active)) return null;
 
   // <input> / <textarea>: use selectionStart/End and a mirror rect.
   if (
@@ -646,13 +964,8 @@ function readSelection(): { text: string; rect: DOMRect; range: Range | null } |
   const text = sel.toString().trim();
   if (text.length === 0) return null;
 
-  // Ignore selections inside the transient card or any pinned card.
-  if (sel.anchorNode) {
-    if (tHost && tHost.contains(sel.anchorNode)) return null;
-    for (const pin of pins) {
-      if (pin.host.contains(sel.anchorNode)) return null;
-    }
-  }
+  // Ignore selections inside our own cards and the dock.
+  if (sel.anchorNode && inOurUi(sel.anchorNode)) return null;
 
   let rect: DOMRect;
   let range: Range | null = null;

@@ -166,7 +166,7 @@ test.describe('formats, context menu, select-to-convert', () => {
     await opt.goto(`chrome-extension://${extId}/src/options/index.html`);
 
     const builtins = opt.getByRole('list', { name: 'Built-in formats' });
-    await expect(builtins.getByRole('listitem')).toHaveCount(7);
+    await expect(builtins.getByRole('listitem')).toHaveCount(13);
     const isoSwitch = opt.getByRole('switch', { name: 'ISO 8601 format' });
     await expect(isoSwitch).toHaveAttribute('aria-checked', 'true');
     await isoSwitch.click();
@@ -176,7 +176,7 @@ test.describe('formats, context menu, select-to-convert', () => {
       .toEqual(['iso-8601']);
 
     // The tester reflects the disabled format.
-    await opt.getByLabel('Test text').fill('2024-01-02');
+    await opt.getByLabel('Test text').fill('2024-01-02T10:00:00Z');
     await expect(opt.getByText('No enabled format recognizes this text.')).toBeVisible();
     await isoSwitch.click();
     await expect(opt.locator('.tzx-test-out')).toContainText('ISO 8601');
@@ -212,14 +212,14 @@ test.describe('formats, context menu, select-to-convert', () => {
     await expect(popover(page)).toBeVisible({ timeout: 5000 });
     await expect(popover(page)).toContainText('format: German date');
 
-    // Switch it off from settings: the page stops converting it, and the
-    // trailing "10:30" is not passed off as today's time either.
+    // Switch it off from settings: the built-in numeric-date format reads it instead.
     await custom.getByRole('switch', { name: 'German date format' }).click();
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
+    await page.mouse.click(5, 5);
     await selectText(page, '#t');
-    await page.waitForTimeout(600);
-    await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
+    await expect(popover(page)).toBeVisible({ timeout: 5000 });
+    await expect(popover(page)).toContainText('format: Numeric date');
     await page.close();
     await opt.close();
   });

@@ -350,8 +350,8 @@ export function Options(): JSX.Element {
             onChange={(v) => update({ ...prefs, keepSelection: v })}
           />
           <p className="tzx-hint">
-            While a card is open, mark the matched text with a colored highlight. The browser's own selection is
-            cleared so the mark stays visible; turn this off to keep the normal selection (for example to copy it).
+            While a card is open, also mark the matched date or time with a colored highlight. Your own selection
+            always stays as you made it, so you can copy it — short or long.
           </p>
         </div>
       </section>

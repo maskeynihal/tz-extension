@@ -103,3 +103,124 @@ describe('content script: right-click convert', () => {
     expect((window as unknown as Record<string, unknown>).__tzExtensionContent__).toBe(first);
   });
 });
+
+describe('content script: cards, pins and the dock', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  const shadowOf = (el: Element | null | undefined): ShadowRoot => {
+    const root = (el as HTMLElement | null)?.shadowRoot;
+    if (!root) throw new Error('no shadow root');
+    return root;
+  };
+  const transient = (): ShadowRoot => shadowOf(document.getElementById('tz-extension-popover-host'));
+  const pinHosts = (): HTMLElement[] => Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host'));
+  const dock = (): ShadowRoot => shadowOf(document.getElementById('tz-extension-pin-dock'));
+  const button = (root: ShadowRoot, label: string): HTMLButtonElement => {
+    const b = root.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    if (!b) throw new Error(`no button "${label}"`);
+    return b;
+  };
+
+  async function openCard(
+    stored: Record<string, unknown>,
+    text = '2024-01-02T12:00:00Z',
+  ): Promise<{ listener: Listener; set: ReturnType<typeof vi.fn> }> {
+    const { listener, releaseStorage } = await loadContent(stored);
+    releaseStorage();
+    const respond = vi.fn();
+    listener({ type: 'tzx/convert-selection', text }, { id: 'ext-id' }, respond);
+    await vi.waitFor(() => expect(respond).toHaveBeenCalled());
+    const set = (globalThis as unknown as { chrome: { storage: { sync: { set: ReturnType<typeof vi.fn> } } } }).chrome
+      .storage.sync.set;
+    return { listener, set };
+  }
+
+  it('opens compact when the card size setting says so, and remembers the last size', async () => {
+    const { set } = await openCard({ homeZone: 'UTC', cardSize: 'compact', lastCardSize: 'compact' });
+    expect(transient().querySelector('.tzx-card')?.classList.contains('compact')).toBe(true);
+    button(transient(), 'Expand card').click();
+    await vi.waitFor(() => expect(transient().querySelector('.tzx-card')?.classList.contains('compact')).toBe(false));
+    const saved = set.mock.calls.at(-1)?.[0]['tz-extension-prefs'];
+    expect(saved.lastCardSize).toBe('full');
+  });
+
+  it('"Last used" opens at the remembered size', async () => {
+    await openCard({ homeZone: 'UTC', cardSize: 'last', lastCardSize: 'compact' });
+    expect(transient().querySelector('.tzx-card')?.classList.contains('compact')).toBe(true);
+  });
+
+  it('offers the day/month choice for an ambiguous date and re-reads it', async () => {
+    const { set } = await openCard({ homeZone: 'UTC', numericDateOrder: 'dmy' }, '03/04/2024 10:00');
+    const group = transient().querySelector('.tzx-order');
+    expect(group?.textContent).toContain('3 Apr');
+    expect(group?.textContent).toContain('4 Mar');
+    const monthFirst = Array.from(group?.querySelectorAll('button') ?? []).find((b) => b.textContent?.includes('4 Mar'));
+    monthFirst?.click();
+    await vi.waitFor(() =>
+      expect(transient().querySelector('.tzx-order-btn.on')?.textContent).toContain('4 Mar'),
+    );
+    expect(set.mock.calls.at(-1)?.[0]['tz-extension-prefs'].numericDateOrder).toBe('mdy');
+    expect(transient().querySelector('.tzx-date')?.textContent).toBe('2024-03-04');
+  });
+
+  it('pins, then the dock minimizes, expands, unpins (floats) and closes all with undo', async () => {
+    const { listener } = await openCard({ homeZone: 'UTC' });
+    button(transient(), 'Pin to page').click();
+    await vi.waitFor(() => expect(pinHosts()).toHaveLength(1));
+    listener({ type: 'tzx/convert-selection', text: '1700000000' }, { id: 'ext-id' }, vi.fn());
+    await vi.waitFor(() => expect(document.getElementById('tz-extension-popover-host')).not.toBeNull());
+    button(transient(), 'Pin to page').click();
+    await vi.waitFor(() => expect(pinHosts()).toHaveLength(2));
+
+    await vi.waitFor(() => expect(dock().querySelector('[role="toolbar"]')?.getAttribute('aria-label')).toBe('Pinned cards: 2 pinned cards'));
+    const cards = (): Element[] => pinHosts().map((h) => shadowOf(h).querySelector('.tzx-card') as Element);
+
+    button(dock(), 'Minimize all').click();
+    await vi.waitFor(() => expect(cards().every((c) => c.classList.contains('compact'))).toBe(true));
+    expect(button(dock(), 'Minimize all').disabled).toBe(true);
+
+    button(dock(), 'Expand all').click();
+    await vi.waitFor(() => expect(cards().some((c) => c.classList.contains('compact'))).toBe(false));
+
+    button(dock(), 'Unpin all').click();
+    await vi.waitFor(() => expect(cards().every((c) => c.classList.contains('floating'))).toBe(true));
+    expect(pinHosts().every((h) => h.style.getPropertyValue('position') === 'fixed')).toBe(true);
+    button(dock(), 'Pin all to page').click();
+    await vi.waitFor(() => expect(pinHosts().every((h) => h.style.getPropertyValue('position') === 'absolute')).toBe(true));
+
+    button(dock(), 'Close all').click();
+    await vi.waitFor(() => expect(pinHosts()).toHaveLength(0));
+    expect(dock().textContent).toContain('Closed 2 cards');
+    const undo = Array.from(dock().querySelectorAll('button')).find((b) => b.textContent?.includes('Undo'));
+    undo?.click();
+    await vi.waitFor(() => expect(pinHosts()).toHaveLength(2));
+  });
+
+  it('a single card floats and pins back from its own header', async () => {
+    await openCard({ homeZone: 'UTC' });
+    button(transient(), 'Pin to page').click();
+    await vi.waitFor(() => expect(pinHosts()).toHaveLength(1));
+    const root = shadowOf(pinHosts()[0]);
+    button(root, 'Float on screen').click();
+    await vi.waitFor(() => expect(root.querySelector('.tzx-card.floating')).not.toBeNull());
+    button(root, 'Pin to page').click();
+    await vi.waitFor(() => expect(root.querySelector('.tzx-card.floating')).toBeNull());
+  });
+
+  it('never removes the page selection, so the user can still copy it', async () => {
+    document.body.innerHTML = '<p id="t">Long notes. Meeting at 2024-01-02T12:00:00Z with the whole team, then lunch.</p>';
+    await openCard({ homeZone: 'UTC' });
+    const p = document.getElementById('t')!;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    await new Promise((r) => setTimeout(r, 350));
+    expect(window.getSelection()?.toString()).toContain('Long notes.');
+    expect(window.getSelection()?.toString()).toContain('then lunch.');
+  });
+});
