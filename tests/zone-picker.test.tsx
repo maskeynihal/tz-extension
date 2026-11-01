@@ -143,6 +143,45 @@ describe('ZonePicker results', () => {
     expect(screen.queryByText(/Already added/)).toBeNull();
   });
 
+  // Round 5 (QA N6): an added zone that matches is named even when other zones match too.
+  it.each([
+    ['new york', ['America/New_York'], 'ET', 'America/New_York'],
+    ['New_York', ['America/New_York'], 'ET', 'America/New_York'],
+    ['america/new', ['America/New_York'], undefined, 'America/New_York'],
+    ['utc+5:45', ['UTC+05:45'], 'NPT', 'UTC+05:45'],
+  ])('"%s" with %j added lists the other results and ends with "Already added"', (q, exclude, some, label) => {
+    const { input } = setup({ exclude });
+    fireEvent.change(input, { target: { value: q } });
+    const all = options();
+    const last = all[all.length - 1] as HTMLElement;
+    expect(last).toHaveTextContent(`Already added: ${label}`);
+    expect(last).toHaveAttribute('aria-disabled', 'true');
+    expect(last).toHaveAttribute('aria-selected', 'false');
+    const results = all.slice(0, -1);
+    expect(results.length).toBeGreaterThan(0);
+    if (some) expect(results.some((o) => o.textContent?.startsWith(some))).toBe(true);
+    expect(results.some((o) => o.textContent?.includes('Already added'))).toBe(false);
+  });
+
+  it('keyboard navigation skips the "Already added" line, and clicking it picks nothing', () => {
+    const { input, onSelect } = setup({ exclude: ['America/New_York'] });
+    fireEvent.change(input, { target: { value: 'new york' } });
+    const all = options();
+    const note = all[all.length - 1] as HTMLElement;
+    fireEvent.keyDown(input, { key: 'End' });
+    expect(activeOption(input)).toBe(all[all.length - 2]);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(activeOption(input)).toBe(all[all.length - 2]);
+    expect(activeOption(input)).not.toBe(note);
+    fireEvent.mouseEnter(note);
+    expect(activeOption(input)).toBe(all[all.length - 2]);
+    fireEvent.mouseDown(note);
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls[0]?.[0]).not.toBe('America/New_York');
+  });
+
   it('still says "No matching timezone" for gibberish', () => {
     const { input } = setup({ exclude: ['Asia/Kathmandu'] });
     fireEvent.change(input, { target: { value: 'zzzqqq' } });

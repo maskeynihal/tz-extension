@@ -80,6 +80,9 @@ export const ABBREV_OFFSETS: Readonly<Record<string, number>> = {
   AEDT: 11 * 60,
   NZST: 12 * 60,
   NZDT: 13 * 60,
+  CHAST: 12 * 60 + 45,
+  CHADT: 13 * 60 + 45,
+  BDT: 6 * 60, // Bangladesh (the zone list's BDT)
 };
 
 export const MONTHS: Readonly<Record<string, number>> = {
@@ -258,6 +261,7 @@ export const GENERIC_ZONES: Readonly<Record<string, string>> = {
   CT: 'America/Chicago',
   MT: 'America/Denver',
   PT: 'America/Los_Angeles',
+  AKT: 'America/Anchorage',
 };
 
 /** A zone read from text: a fixed offset, or an IANA zone for DST-aware names. */

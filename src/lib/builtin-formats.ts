@@ -53,6 +53,9 @@ const VETO = 'veto' as const;
 /** A converter's result: the value, and optionally where it starts and how long it is. */
 type Converted = { parsed: ParsedTime; length?: number; start?: number };
 
+/** A veto that claims more text than the regex matched (a verse range "1:16-2:10"). */
+type SizedVeto = { veto: number };
+
 /**
  * Run a global regex over `src` and convert each match. A match whose values
  * turn out invalid is skipped one character at a time so a valid match that
@@ -62,7 +65,7 @@ type Converted = { parsed: ParsedTime; length?: number; start?: number };
 function scan(
   regex: RegExp,
   src: string,
-  convert: (m: RegExpExecArray) => Converted | typeof VETO | null,
+  convert: (m: RegExpExecArray) => Converted | typeof VETO | SizedVeto | null,
 ): MatchResult[] {
   const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : `${regex.flags}g`);
   const out: MatchResult[] = [];
@@ -75,9 +78,10 @@ function scan(
       continue;
     }
     const got = convert(m);
-    if (got === VETO) {
-      out.push({ veto: true, index: m.index, length: m[0].length });
-      re.lastIndex = m.index + m[0].length;
+    if (got === VETO || (got && 'veto' in got)) {
+      const length = got === VETO ? m[0].length : got.veto;
+      out.push({ veto: true, index: m.index, length });
+      re.lastIndex = m.index + length;
     } else if (got) {
       const start = got.start ?? 0;
       out.push({ parsed: got.parsed, index: m.index + start, length: got.length ?? m[0].length - start });
@@ -274,8 +278,15 @@ const SCRIPTURE_BEFORE = new RegExp(
   String.raw`(?:^|[^${L}])(?:(?:Genesis|Exodus|Leviticus|Deuteronomy|Judges|Kings|Chronicles|Nehemiah|Psalms?|Proverbs|Ecclesiastes|Lamentations|Ezekiel|Hosea|Obadiah|Nahum|Habakkuk|Zephaniah|Haggai|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians|Hebrews|Revelation|Gen|Exod|Deut|Rom|Cor|Gal|Eph|Heb|Rev|Ps|Prov|Jer|Ezek|Surah|Sura|Quran|Qur['’]an)\.?|[Vv]erses?|[Cc]hapter|[Cc]h\.)[ \t]+$`,
 );
 
-/** Verbs that introduce a citation: "See John 3:16", "Read Mark 4:39", "cf. Luke 2:11". */
-const CITE_VERB = String.raw`(?:[Ss]ee|[Rr]ead|[Cc]f\.|[Cc]ompare|[Qq]uot(?:e|ed|es|ing))`;
+/**
+ * Verbs that introduce a citation: "See John 3:16", "Read Mark 4:39",
+ * "Please see John 3:16", "Quoting Luke 6:31", "cf. Luke 2:11". Capitalised, at the start of a
+ * line or sentence (see CITE_START), except "cf.", which is only ever a
+ * citation. A lowercase "see" mid-sentence is chat: "I'll see John 3:47 today".
+ */
+const CITE_VERB = String.raw`(?:Please[ \t]+(?:see|read|compare)|See|Read|Compare|Quot(?:e|ed|es|ing)|Cf\.|cf\.)`;
+/** Before a citation verb: the line start, ". ", "; ", ": ", "! ", "? " or an opening bracket or quote. */
+const CITE_START = /(?:^|[.;:!?][ \t]+|[([{"'“‘«][ \t]*)[\s*>•–—-]*$/;
 
 /**
  * "v. 3:16" and "vv. 3:16" mean verse when the abbreviation sits directly
@@ -302,26 +313,33 @@ const NAME_BOOK_BEFORE = new RegExp(
 );
 /** "3:16-18", "3:16–18", "3:16,18": a verse range or list, not a time range. */
 const VERSE_AFTER = /^(?:[-–—]|,(?=\d))\d{1,3}(?![\d:])/;
-/** "9:17-9:45", "9:17 – 9:45": a time range. */
-const TIME_RANGE_AFTER = /^[ \t]*[-–—][ \t]*\d{1,2}:\d{2}/;
+/** "9:17-9:45", "9:17 – 9:45": a range to another H:MM (a time range or a chapter range). */
+const TIME_RANGE_AFTER = /^[ \t]*[-–—][ \t]*(?<h>\d{1,2}):(?<mi>\d{2})(?![\d:])/;
 /** "Mark 3:47 meeting", "Peter 4:12 joined": a schedule or chat word after the time. */
 const TIME_WORD_AFTER =
   /^[ \t]+(?:meeting|meet|call|calls|standup|stand-up|sync|joined|joins|left|leaves|said|wrote|replied|lunch|dinner|breakfast|demo|review|today|tonight|tomorrow|yesterday|am|pm|a\.m\.|p\.m\.|start|starts|end|ends|deadline|dentist|appointment|interview|online|offline|here)(?![\p{L}\p{N}])/u;
 
 /**
- * A given-name book with only weak scripture context. A zero-padded hour
- * ("John 09:41"), an hour of 13 or more ("Peter 14:07"), a time range
- * ("Daniel 9:17-9:45"), a schedule word after ("Mark 3:47 meeting") or
- * whole five minutes ("Ruth 9:00") say time.
+ * A given-name book with only weak scripture context (it opens the line, or
+ * follows a citation verb). A zero-padded hour ("John 09:41"), an hour of 13
+ * or more without a citation verb ("Peter 14:07"; "See John 15:13" is a
+ * verse), a time range ("Daniel 9:17-9:45": the end is zero-padded or on
+ * whole five minutes), a schedule word after ("Mark 3:47 meeting", also
+ * "Read John 3:16 today") or whole five minutes ("Ruth 9:00") say time.
  */
 function weakVerse(hour: string, minutes: string, after: string, cited: boolean): boolean {
-  if (/^0\d/.test(hour) || Number(hour) >= 13) return false;
-  if (TIME_RANGE_AFTER.test(after)) return false;
-  // A citation verb outweighs the word after: "Read John 3:16 today".
-  if (!cited && TIME_WORD_AFTER.test(after)) return false;
+  if (/^0\d/.test(hour)) return false;
+  if (Number(hour) >= 13 && !cited) return false;
+  const range = TIME_RANGE_AFTER.exec(after);
+  if (range) {
+    // "Matthew 5:17-7:12" is a chapter range; "Daniel 9:17-9:45" a time range.
+    const { h = '', mi = '' } = range.groups ?? {};
+    if (/^0\d/.test(h) || Number(mi) % 5 === 0) return false;
+  } else if (TIME_WORD_AFTER.test(after)) return false;
   return Number(minutes) % 5 !== 0;
 }
 
+/** True when H:MM, with `line` before it and `after` after it, is chapter:verse. */
 function scriptureBefore(line: string, hour: string, minutes: string, after: string): boolean {
   if (SCRIPTURE_BEFORE.test(line)) return true;
   const v = VERSE_ABBR_BEFORE.exec(line);
@@ -332,11 +350,15 @@ function scriptureBefore(line: string, hour: string, minutes: string, after: str
   const m = NAME_BOOK_BEFORE.exec(line);
   if (!m) return false;
   const g = m.groups ?? {};
-  // A zero-padded hour or a time range after the time is never a verse.
-  if (/^0\d/.test(hour) || TIME_RANGE_AFTER.test(after)) return false;
-  if (g.num || g.ctx || VERSE_AFTER.test(after)) return true;
-  const opensLine = /^[\s"'“‘«([*>•–—-]*$/.test(line.slice(0, m.index + (g.lead ?? '').length));
-  return (opensLine || !!g.cite) && weakVerse(hour, minutes, after, !!g.cite);
+  // A book number or "verse"/"chapter" settles it: "2 Peter 1:16-2:10", "1 John 09:41".
+  if (g.num || g.ctx) return true;
+  // Otherwise a zero-padded hour is never a verse.
+  if (/^0\d/.test(hour)) return false;
+  if (VERSE_AFTER.test(after)) return true;
+  const before = line.slice(0, m.index + (g.lead ?? '').length);
+  const opensLine = /^[\s"'“‘«([*>•–—-]*$/.test(before);
+  const cited = !!g.cite && CITE_START.test(before);
+  return (opensLine || cited) && weakVerse(hour, minutes, after, cited);
 }
 
 /** "odds of 1:30", "1:30 odds", "aspect ratio 4:30": a ratio, not a time. */
@@ -935,9 +957,12 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
           const line = before.slice(before.lastIndexOf('\n') + 1);
           // "Romans 8:28", "1 John 3:16", "odds of 1:30", "1:30 odds".
           const after = src.slice(end, end + 20);
-          if (scriptureBefore(line, hTok ?? '', miTok, after) || RATIO_BEFORE.test(line) || RATIO_AFTER.test(after)) {
-            return null;
+          if (scriptureBefore(line, hTok ?? '', miTok, after)) {
+            // "2 Peter 1:16-2:10": the verse range claims its end too.
+            const range = TIME_RANGE_AFTER.exec(after);
+            return range ? { veto: end - m.index + range[0].length } : null;
           }
+          if (RATIO_BEFORE.test(line) || RATIO_AFTER.test(after)) return null;
         }
         // Need an am/pm marker, a colon, or a real zone; "5" alone is not a
         // time. A bare number before a two-letter name ("3 CT scans",

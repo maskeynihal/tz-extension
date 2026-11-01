@@ -19,6 +19,13 @@ import {
 } from '../types';
 import { NoMatchCard, Popover } from './Popover';
 import { PinDock } from './PinDock';
+import {
+  isFocusCardMessage,
+  isShortcutReply,
+  shortcutLabel,
+  type GetShortcutMessage,
+  type ShortcutLabel,
+} from '../background/commands';
 
 const TRANSIENT_HOST_ID = 'tz-extension-popover-host';
 const PIN_HOST_CLASS = 'tz-extension-pin-host';
@@ -100,18 +107,115 @@ function rememberSize(compact: boolean): void {
 }
 
 /**
- * Re-read a card's text after the user changed how it should be read (the
- * date-only time or the day/month order), and return the match the card
- * shows (the `index`-th, or the last one when there are fewer now).
+ * The parser lists at most this many results per format (MAX_MATCHES in
+ * builtin-formats.ts, MAX_MATCHES_PER_FORMAT in custom-formats.ts).
+ */
+export const PARSER_FORMAT_CAP = 25;
+/** A card lists at most this many times of one selection. */
+export const MAX_LISTED = 500;
+/** Time spent finding the times past the parser's per-format cap. */
+const LIST_BUDGET_MS = 40;
+
+/** The times of a selection, for a card. */
+export interface Reading {
+  /** Every time found, in reading order (by `sourceIndex`; ties best-first). */
+  readonly matches: ParsedTime[];
+  /** Where the best match (the parser's first) is in `matches`: the card opens on it. */
+  readonly open: number;
+  /** True when the selection has more times than `matches` lists. */
+  readonly capped: boolean;
+}
+
+function endOf(p: ParsedTime): number {
+  return (p.sourceIndex ?? 0) + p.matchedText.length;
+}
+
+function sameMatch(a: ParsedTime, b: ParsedTime): boolean {
+  return a.sourceIndex === b.sourceIndex && a.matchedText === b.matchedText;
+}
+
+/**
+ * Find every time in `text`, in reading order. The parser stops each format
+ * at PARSER_FORMAT_CAP results; when a format reaches it, the results up to
+ * where that format stopped are kept and the rest of the text is read
+ * again, until nothing is cut, MAX_LISTED times are listed or
+ * LIST_BUDGET_MS is spent (then `capped`). Only the first SCAN_LIMIT
+ * characters are read, as for one parse.
+ */
+export function readTimes(text: string, parse: (t: string) => ParsedTime[] = parseWithPrefs): Reading {
+  const limit = Math.min(text.length, SCAN_LIMIT);
+  const started = Date.now();
+  const all: ParsedTime[] = [];
+  const seen = new Set<string>();
+  let best: ParsedTime | null = null;
+  let base = 0;
+  let capped = false;
+  for (;;) {
+    const found = parse(text.slice(base, limit)).map((p) =>
+      base === 0 ? p : { ...p, sourceIndex: base + (p.sourceIndex ?? 0) },
+    );
+    if (!best && found[0]) best = found[0];
+    const counts = new Map<string, { n: number; end: number }>();
+    for (const p of found) {
+      const k = p.formatId ?? p.kind;
+      const c = counts.get(k) ?? { n: 0, end: 0 };
+      counts.set(k, { n: c.n + 1, end: Math.max(c.end, endOf(p)) });
+    }
+    // Where the first format that reached the cap stopped; no match may
+    // straddle the cut, or the next read would see only part of it.
+    let cut = Infinity;
+    for (const c of counts.values()) if (c.n >= PARSER_FORMAT_CAP) cut = Math.min(cut, c.end);
+    if (cut !== Infinity) {
+      for (const p of found) if ((p.sourceIndex ?? 0) < cut && endOf(p) > cut) cut = p.sourceIndex ?? 0;
+    }
+    for (const p of found) {
+      if (cut !== Infinity && endOf(p) > cut) continue;
+      const key = `${p.epochMs}:${p.matchedText}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(p);
+    }
+    if (cut === Infinity || cut >= limit) break;
+    if (cut <= base || all.length >= MAX_LISTED || Date.now() - started > LIST_BUDGET_MS) {
+      capped = true;
+      break;
+    }
+    base = cut;
+  }
+  const matches = all
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => (a.p.sourceIndex ?? 0) - (b.p.sourceIndex ?? 0) || a.i - b.i)
+    .map(({ p }) => p)
+    .slice(0, MAX_LISTED);
+  if (all.length > MAX_LISTED) capped = true;
+  const at = best ? matches.findIndex((p) => sameMatch(p, best as ParsedTime)) : -1;
+  return { matches, open: Math.max(0, at), capped };
+}
+
+/**
+ * Re-read a card's text (the user changed how it should be read, here or in
+ * Settings) and pick the match to show: the one shown before when it is
+ * still there (same place, same text; else same place), else the best one.
  */
 function reparse(
   srcText: string,
-  index = 0,
-): { parsed: ParsedTime; count: number; matches: ParsedTime[]; index: number } | null {
-  const again = parseWithPrefs(srcText);
-  if (again.length === 0) return null;
-  const i = Math.min(Math.max(0, index), again.length - 1);
-  return { parsed: again[i] as ParsedTime, count: again.length, matches: again, index: i };
+  shown: ParsedTime | null,
+): { parsed: ParsedTime; count: number; matches: ParsedTime[]; index: number; capped: boolean } | null {
+  const again = readTimes(srcText);
+  if (again.matches.length === 0) return null;
+  let i = -1;
+  if (shown && shown.sourceIndex !== undefined) {
+    i = again.matches.findIndex((p) => sameMatch(p, shown));
+    if (i < 0) i = again.matches.findIndex((p) => p.sourceIndex === shown.sourceIndex);
+  }
+  if (i < 0) i = again.open;
+  return {
+    parsed: again.matches[i] as ParsedTime,
+    count: again.matches.length,
+    matches: again.matches,
+    index: i,
+    capped: again.capped,
+  };
 }
 
 
@@ -147,6 +251,8 @@ interface Pin {
   readonly srcText: string;
   parsed: ParsedTime;
   count: number;
+  /** True when the selection has more times than `count`. */
+  capped: boolean;
   /** Which match of its selection it shows (0 for the first). */
   index: number;
   compact: boolean;
@@ -279,87 +385,151 @@ function narrowRangeToToken(range: Range, token: string): Range {
   return range;
 }
 
-/**
- * Where each match of `parseTimes` sits in `text`, as [start, end), or null
- * when it cannot be found. The parser lists the most specific match first
- * and the rest in text order, and matches never overlap: so the first one
- * is its text's first occurrence, and each of the rest is the next
- * occurrence after the one before it that does not overlap the first.
- */
-export function matchSpans(text: string, matches: readonly ParsedTime[]): Array<[number, number] | null> {
-  const out: Array<[number, number] | null> = [];
-  const lead = matches[0]?.matchedText ?? '';
-  const leadAt = lead ? text.indexOf(lead) : -1;
-  const leadSpan: [number, number] | null = leadAt >= 0 ? [leadAt, leadAt + lead.length] : null;
-  out.push(leadSpan);
-  let pos = 0;
-  for (let i = 1; i < matches.length; i++) {
-    const token = (matches[i] as ParsedTime).matchedText;
-    let at = token ? text.indexOf(token, pos) : -1;
-    while (at >= 0 && leadSpan && at < leadSpan[1] && at + token.length > leadSpan[0]) {
-      at = text.indexOf(token, leadSpan[1]);
-    }
-    if (at < 0) {
-      out.push(null);
-      continue;
-    }
-    out.push([at, at + token.length]);
-    pos = at + token.length;
-  }
-  return out;
+/** A character's place in the page: a text node and an offset in it. */
+export interface TextPos {
+  readonly node: Text;
+  readonly offset: number;
+}
+
+const WS = /\s/;
+
+/** True for a text node the selection's string leaves out (scripts, styles, display: none). */
+function hiddenText(node: Text): boolean {
+  const el = node.parentElement;
+  if (!el) return false;
+  if (el.closest('script, style, noscript, template')) return true;
+  const check = (el as Element & { checkVisibility?: () => boolean }).checkVisibility;
+  return typeof check === 'function' ? !check.call(el) : false;
+}
+
+/** Same character, ignoring case (text-transform can change it in the string). */
+function sameChar(a: string, b: string): boolean {
+  return a === b || a.toLowerCase() === b.toLowerCase();
 }
 
 /**
- * The range of the `index`-th match inside a selection range: the
- * selection's text nodes are read in order and the match located with
- * matchSpans, so the second "10:00" of a selection marks the second one.
- * Null when the text cannot be lined up with the matches (the page's text
- * differs from the selection's, e.g. collapsed whitespace).
+ * Where each character of `selText` (the selection's `toString()`) is in the
+ * page, or null for a character the page's text does not have (a line break
+ * the browser added between blocks). The selection's string collapses
+ * whitespace runs and adds breaks; the page's text nodes keep their own
+ * whitespace and may hold text the string leaves out. So the two are lined
+ * up character by character: whitespace against any whitespace run, other
+ * characters by value, skipping over page text the string does not show.
  */
-export function matchRange(range: Range, matches: readonly ParsedTime[], index: number): Range | null {
-  const root =
-    range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-      ? range.commonAncestorContainer.parentNode
-      : range.commonAncestorContainer;
-  if (!root || index < 0 || index >= matches.length) return null;
-  const parts: { node: Text; from: number; at: number }[] = [];
-  let text = '';
-  const add = (node: Text): void => {
-    const from = node === range.startContainer ? range.startOffset : 0;
-    const to = node === range.endContainer ? range.endOffset : node.data.length;
-    if (to <= from) return;
-    parts.push({ node, from, at: text.length });
-    text += node.data.slice(from, to);
-  };
-  if (root.nodeType === Node.TEXT_NODE) add(root as Text);
+export function mapSelectionText(range: Range, selText: string): Array<TextPos | null> {
+  const nodes: Text[] = [];
+  const root = range.commonAncestorContainer;
+  if (root.nodeType === Node.TEXT_NODE) nodes.push(root as Text);
   else {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: (n) => (range.intersectsNode(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
     });
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) add(n as Text);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
   }
-  const span = matchSpans(text, matches)[index];
-  if (!span) return null;
-  const [start, end] = span;
-  /** Text node and offset for a position in `text` (an end position stays in the node it ends). */
-  const locate = (p: number, isEnd: boolean): { node: Text; offset: number } | null => {
-    for (let k = parts.length - 1; k >= 0; k--) {
-      const part = parts[k] as { node: Text; from: number; at: number };
-      if (isEnd ? p > part.at : p >= part.at) return { node: part.node, offset: part.from + p - part.at };
-    }
-    return null;
+  // The page's characters, in order, with where each one is.
+  let raw = '';
+  const at: TextPos[] = [];
+  for (const node of nodes) {
+    if (hiddenText(node)) continue;
+    const from = node === range.startContainer ? range.startOffset : 0;
+    const to = node === range.endContainer ? range.endOffset : node.data.length;
+    for (let k = from; k < to; k++) at.push({ node, offset: k });
+    raw += node.data.slice(from, to);
+  }
+  const out: Array<TextPos | null> = new Array<TextPos | null>(selText.length).fill(null);
+  /** The next non-whitespace character of `s` from `i` on, and where it is. */
+  const nextSolid = (s: string, i: number): number => {
+    let k = i;
+    while (k < s.length && WS.test(s[k] as string)) k++;
+    return k;
   };
-  const a = locate(start, false);
-  const b = locate(end, true);
+  const LOOKAHEAD = 512;
+  let j = 0;
+  for (let i = 0; i < selText.length && j < raw.length; i++) {
+    const c = selText[i] as string;
+    if (WS.test(c)) {
+      if (WS.test(raw[j] as string)) out[i] = at[j++] as TextPos;
+      continue;
+    }
+    j = nextSolid(raw, j);
+    if (j >= raw.length) break;
+    if (sameChar(raw[j] as string, c)) {
+      out[i] = at[j++] as TextPos;
+      continue;
+    }
+    // Page text the string leaves out: find this character further on,
+    // followed by the string's next character too, so a stray match does
+    // not throw the rest off.
+    const after = nextSolid(selText, i + 1);
+    const follow = selText[after];
+    for (let k = j + 1; k < raw.length && k < j + LOOKAHEAD; k++) {
+      if (!sameChar(raw[k] as string, c)) continue;
+      const n = nextSolid(raw, k + 1);
+      if (follow !== undefined && (n >= raw.length || !sameChar(raw[n] as string, follow))) continue;
+      out[i] = at[k] as TextPos;
+      j = k + 1;
+      break;
+    }
+  }
+  return out;
+}
+
+const squash = (s: string): string => s.replace(/\s+/g, '');
+
+/**
+ * The page range of `selText.slice(start, end)`, through `map` (see
+ * mapSelectionText). Null when its ends are not in the page or the range's
+ * text is not that text (whitespace aside).
+ */
+export function spanRange(
+  selText: string,
+  map: ReadonlyArray<TextPos | null>,
+  start: number,
+  end: number,
+): Range | null {
+  if (start < 0 || end > selText.length || end <= start) return null;
+  let a: TextPos | null = null;
+  for (let i = start; i < end && !a; i++) a = map[i] ?? null;
+  let b: TextPos | null = null;
+  for (let i = end - 1; i >= start && !b; i--) b = map[i] ?? null;
   if (!a || !b) return null;
   try {
     const r = document.createRange();
     r.setStart(a.node, a.offset);
-    r.setEnd(b.node, b.offset);
-    return r;
+    r.setEnd(b.node, b.offset + 1);
+    return squash(r.toString()) === squash(selText.slice(start, end)) ? r : null;
   } catch {
     return null;
   }
+}
+
+/** What a card needs to find its matches on the page. */
+interface MarkSource {
+  /** The page selection the card was made from (null for form fields and menu text). */
+  readonly selRange: Range | null;
+  /** The selection's `toString()`, untrimmed (null when there is no range). */
+  readonly selText: string | null;
+  /** Where the parsed (trimmed) text starts in `selText`. */
+  readonly selLead: number;
+  /** mapSelectionText of the above, built on first use. */
+  posMap?: Array<TextPos | null>;
+}
+
+/**
+ * The page range of one match: its `sourceIndex` in the parsed text, mapped
+ * through the selection's string to the page. Falls back to the first
+ * occurrence of its text in the selection when that fails.
+ */
+function matchRange(src: MarkSource, p: ParsedTime): Range | null {
+  const range = src.selRange;
+  if (!range) return null;
+  if (src.selText !== null && p.sourceIndex !== undefined) {
+    src.posMap ??= mapSelectionText(range, src.selText);
+    const start = src.selLead + p.sourceIndex;
+    const r = spanRange(src.selText, src.posMap, start, start + p.matchedText.length);
+    if (r) return r;
+  }
+  return narrowRangeToToken(range, p.matchedText);
 }
 
 /** The live (transient) popover's highlight on its selected token. */
@@ -371,15 +541,13 @@ let liveRange: Range | null = null;
  * is never touched, so the user can still copy exactly what they selected,
  * short or long.
  */
-function setLiveHighlight(range: Range, matches: readonly ParsedTime[], index: number): void {
+function setLiveHighlight(src: MarkSource, p: ParsedTime): void {
   try {
-    const token = matches[index]?.matchedText ?? '';
-    liveRange = (matchRange(range, matches, index) ?? narrowRangeToToken(range, token)).cloneRange();
+    liveRange = matchRange(src, p)?.cloneRange() ?? null;
   } catch {
     liveRange = null;
-    return;
   }
-  if (!prefs.keepSelection) return;
+  if (!liveRange || !prefs.keepSelection) return;
   const reg = highlightRegistry();
   const Ctor = HighlightCtor();
   if (!reg || !Ctor) return;
@@ -735,10 +903,14 @@ function positionFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
  * commits asynchronously and fonts can change the size, so refit whenever the
  * card resizes during its first second.
  */
-function refitFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
+function refitFixed(hostEl: HTMLDivElement, anchor: DOMRect): void {
+  // A card re-anchored next to another match refits to that one, also from
+  // the observers of an earlier anchor.
+  fixedAnchors.set(hostEl, anchor);
   const fit = (): void => {
     // Once the user drags the card, its position is theirs.
     if (!hostEl.isConnected || hostEl.dataset.tzxDragged === '1') return;
+    const rect = fixedAnchors.get(hostEl) ?? anchor;
     const h = hostEl.getBoundingClientRect().height;
     if (!h) return;
     const vh = window.innerHeight;
@@ -759,6 +931,9 @@ function refitFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
     window.setTimeout(fit, 50);
   }
 }
+
+/** The rect each viewport-anchored card is placed next to now. */
+const fixedAnchors = new WeakMap<HTMLElement, DOMRect>();
 
 /** Place a pinned card at a document-space point (scrolls with the page). */
 function positionAbsolute(hostEl: HTMLDivElement, pageX: number, pageY: number): void {
@@ -888,7 +1063,22 @@ function dismissTransient(giveFocusBack = false): void {
   }
 }
 
-function onScroll(): void {
+/** Scroll events before this time come from our own scrolling (see revealMatch). */
+let ownScrollUntil = 0;
+/** How long scroll events after our own scroll are taken as ours. */
+export const OWN_SCROLL_MS = 250;
+
+/** Where our own scroll left the window (a user's scroll moves it on from there). */
+let ownScrollAt: { x: number; y: number } | null = null;
+
+function onScroll(e?: Event): void {
+  // Our own scroll to a match keeps the card: the window's scroll event
+  // while it is still where we put it, or a scrolled box's, shortly after.
+  if (Date.now() < ownScrollUntil) {
+    const t = e?.target;
+    const ofWindow = !t || t === document || t === document.documentElement || t === document.body;
+    if (!ofWindow || (ownScrollAt && window.scrollX === ownScrollAt.x && window.scrollY === ownScrollAt.y)) return;
+  }
   // Only the transient card is viewport-anchored; pinned cards scroll naturally.
   dismissTransient();
 }
@@ -950,13 +1140,6 @@ function isIdleZoneSearch(el: EventTarget | undefined): boolean {
  * which uses it to fold its labels.
  */
 function onKeyDown(e: KeyboardEvent): void {
-  if (isFocusShortcut(e)) {
-    if (toggleCardFocus()) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    return;
-  }
   if (e.key !== 'Escape') return;
   if (fromOurUi(e)) {
     if (dockHost && e.target instanceof Node && dockHost.contains(e.target)) return;
@@ -967,17 +1150,10 @@ function onKeyDown(e: KeyboardEvent): void {
 }
 
 /**
- * Alt+Shift+T (Option+Shift+T): the physical T key, so other layouts and
- * macOS, where Option changes `key`, work too.
- */
-function isFocusShortcut(e: KeyboardEvent): boolean {
-  return e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyT' && !e.repeat;
-}
-
-/**
- * While the transient card is open, move focus into it, or, when focus is
- * already in it, back to the page element that had it. False when there is
- * no card (the keys are then left to the page).
+ * The "focus the card" command (the browser's key binding, forwarded by the
+ * worker): while the transient card is open, move focus into it, or, when
+ * focus is already in it, back to the page element that had it. False when
+ * there is no card. Page keys are never intercepted for this.
  */
 function toggleCardFocus(): boolean {
   const host = tHost;
@@ -1014,27 +1190,28 @@ function onKeyDownBubble(e: KeyboardEvent): void {
 }
 
 /** The transient card's content, kept so it can re-render in place. */
-interface TransientState {
-  readonly rect: DOMRect;
+interface TransientState extends MarkSource {
+  /** What the card is placed next to: the selection, or the shown match after a scroll to it. */
+  rect: DOMRect;
   readonly srcText: string;
-  readonly pageX: number;
-  readonly pageY: number;
-  /** The page selection the card was made from (null for form fields and menu text). */
-  readonly selRange: Range | null;
-  /** Every match in the selection, in text order; the card shows `index`. */
+  pageX: number;
+  pageY: number;
+  /** Every match in the selection, in reading order; the card shows `index`. */
   matches: ParsedTime[];
   index: number;
   parsed: ParsedTime;
   count: number;
+  /** True when the selection has more times than `matches` lists. */
+  capped: boolean;
   compact: boolean;
 }
 let tState: TransientState | null = null;
 
 /** Mark the shown match of the transient card on the page (when its text can be found). */
 function markShownMatch(st: TransientState): void {
-  if (!st.selRange) return;
   clearLiveHighlight();
-  setLiveHighlight(st.selRange, st.matches, st.index);
+  if (!st.selRange) return;
+  setLiveHighlight(st, st.parsed);
 }
 
 /** Take a fresh parse of the transient card's text and show its `index`-th match. */
@@ -1043,8 +1220,87 @@ function takeReparse(st: TransientState, again: NonNullable<ReturnType<typeof re
   st.index = again.index;
   st.parsed = again.parsed;
   st.count = again.count;
+  st.capped = again.capped;
   markShownMatch(st);
   paintTransient();
+}
+
+/**
+ * After a step: when the shown match is off screen, scroll it into view
+ * (nearest edge) and put the card next to it. That scroll does not close
+ * the card, as a user's scroll does. A match on screen but under the card
+ * moves the card only.
+ */
+function revealMatch(st: TransientState): void {
+  const hostEl = tHost;
+  const r = liveRange;
+  if (!hostEl || !r || typeof r.getBoundingClientRect !== 'function') return;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let box = r.getBoundingClientRect();
+  if (!box.width && !box.height) return;
+  const onScreen = box.top >= 0 && box.bottom <= vh && box.left >= 0 && box.right <= vw;
+  if (onScreen) {
+    // On screen but under the card (a long selection): move the card.
+    const c = hostEl.getBoundingClientRect();
+    const covered = c.left < box.right && c.right > box.left && c.top < box.bottom && c.bottom > box.top;
+    if (covered) anchorTo(st, hostEl, box);
+    return;
+  }
+  ownScrollUntil = Date.now() + OWN_SCROLL_MS;
+  const el = r.startContainer.nodeType === Node.TEXT_NODE ? r.startContainer.parentElement : (r.startContainer as Element);
+  try {
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' as ScrollBehavior });
+    }
+  } catch {
+    /* not scrollable */
+  }
+  box = r.getBoundingClientRect();
+  // A block taller than the screen can leave the line itself outside.
+  const dy = box.top < 0 ? box.top - MARGIN : box.bottom > vh ? box.bottom - vh + MARGIN : 0;
+  if (dy) {
+    try {
+      window.scrollBy({ top: dy, behavior: 'instant' as ScrollBehavior });
+    } catch {
+      /* no window scroll */
+    }
+    box = r.getBoundingClientRect();
+  }
+  ownScrollAt = { x: window.scrollX, y: window.scrollY };
+  anchorTo(st, hostEl, box);
+}
+
+/** Put the transient card next to `box` (the shown match), unless the user dragged it. */
+function anchorTo(st: TransientState, hostEl: HTMLDivElement, box: DOMRect): void {
+  st.rect = box;
+  st.pageX = box.left + window.scrollX;
+  st.pageY = box.bottom + MARGIN + window.scrollY;
+  // Once the user drags the card, its position is theirs.
+  if (hostEl.dataset.tzxDragged === '1') return;
+  positionFixed(hostEl, box);
+  refitFixed(hostEl, box);
+}
+
+/** The browser's binding for the focus command (undefined until the worker says). */
+let focusKey: ShortcutLabel | null | undefined;
+
+/** Ask the worker what the focus command is bound to; repaint the card when that changed. */
+function refreshFocusKey(): void {
+  const msg: GetShortcutMessage = { type: 'tzx/get-shortcut' };
+  try {
+    void Promise.resolve(chrome.runtime.sendMessage(msg))
+      .then((reply: unknown) => {
+        if (!isShortcutReply(reply)) return;
+        const next = shortcutLabel(reply.shortcut);
+        if (next?.aria === focusKey?.aria && (next === null) === (focusKey === null)) return;
+        focusKey = next;
+        paintTransient();
+      })
+      .catch(() => undefined);
+  } catch {
+    /* extension context gone */
+  }
 }
 
 function paintTransient(): void {
@@ -1056,6 +1312,8 @@ function paintTransient(): void {
       parsed: st.parsed,
       matchCount: st.count,
       matchIndex: st.index,
+      matchesCapped: st.capped,
+      focusShortcut: focusKey,
       prefs,
       pinned: false,
       compact: st.compact,
@@ -1066,6 +1324,7 @@ function paintTransient(): void {
         createPin({
           parsed: st.parsed,
           count: st.count,
+          capped: st.capped,
           index: st.index,
           srcText: st.srcText,
           pageX: st.pageX,
@@ -1082,6 +1341,7 @@ function paintTransient(): void {
         st.parsed = st.matches[st.index] as ParsedTime;
         markShownMatch(st);
         paintTransient();
+        revealMatch(st);
       },
       onToggleCompact: () => {
         st.compact = !st.compact;
@@ -1093,25 +1353,33 @@ function paintTransient(): void {
       onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
         // Persist as the global default, then re-read this value with it.
         patchPrefs({ dateOnlyPolicy: policy });
-        const again = reparse(st.srcText, st.index);
+        const again = reparse(st.srcText, st.parsed);
         if (again) takeReparse(st, again);
       },
       onDateOrder: (order: NumericDateOrder) => {
         patchPrefs({ numericDateOrder: order });
-        const again = reparse(st.srcText, st.index);
+        const again = reparse(st.srcText, st.parsed);
         if (again) takeReparse(st, again);
       },
     }),
   );
 }
 
-function renderTransient(
-  rect: DOMRect,
-  matches: ParsedTime[],
-  srcText: string,
-  selRange: Range | null,
-): void {
+/** A selection to show a card for: its parsed text and where that is on the page. */
+interface CardSource {
+  readonly rect: DOMRect;
+  /** The text given to the parser (trimmed). */
+  readonly text: string;
+  readonly range: Range | null;
+  /** The selection's untrimmed `toString()` (null without a range). */
+  readonly selText: string | null;
+  /** Where `text` starts in `selText`. */
+  readonly selLead: number;
+}
+
+function renderTransient(src: CardSource, reading: Reading): void {
   teardownTransient();
+  const { rect, text: srcText } = src;
   try {
     tHost = document.createElement('div');
     tHost.id = TRANSIENT_HOST_ID;
@@ -1123,23 +1391,31 @@ function renderTransient(
     positionFixed(tHost, rect);
     watchFocus(tHost);
 
+    // Opens on the best match; the stepper counts in reading order.
+    const index = reading.open;
     // Capture a document-space point for the pin, from the current scroll.
     tState = {
       rect,
       srcText,
       pageX: rect.left + window.scrollX,
       pageY: rect.bottom + MARGIN + window.scrollY,
-      selRange: selRange ? selRange.cloneRange() : null,
-      matches,
-      index: 0,
-      parsed: matches[0] as ParsedTime,
-      count: matches.length,
+      selRange: src.range ? src.range.cloneRange() : null,
+      selText: src.range ? src.selText : null,
+      selLead: src.selLead,
+      matches: reading.matches,
+      index,
+      parsed: reading.matches[index] as ParsedTime,
+      count: reading.matches.length,
+      capped: reading.capped,
       compact: opensCompact(),
     };
+    markShownMatch(tState);
     tRoot = createRoot(mount);
     paintTransient();
     refitFixed(tHost, rect);
     document.addEventListener('scroll', onScroll, true);
+    // The binding may have changed in the browser's settings since.
+    refreshFocusKey();
   } catch {
     teardownTransient();
   }
@@ -1151,6 +1427,8 @@ function renderTransient(
 interface PinSpec {
   readonly parsed: ParsedTime;
   readonly count: number;
+  /** True when the selection has more times than `count`. */
+  readonly capped?: boolean;
   /** Which match of the selection it shows (default 0). */
   readonly index?: number;
   readonly srcText: string;
@@ -1382,6 +1660,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
       srcText: spec.srcText,
       parsed: spec.parsed,
       count: spec.count,
+      capped: spec.capped ?? false,
       index: spec.index ?? 0,
       compact: spec.compact,
       placement,
@@ -1391,6 +1670,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
           createElement(Popover, {
             parsed: pin.parsed,
             matchCount: pin.count,
+            matchesCapped: pin.capped,
             matchIndex: pin.index,
             prefs,
             pinned: true,
@@ -1414,21 +1694,11 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
             onDragStart: (e) => startDrag(host, e, pin.placement === 'floating'),
             onDateOnlyPolicy: (policy: DateOnlyPolicy) => {
               patchPrefs({ dateOnlyPolicy: policy });
-              const again = reparse(pin.srcText, pin.index);
-              if (!again) return;
-              pin.parsed = again.parsed;
-              pin.count = again.count;
-              pin.index = again.index;
-              pin.render();
+              rereadPin(pin);
             },
             onDateOrder: (order: NumericDateOrder) => {
               patchPrefs({ numericDateOrder: order });
-              const again = reparse(pin.srcText, pin.index);
-              if (!again) return;
-              pin.parsed = again.parsed;
-              pin.count = again.count;
-              pin.index = again.index;
-              pin.render();
+              rereadPin(pin);
             },
           }),
         );
@@ -1450,6 +1720,18 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
     /* restricted page — ignore */
     return null;
   }
+}
+
+/** Read a pin's text again with the current settings, keeping the match it shows when it is still there. */
+function rereadPin(pin: Pin): void {
+  const again = reparse(pin.srcText, pin.parsed);
+  if (again) {
+    pin.parsed = again.parsed;
+    pin.count = again.count;
+    pin.capped = again.capped;
+    pin.index = again.index;
+  }
+  pin.render();
 }
 
 function removePin(pin: Pin): void {
@@ -1485,6 +1767,7 @@ function specOf(pin: Pin): PinSpec {
   return {
     parsed: pin.parsed,
     count: pin.count,
+    capped: pin.capped,
     index: pin.index,
     srcText: pin.srcText,
     pageX: pin.pageX,
@@ -1649,21 +1932,19 @@ function inOurUi(node: Node): boolean {
  * explicitly, so an unparseable selection gets a "no time recognized" card
  * instead of silence.
  */
-function showForSelection(
-  rect: DOMRect,
-  text: string,
-  range: Range | null,
-  fromMenu = false,
-  truncated = false,
-): void {
-  const matches = parseWithPrefs(text);
-  if (matches.length === 0) {
-    if (fromMenu) renderNoMatch(rect, text, truncated || text.length > SCAN_LIMIT);
+function showForSelection(src: CardSource, fromMenu = false, truncated = false): void {
+  const reading = readTimes(src.text);
+  if (reading.matches.length === 0) {
+    if (fromMenu) renderNoMatch(src.rect, src.text, truncated || src.text.length > SCAN_LIMIT);
     else teardownTransient();
     return;
   }
-  if (range) setLiveHighlight(range, matches, 0);
-  renderTransient(rect, matches, text, range);
+  renderTransient(src, reading);
+}
+
+/** A card source with no page range (form fields, menu text). */
+function plainSource(rect: DOMRect, text: string): CardSource {
+  return { rect, text, range: null, selText: null, selLead: 0 };
 }
 
 function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
@@ -1706,7 +1987,7 @@ function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
 }
 
 /** Read the active selection from the page OR from an input/textarea. */
-function readSelection(): { text: string; rect: DOMRect; range: Range | null } | null {
+function readSelection(): CardSource | null {
   const active = document.activeElement;
   // Typing in a card's own search box is not a page selection. Focus on a
   // card itself (it takes focus when it opens) still reads the page selection.
@@ -1733,8 +2014,7 @@ function readSelection(): { text: string; rect: DOMRect; range: Range | null } |
       const text = active.value.slice(start, end).trim();
       if (text.length > 0) {
         // Form fields have no Range for the CSS highlight; anchor to the box.
-        const rect = active.getBoundingClientRect();
-        return { text, rect, range: null };
+        return plainSource(active.getBoundingClientRect(), text);
       }
     }
     return null;
@@ -1743,7 +2023,10 @@ function readSelection(): { text: string; rect: DOMRect; range: Range | null } |
   // Normal DOM / contenteditable selection.
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-  const text = sel.toString().trim();
+  // The parser reads the trimmed string; marks map its indices back through
+  // the untrimmed one (see mapSelectionText).
+  const selText = sel.toString();
+  const text = selText.trim();
   if (text.length === 0) return null;
 
   // Ignore selections inside our own cards and the dock.
@@ -1758,7 +2041,7 @@ function readSelection(): { text: string; rect: DOMRect; range: Range | null } |
     return null;
   }
   if (rect.width === 0 && rect.height === 0) return null;
-  return { text, rect, range };
+  return { text, rect, range, selText, selLead: selText.length - selText.trimStart().length };
 }
 
 function handleSelectionChange(): void {
@@ -1778,7 +2061,7 @@ function handleSelectionChange(): void {
     if (tHost && key === shownKey) return;
     dismissedKey = null;
     shownKey = key;
-    showForSelection(got.rect, got.text, got.range);
+    showForSelection(got);
   }, DEBOUNCE_MS);
 }
 
@@ -1797,13 +2080,13 @@ function convertFromMenu(menuText: string, truncated: boolean): void {
   const got = readSelection();
   if (got) {
     shownKey = selectionKey(got.text, got.rect);
-    showForSelection(got.rect, got.text, got.range, true);
+    showForSelection(got, true);
     return;
   }
   const text = menuText.trim();
   if (text.length === 0) return;
   shownKey = null;
-  showForSelection(fallbackRect(), text, null, true, truncated);
+  showForSelection(plainSource(fallbackRect(), text), true, truncated);
 }
 
 function onMouseUp(e: MouseEvent): void {
@@ -1869,7 +2152,13 @@ function onRuntimeMessage(
   sender: chrome.runtime.MessageSender,
   sendResponse: (r: Ack) => void,
 ): boolean | undefined {
-  if (!fromThisExtension(sender) || !isConvertSelectionMessage(msg)) return undefined;
+  if (!fromThisExtension(sender)) return undefined;
+  if (isFocusCardMessage(msg)) {
+    // Every frame of the tab gets the command; only the one with a card answers.
+    if (toggleCardFocus()) sendResponse({ ok: true });
+    return undefined;
+  }
+  if (!isConvertSelectionMessage(msg)) return undefined;
   // A freshly injected copy may still be loading preferences; converting now
   // would use the default zones and ignore the user's formats.
   void prefsReady
@@ -1879,6 +2168,39 @@ function onRuntimeMessage(
     })
     .catch(() => sendResponse({ ok: false }));
   return true; // respond asynchronously
+}
+
+/** Settings that change which times a card's text holds, or how they read. */
+const READING_KEYS = ['homeZone', 'dateOnlyPolicy', 'numericDateOrder', 'customFormats', 'disabledFormats'] as const;
+/** Settings that change only how a card shows its time. */
+const DISPLAY_KEYS = ['hour12', 'targetZones', 'theme'] as const;
+
+function changed(a: Preferences, b: Preferences, keys: ReadonlyArray<keyof Preferences>): boolean {
+  return keys.some((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+}
+
+/**
+ * Settings changed (in another tab, or Settings): open cards read their text
+ * again when the change affects that, keeping the match they show when it
+ * is still there, and repaint. A change made from a card here already
+ * updated `prefs`, so it arrives with nothing changed.
+ */
+function followSettings(before: Preferences, now: Preferences): void {
+  const reread = changed(before, now, READING_KEYS);
+  if (!reread && !changed(before, now, DISPLAY_KEYS)) return;
+  const st = tState;
+  if (st && tHost) {
+    applyHostTheme(tHost);
+    const again = reread ? reparse(st.srcText, st.parsed) : null;
+    if (again) takeReparse(st, again);
+    else paintTransient();
+  }
+  for (const pin of pins) {
+    applyHostTheme(pin.host);
+    if (reread) rereadPin(pin);
+    else pin.render();
+  }
+  if (dockHost) applyHostTheme(dockHost);
 }
 
 // --- Install (once per page, survives re-injection) ------------------------
@@ -1906,12 +2228,14 @@ function install(): ContentInstance {
     syncHighlights();
   });
   const unsubscribe = onPreferencesChanged((p) => {
-    const marked = prefs.keepSelection;
+    const before = prefs;
     prefs = p;
     prefsLoaded = true;
     if (!p.selectToConvert) window.clearTimeout(debounceTimer);
-    if (p.keepSelection !== marked) syncHighlights();
+    if (p.keepSelection !== before.keepSelection) syncHighlights();
+    followSettings(before, p);
   });
+  refreshFocusKey();
 
   document.addEventListener('mouseup', onMouseUp);
   document.addEventListener('keyup', onKeyUp);

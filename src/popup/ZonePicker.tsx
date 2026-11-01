@@ -56,11 +56,12 @@ export function ZonePicker({
   );
   const flat = useMemo(() => groups.flatMap((g) => g.options), [groups]);
   const hasQuery = query.trim().length > 0;
-  // A query that finds only added zones ("kathm", "nepal", "utc+5:45" with
-  // Asia/Kathmandu added) says so rather than "no match".
+  // An added zone the query matches ("new york" with America/New_York added,
+  // "utc+5:45" with UTC+05:45) is named in a disabled line after the results,
+  // or instead of "No matching timezone" when nothing else matches.
   const added = useMemo(
-    () => (hasQuery && flat.length === 0 ? excludedMatch(query, exclude, { partial: true }) : null),
-    [hasQuery, flat.length, query, exclude],
+    () => (hasQuery ? excludedMatch(query, exclude, { partial: true }) : null),
+    [hasQuery, query, exclude],
   );
   const listShown = open && (flat.length > 0 || hasQuery);
 
@@ -221,6 +222,18 @@ export function ZonePicker({
               </ul>
             </li>
           ))}
+          {added && (
+            // Not in `flat`, so the arrow keys and Enter never reach it.
+            <li
+              className="tzx-opt tzx-opt-empty tzx-opt-added"
+              role="option"
+              aria-selected={false}
+              aria-disabled="true"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              Already added: {zoneLabel(added)}
+            </li>
+          )}
         </ul>
       )}
       {listShown && flat.length === 0 && (

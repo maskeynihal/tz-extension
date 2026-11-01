@@ -183,13 +183,18 @@ export function zonePlace(zone: string): string {
 /**
  * The secondary line under a card's title: the zone's label as the card and
  * popup write it (zoneLabel, the IANA id with its underscores:
- * "America/St_Johns"), so the same zone reads the same everywhere.
+ * "America/St_Johns"), so the same zone reads the same everywhere. For
+ * Etc/GMT±N, whose label is its offset, it is the IANA id ("Etc/GMT+12").
  */
 export function zoneDescription(zone: string): string {
   const r = resolveZone(zone);
   if (!r) return '';
   if (r.kind === 'iana') {
     if (r.short === 'UTC' || r.short === 'Etc/UTC') return 'Coordinated Universal Time';
+    // Etc/GMT±N is titled by its offset ("UTC-12:00", which zoneLabel also
+    // returns); the subtitle names the IANA id so the card doesn't say the
+    // same thing twice (note the inverted sign: Etc/GMT+12 is UTC-12:00).
+    if (r.short !== r.long) return r.long;
     return zoneLabel(zone);
   }
   if (r.kind === 'offset') return 'Fixed offset, no daylight saving';

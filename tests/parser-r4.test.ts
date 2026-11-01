@@ -12,7 +12,7 @@ describe('given-name books: time signals win over the line-start rule', () => {
   it.each([
     // a zero-padded hour is never a verse
     ['John 09:41', ['09:41']],
-    ['1 John 09:41', ['09:41']],
+    // ("1 John 09:41" is a verse since round 5: a book number settles it.)
     // an hour of 13 or more with only line-start context
     ['Peter 14:07 joined the call', ['14:07']],
     ['Luke 13:02', ['13:02']],
@@ -27,7 +27,7 @@ describe('given-name books: time signals win over the line-start rule', () => {
     ['Daniel 9:17-9:45', ['9:17', '9:45']],
     ['Daniel 9:17 – 9:45', ['9:17', '9:45']],
     ['John 3:31–4:30', ['3:31', '4:30']],
-    ['2 Peter 1:17-1:45', ['1:17', '1:45']],
+    // ("2 Peter 1:17-1:45" is a verse range since round 5: see parser-r5.)
   ])('%s is a time', (text, want) => {
     expect(texts(text)).toEqual(want);
   });
@@ -56,10 +56,9 @@ describe('given-name books: time signals win over the line-start rule', () => {
 describe('citation verbs before a given-name book', () => {
   it.each([
     'See John 3:16',
-    'see John 3:16',
     'Please see John 3:16.',
     'Read John 3:16',
-    'Read John 3:16 today',
+    'Read John 14:07',
     'cf. Luke 2:11',
     'Compare Mark 4:39',
     'quoting Matthew 5:9',
@@ -71,7 +70,10 @@ describe('citation verbs before a given-name book', () => {
   it.each([
     ['See Peter 10:30', ['10:30']],
     ['See John 09:41', ['09:41']],
-    ['Read John 14:07', ['14:07']],
+    // Round 5: only a capitalised verb at the line or sentence start cites,
+    // and a schedule word after still says time.
+    ['see John 3:16', ['3:16']],
+    ['Read John 3:16 today', ['3:16']],
     ['See Daniel 9:17-9:45', ['9:17', '9:45']],
     ['Call John 3:16', ['3:16']],
     ['Lunch with Peter 12:30', ['12:30']],

@@ -1,5 +1,6 @@
 import { defineManifest } from '@crxjs/vite-plugin';
 import pkg from '../package.json';
+import { FOCUS_COMMAND, FOCUS_COMMAND_DESCRIPTION, FOCUS_SUGGESTED_KEY } from './background/commands';
 
 // Single source manifest in the Chromium MV3 shape (crxjs types are Chromium-focused).
 // The Firefox build runs `vite build` with TARGET=firefox, then `scripts/firefox-manifest.mjs`
@@ -37,6 +38,14 @@ export default defineManifest({
       run_at: 'document_idle',
     },
   ],
+  // The browser owns the key (rebindable in its shortcut settings); the
+  // worker forwards it to the tab, so the page's own keys are never touched.
+  commands: {
+    [FOCUS_COMMAND]: {
+      suggested_key: { ...FOCUS_SUGGESTED_KEY },
+      description: FOCUS_COMMAND_DESCRIPTION,
+    },
+  },
   // storage: preferences. contextMenus: the right-click "Convert" item.
   // activeTab + scripting: when that item is clicked in a tab that has no
   // content script yet (opened before install/update, or a Firefox site

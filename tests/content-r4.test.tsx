@@ -7,7 +7,8 @@ import { parseTimes } from '../src/lib/parse';
 /**
  * Round-4 fixes for the content script: a mouse pin does not bring the
  * transient card back over the new pin, a selection with several times can
- * step through them, and Alt+Shift+T moves focus into the open card and back.
+ * step through them, and a key moves focus into the open card and back (a
+ * browser command since round 5, tested in content-r5).
  */
 
 const KEY = 'tz-extension-prefs';
@@ -243,71 +244,9 @@ describe('content script, round 4', () => {
     expect(marked()?.startContainer).toBe(b.nextSibling);
   });
 
-  it('finds each match in the text: the most specific first, the rest in text order', async () => {
-    await load();
-    const { matchSpans, matchRange } = await import('../src/content/index');
-    const m = (...texts: string[]): ParsedTime[] => texts.map((t) => ({ matchedText: t }) as ParsedTime);
-    const text = '10:00 UTC or 2024-01-02 10:00 UTC or 10:00 UTC later 11:00 UTC';
-    // The parser leads with the full timestamp, then the rest in text order.
-    expect(matchSpans(text, m('2024-01-02 10:00 UTC', '10:00 UTC', '11:00 UTC'))).toEqual([
-      [13, 33],
-      [0, 9],
-      [53, 62],
-    ]);
-    expect(matchSpans(text, m('2024-01-02 10:00 UTC', '11:00 UTC', '10:00 UTC'))).toEqual([[13, 33], [53, 62], null]);
-    expect(matchSpans(text, m('nope'))).toEqual([null]);
-    // Across text nodes.
-    document.body.insertAdjacentHTML('beforeend', '<p id="split">at <i>2024-01-02</i> 10:00 UTC</p>');
-    const r = document.createRange();
-    r.selectNodeContents(document.getElementById('split') as HTMLElement);
-    expect(matchRange(r, m('2024-01-02 10:00 UTC'), 0)?.toString()).toBe('2024-01-02 10:00 UTC');
-    expect(matchRange(r, m('2024-01-02 10:00 UTC'), 1)).toBeNull();
-  });
-
-  // QA #3
-  it('Alt+Shift+T moves focus from a page field into the open card and back; Escape also returns it', async () => {
-    await load();
-    const ta = document.getElementById('ta') as HTMLTextAreaElement;
-    ta.focus();
-    ta.setSelectionRange(10, 20);
-    // A keyboard selection: Shift+Arrow, then Shift released.
-    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }));
-    ta.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
-    await vi.waitFor(() => expect(transientHost()?.shadowRoot?.querySelector('.tzx-card')).toBeTruthy());
-    await sleep(20);
-    // Not taken: focus stays in the field.
-    expect(document.activeElement).toBe(ta);
-    const cardEl = transient().querySelector('.tzx-card') as HTMLElement;
-    expect(cardEl.getAttribute('aria-description')).toBe('Alt+Shift+T to focus');
-    expect(cardEl.getAttribute('aria-keyshortcuts')).toBe('Alt+Shift+T');
-    expect(transient().querySelector('.tzx-head')?.getAttribute('title')).toContain('Alt+Shift+T to focus');
-
-    // macOS sends "ˇ" as the key for Option+Shift+T; the physical key is what counts.
-    const shortcut = (target: EventTarget): KeyboardEvent => {
-      const e = new KeyboardEvent('keydown', { key: 'ˇ', code: 'KeyT', altKey: true, shiftKey: true, bubbles: true, composed: true, cancelable: true });
-      target.dispatchEvent(e);
-      return e;
-    };
-    expect(shortcut(ta).defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(transientHost());
-    expect(transient().activeElement).toBe(cardEl);
-    // Again: back to the field, its selection intact, the card still open.
-    expect(shortcut(cardEl).defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(ta);
-    expect([ta.selectionStart, ta.selectionEnd]).toEqual([10, 20]);
-    expect(transientHost()).not.toBeNull();
-
-    // In again, then Escape closes the card and gives focus back.
-    shortcut(ta);
-    expect(transient().activeElement).toBe(cardEl);
-    cardEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
-    expect(transientHost()).toBeNull();
-    expect(document.activeElement).toBe(ta);
-
-    // No card: the keys are the page's, and focus does not move.
-    expect(shortcut(ta).defaultPrevented).toBe(false);
-    expect(document.activeElement).toBe(ta);
-  });
+  // Round 5: matchSpans and the Alt+Shift+T key handler are gone. Marks map
+  // each match through its sourceIndex, and the focus key is a browser
+  // command (see content-r5.test.tsx).
 
   it('pinned cards do not offer the focus shortcut, and other modifier combinations do nothing', async () => {
     await load();
@@ -367,13 +306,14 @@ describe('Popover, round 4', () => {
     expect(onStep.mock.calls).toEqual([[1], [-1]]);
   });
 
-  it('shows no stepper for a single match or on a compact card', () => {
+  it('shows no stepper for a single match, and a small one on a compact card', () => {
     const m = matches('10:00 UTC, 11:00 UTC');
     const one = render(<Popover parsed={m[0] as ParsedTime} matchCount={1} prefs={PREFS} pinned={false} onClose={() => {}} onStep={() => {}} />);
     expect(one.container.querySelector('.tzx-step')).toBeNull();
     const compact = render(
       <Popover parsed={m[0] as ParsedTime} matchCount={2} prefs={PREFS} pinned={false} compact onClose={() => {}} onStep={() => {}} />,
     );
-    expect(compact.container.querySelector('.tzx-step')).toBeNull();
+    // Round 5 (QA N3): compact cards step too.
+    expect(compact.container.querySelector('.tzx-step.mini')).toBeTruthy();
   });
 });

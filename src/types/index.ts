@@ -27,6 +27,12 @@ export interface ParsedTime {
    * back and it happened twice; read as the earlier one). Absent otherwise.
    */
   readonly wallClock?: 'gap' | 'ambiguous';
+  /**
+   * Where `matchedText` starts in the text given to the parser (UTF-16
+   * index). Set by parseTimes; absent on values built elsewhere. Results stay
+   * best-first; sort by this for reading order.
+   */
+  readonly sourceIndex?: number;
   /** How confident / what kind of match produced this. */
   readonly kind: ParseKind;
   /**

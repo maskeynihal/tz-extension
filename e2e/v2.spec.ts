@@ -2,6 +2,7 @@ import { test, expect, chromium, type BrowserContext, type Page, type Worker } f
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
+import { shortcutLabel } from '../src/background/commands';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(__dirname, '../dist');
@@ -365,10 +366,27 @@ test.describe('v2 features', () => {
     await page.close();
   });
 
-  test('Alt+Shift+T moves focus from a keyboard selection in a textarea into the card and back', async () => {
+  /** Run the "focus the card" command as the browser would: the worker forwards it to the tabs. */
+  async function focusCommand(): Promise<void> {
+    await sw.evaluate(async () => {
+      const send = (globalThis as unknown as { tzxFocusCard: (tabId: number) => Promise<void> }).tzxFocusCard;
+      for (const tab of await chrome.tabs.query({})) if (tab.id !== undefined) await send(tab.id);
+    });
+  }
+
+  test('the focus command moves focus from a keyboard selection in a textarea into the card and back', async () => {
     await setPrefs({ targetZones: ['UTC'], cardSize: 'full' });
     const links = Array.from({ length: 30 }, (_, i) => `<a href="#l${i}">link ${i}</a>`).join(' ');
     const page = await openPage(`<textarea id="ta" cols="60">Deploy at 1700000000 sharp</textarea><p>${links}</p>`);
+    // The page's own key listeners see every key, card open or not.
+    await page.evaluate(() => {
+      (window as unknown as { keysSeen: string[] }).keysSeen = [];
+      document.addEventListener('keydown', (e) => {
+        if (e.altKey && e.code.startsWith('Key')) {
+          (window as unknown as { keysSeen: string[] }).keysSeen.push(`${e.code}:${e.defaultPrevented}`);
+        }
+      });
+    });
     await page.locator('#ta').focus();
     await page.evaluate(() => (document.getElementById('ta') as HTMLTextAreaElement).setSelectionRange(10, 19));
     // Extend the selection by one character with the keyboard: "1700000000".
@@ -383,9 +401,17 @@ test.describe('v2 features', () => {
       });
     // Opening did not take the focus.
     expect(await active()).toBe('ta');
-    await expect(card(page)).toHaveAttribute('aria-description', 'Alt+Shift+T to focus');
+    // The hint names the browser's binding for the command.
+    const bound = await sw.evaluate(async () => (await chrome.commands.getAll()).find((c) => c.name === 'focus-card')?.shortcut ?? '');
+    const label = shortcutLabel(bound);
+    if (label) {
+      await expect(card(page)).toHaveAttribute('aria-description', `${label.display} to focus`);
+      await expect(card(page)).toHaveAttribute('aria-keyshortcuts', label.aria);
+    } else {
+      await expect(card(page)).toHaveAttribute('aria-description', /shortcut settings/);
+    }
 
-    await page.keyboard.press('Alt+Shift+T');
+    await focusCommand();
     await expect.poll(active).toMatch(/^card:tzx-card/);
     // One Tab reaches the card's first button.
     await page.keyboard.press('Tab');
@@ -394,9 +420,8 @@ test.describe('v2 features', () => {
         () => document.getElementById('tz-extension-popover-host')?.shadowRoot?.activeElement?.getAttribute('aria-label'),
       ),
     ).toBe('Pin to page');
-    await page.keyboard.press('Alt+Shift+T');
+    await focusCommand();
     await expect.poll(active).toBe('ta');
-    // Nothing was typed into the field, and its selection is intact.
     expect(
       await page.evaluate(() => {
         const ta = document.getElementById('ta') as HTMLTextAreaElement;
@@ -405,14 +430,121 @@ test.describe('v2 features', () => {
     ).toEqual(['Deploy at 1700000000 sharp', 10, 20]);
     await expect(card(page)).toBeVisible();
 
+    // Alt+Shift+T (Chrome's toolbar key) and Alt+Shift+K reach the page untouched while the card is open.
     await page.keyboard.press('Alt+Shift+T');
+    await page.keyboard.press('Alt+Shift+K');
+    expect(await page.evaluate(() => (window as unknown as { keysSeen: string[] }).keysSeen)).toEqual([
+      'KeyT:false',
+      'KeyK:false',
+    ]);
+
+    await focusCommand();
     await expect.poll(active).toMatch(/^card:/);
     await page.keyboard.press('Escape');
     await expect(card(page)).toHaveCount(0);
     expect(await active()).toBe('ta');
-    // With no card open the keys do nothing of ours.
-    await page.keyboard.press('Alt+Shift+T');
+    // With no card open the command does nothing.
+    await focusCommand();
     expect(await active()).toBe('ta');
+    await page.close();
+  });
+
+  const markedText = (page: Page): Promise<string> =>
+    page.evaluate(() => {
+      const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get('tz-extension-match');
+      return hl ? Array.from(hl).map(String).join('|') : '';
+    });
+
+  test('the stepper counts in reading order, opens on the best match, and marks each where it is', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const page = await openPage(
+      '<p id="t">Standup 09:00 UTC, review 13:30 UTC, deploy 2024-04-02 18:00 UTC</p>' +
+        '<p id="w">See John 3:16. Call at 3:16 today, or at 10:00\n        UTC tomorrow</p>',
+    );
+    const status = card(page).locator('[aria-live="polite"]');
+    await page.locator('#t').click({ clickCount: 3 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(status).toHaveText('Time 3 of 3');
+    await expect.poll(() => markedText(page)).toBe('2024-04-02 18:00 UTC');
+    await card(page).getByRole('button', { name: 'Next time' }).click();
+    await expect(status).toHaveText('Time 1 of 3');
+    await expect.poll(() => markedText(page)).toBe('09:00 UTC');
+    await card(page).getByRole('button', { name: 'Next time' }).click();
+    await expect(status).toHaveText('Time 2 of 3');
+    await expect.poll(() => markedText(page)).toBe('13:30 UTC');
+    await page.keyboard.press('Escape');
+
+    // "10:00 UTC" spans a collapsed line break; the refused "3:16" (a verse) is not marked.
+    await page.locator('#w').click({ clickCount: 3 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const offsets = (): Promise<number[]> =>
+      page.evaluate(() => {
+        const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get('tz-extension-match');
+        const r = hl ? (Array.from(hl)[0] as Range | undefined) : undefined;
+        return r ? [r.startOffset, r.endOffset] : [];
+      });
+    const text = await page.locator('#w').evaluate((el) => el.textContent ?? '');
+    const seen = new Set<string>();
+    for (let i = 0; i < 2; i++) {
+      const m = await markedText(page);
+      seen.add(m.replace(/\s+/g, ' '));
+      const [start] = await offsets();
+      if (m === '3:16') expect(start).toBe(text.indexOf('3:16', text.indexOf('Call')));
+      await card(page).getByRole('button', { name: 'Next time' }).click();
+    }
+    expect([...seen].sort()).toEqual(['10:00 UTC', '3:16']);
+    await page.close();
+  });
+
+  test('at 1280×700, stepping to a time below the screen scrolls it into view and keeps the card by it', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const lines = Array.from(
+      { length: 30 },
+      (_, i) => `<div style="line-height:32px">Item ${i} at 2024-06-${String(i + 1).padStart(2, '0')} 20:05 UTC</div>`,
+    ).join('');
+    const page = await openPage(`<section id="list">${lines}</section>`);
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.evaluate(() => {
+      const r = document.createRange();
+      r.selectNodeContents(document.getElementById('list') as HTMLElement);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const status = card(page).locator('[aria-live="polite"]');
+    await expect(status).toHaveText('Time 1 of 30');
+    const box = (): Promise<{ top: number; bottom: number; card: { top: number; bottom: number } } | null> =>
+      page.evaluate(() => {
+        const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get('tz-extension-match');
+        const r = hl ? (Array.from(hl)[0] as Range | undefined) : undefined;
+        const host = document.getElementById('tz-extension-popover-host');
+        if (!r || !host) return null;
+        const b = r.getBoundingClientRect();
+        const c = host.getBoundingClientRect();
+        return { top: b.top, bottom: b.bottom, card: { top: c.top, bottom: c.bottom } };
+      });
+    let scrolled = false;
+    for (let i = 1; i < 30; i++) {
+      await card(page).getByRole('button', { name: 'Next time' }).click();
+      await expect(status).toHaveText(`Time ${i + 1} of 30`);
+      await page.waitForTimeout(50);
+      const b = await box();
+      expect(b, `card and mark after step ${i + 1}`).not.toBeNull();
+      const { top, bottom, card: c } = b as NonNullable<typeof b>;
+      // The time is on screen, and the card does not cover it.
+      expect(top).toBeGreaterThanOrEqual(0);
+      expect(bottom).toBeLessThanOrEqual(700);
+      expect(c.bottom <= top || c.top >= bottom).toBe(true);
+      if ((await page.evaluate(() => window.scrollY)) > 0) scrolled = true;
+    }
+    expect(scrolled).toBe(true);
+    await expect.poll(() => markedText(page)).toBe('2024-06-30 20:05 UTC');
+    // A scroll by the user still closes it.
+    await page.mouse.move(1200, 20);
+    await page.mouse.wheel(0, 300);
+    await expect(card(page)).toHaveCount(0);
     await page.close();
   });
 

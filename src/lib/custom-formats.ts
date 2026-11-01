@@ -47,7 +47,7 @@ interface TokenDef {
   readonly example: string;
   /** 12-hour hour token: needs A. */
   readonly twelveHour?: boolean;
-  /** Kept for old saved formats; hidden from the reference table. */
+  /** Kept for old saved formats, or another spelling of a listed token; hidden from the reference table. */
   readonly legacy?: boolean;
 }
 
@@ -74,12 +74,20 @@ const TOKENS: readonly TokenDef[] = [
   { token: 'D', group: 'd', frag: '(?<d>\\d{1,2})', meaning: 'Day, 1-2 digits', example: '5' },
   { token: 'H', group: 'h', frag: '(?<h>\\d{1,2})', meaning: 'Hour, 0-23', example: '9' },
   { token: 'h', group: 'h', frag: '(?<h>\\d{1,2})', meaning: 'Hour, 1-12 (needs A)', example: '9', twelveHour: true },
+  // Java / Talend spellings (yyyy-MM-dd HH:mm). They mean the same as the
+  // capitalised tokens, so they are aliases rather than errors.
+  { token: 'yyyy', group: 'y', frag: '(?<y>\\d{4})', meaning: '4-digit year', example: '2024', legacy: true },
+  { token: 'yy', group: 'yy', frag: '(?<yy>\\d{2})', meaning: '2-digit year', example: '24', legacy: true },
+  { token: 'dd', group: 'd', frag: '(?<d>\\d{2})', meaning: '2-digit day', example: '05', legacy: true },
+  { token: 'd', group: 'd', frag: '(?<d>\\d{1,2})', meaning: 'Day, 1-2 digits', example: '5', legacy: true },
 ];
 
 /** Token reference for the settings page. */
 export const TOKEN_REFERENCE: ReadonlyArray<{ token: string; meaning: string; example: string }> = [
   ...TOKENS.filter((t) => !t.legacy).map(({ token, meaning, example }) => ({ token, meaning, example })),
   { token: '[text]', meaning: 'Literal text (use for words like “at”)', example: '[at]' },
+  { token: "'text'", meaning: 'Literal text, Java style (two quotes for one quote)', example: "yyyy-MM-dd'T'HH:mm" },
+  { token: 'yyyy yy dd d', meaning: 'Java/Talend spellings of YYYY, YY, DD and D', example: 'dd/MM/yyyy' },
 ];
 
 /** Which field a group fills. Two groups for the same field is an error. */
@@ -109,6 +117,27 @@ export type CompileResult =
 
 function escapeLiteral(ch: string): string {
   return ch.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+}
+
+/**
+ * A quoted literal starting at the "'" at `i`: its text and the index after
+ * the closing quote, or null when the quote is never closed.
+ */
+function quotedLiteral(pattern: string, i: number): { text: string; end: number } | null {
+  if (pattern[i + 1] === "'") return { text: "'", end: i + 2 };
+  let text = '';
+  let j = i + 1;
+  while (j < pattern.length) {
+    if (pattern[j] === "'") {
+      if (pattern[j + 1] !== "'") return { text, end: j + 1 };
+      text += "'";
+      j += 2;
+      continue;
+    }
+    text += pattern[j];
+    j++;
+  }
+  return null;
 }
 
 /** Shared rules on which fields a format must (and must not) combine. */
@@ -154,6 +183,16 @@ export function compileTokenFormat(pattern: string): CompileResult {
       for (const c of lit) pieces.push({ kind: 'literal', src: /\s/.test(c) ? '\\s+' : escapeLiteral(c) });
       i = close + 1;
       continue;
+    }
+    if (ch === "'") {
+      // Java-style literal: 'T', 'at'; '' is one quote, in or out of a literal.
+      const quoted = quotedLiteral(pattern, i);
+      if (quoted) {
+        for (const c of quoted.text) pieces.push({ kind: 'literal', src: /\s/.test(c) ? '\\s+' : escapeLiteral(c) });
+        i = quoted.end;
+        continue;
+      }
+      // No closing quote: a plain apostrophe ("o'clock").
     }
     const def = TOKENS.find((t) => pattern.startsWith(t.token, i));
     if (def) {

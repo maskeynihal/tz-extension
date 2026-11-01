@@ -400,7 +400,8 @@ function parseOffset(off: string): number | null {
 
 /**
  * Search form of any text: lower case, accents removed, every dash or minus
- * sign (U+2212, en dash…) as "-", single spaces.
+ * sign (U+2212, en dash…) as "-", full stops and apostrophes dropped
+ * ("St. John's" → "st johns"), single spaces.
  */
 export function normalizeSearch(s: string): string {
   return s
@@ -408,6 +409,7 @@ export function normalizeSearch(s: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-')
+    .replace(/[.'\u2018\u2019\u02BC]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -961,6 +963,9 @@ export function zoneGroups(now: number = Date.now()): readonly ZoneGroup[] {
       { key: normalizeSearch(city), display: city },
       { key: normalizeSearch(z.replace(/_/g, ' ')), display: z },
     ];
+    // The punctuated display name ("Dumont d'Urville", "Lower Prince's Quarter").
+    const pretty = CITY_NAMES.get(z.slice(z.lastIndexOf('/') + 1));
+    if (pretty && !own.some((o) => o.key === normalizeSearch(pretty))) own.push({ key: normalizeSearch(pretty), display: pretty });
     for (const n of names.get(z) ?? []) if (!own.some((o) => o.key === n.key)) own.push(n);
     const list = regions.get(region) ?? [];
     list.push(makeOption({ id: z, label: z, detail: `UTC${off}` }, { kind: 'iana', names: own, extra: [`utc${off}`], minutes: parseOffset(off) }));
@@ -1133,9 +1138,9 @@ export function searchZones(
  * than show an empty list.
  *
  * With `partial`, any search hit on an excluded zone counts too, best first:
- * a word prefix ("kathm"), a substring, or an offset ("utc+5:45"). Use it
- * when the query matches nothing else, so the picker never says "No
- * matching timezone" for a zone it hid because it is already added.
+ * a word prefix ("kathm"), a substring, or an offset ("utc+5:45"). The
+ * picker uses it to name an added zone the query matches, whether or not
+ * other zones match too, so it never hides one without saying so.
  */
 export function excludedMatch(
   query: string,
@@ -1354,19 +1359,47 @@ export function viewInZone(epochMs: number, zone: string, hour12: boolean): Zone
 
 const LETTER_ABBR = /^[A-Z]{2,5}$/;
 
-let abbrsByZone: Map<string, readonly ZoneAbbreviation[]> | null = null;
+/**
+ * When an own-table abbreviation starts to name its place, for places that
+ * were on the same offset earlier under another name (epoch ms, keyed
+ * "CODE zone"). Before it, the zone shows Intl's "GMT-3" form: this table
+ * has no name for those eras. Absent: the name holds whenever the zone is
+ * on the abbreviation's offset.
+ */
+const ABBR_SINCE: ReadonlyMap<string, number> = new Map([
+  // Argentina's −03:00 was summer time (ARST) until standard time moved to
+  // −03:00 at 00:00 −04:00 on 5 Oct 1969.
+  ['ART America/Argentina/Buenos_Aires', Date.UTC(1969, 9, 5, 4)],
+  // +06:00 since 1951, but as East Pakistan until independence (26 Mar 1971).
+  ['BDT Asia/Dhaka', Date.UTC(1971, 2, 25, 18)],
+  // Pakistan Standard Time is named from 26 Mar 1971 (tz database "PKT").
+  ['PKT Asia/Karachi', Date.UTC(1971, 2, 25, 19)],
+  // Nepal moved from +05:30 to +05:45 on 1 Jan 1986.
+  ['NPT Asia/Kathmandu', Date.UTC(1985, 11, 31, 18, 30)],
+  // Seoul was on Japan Standard Time until 8 Sep 1945.
+  ['KST Asia/Seoul', Date.UTC(1945, 8, 7, 15)],
+]);
+
+/** An own-table abbreviation for a zone, valid from `since` (epoch ms) when set. */
+interface PlacedAbbreviation {
+  readonly abbr: ZoneAbbreviation;
+  readonly since?: number;
+}
+
+let abbrsByZone: Map<string, readonly PlacedAbbreviation[]> | null = null;
 
 /** Fixed abbreviations by the canonical IANA zones they name (`zones`, ABBR_PLACES). */
-function zoneAbbreviations(): Map<string, readonly ZoneAbbreviation[]> {
+function zoneAbbreviations(): Map<string, readonly PlacedAbbreviation[]> {
   if (abbrsByZone) return abbrsByZone;
-  const map = new Map<string, ZoneAbbreviation[]>();
+  const map = new Map<string, PlacedAbbreviation[]>();
   for (const a of ZONE_ABBREVIATIONS) {
     // Region-suffixed codes ("IST-IE") would read as another zone's name.
     if (a.minutes === undefined || !LETTER_ABBR.test(a.code)) continue;
     const place = ABBR_PLACES.get(a.code);
     for (const z of [...(a.zones ?? []), ...(place ? [place] : [])]) {
       const key = modernIana(z);
-      map.set(key, [...(map.get(key) ?? []), a]);
+      const since = ABBR_SINCE.get(`${a.code} ${z}`);
+      map.set(key, [...(map.get(key) ?? []), since === undefined ? { abbr: a } : { abbr: a, since }]);
     }
   }
   abbrsByZone = map;
@@ -1376,7 +1409,8 @@ function zoneAbbreviations(): Map<string, readonly ZoneAbbreviation[]> {
 /**
  * The short name of an IANA zone at an instant: Intl's letter abbreviation
  * ("EDT"), else this project's own for the zone at that offset (St John's
- * "NDT", Chatham "CHADT", Kathmandu "NPT"), else Intl's "GMT+5:45" form.
+ * "NDT", Chatham "CHADT", Kathmandu "NPT") when it names that era (ABBR_SINCE),
+ * else Intl's "GMT+5:45" form.
  * `wallSeconds` is the zone's wall-clock seconds at the instant: an offset
  * with seconds (local mean time) never takes an abbreviation.
  */
@@ -1386,8 +1420,10 @@ function ianaAbbreviation(epochMs: number, tz: string, wallSeconds: number): str
   const whole = Math.floor(epochMs / 1000) * 1000;
   if (wallSeconds !== new Date(whole).getUTCSeconds()) return intl;
   const minutes = offsetMinutes(tz, epochMs);
-  const own = zoneAbbreviations().get(canonicalIana(tz))?.find((a) => a.minutes === minutes);
-  return own ? own.code : intl;
+  const own = zoneAbbreviations()
+    .get(canonicalIana(tz))
+    ?.find((p) => p.abbr.minutes === minutes && (p.since === undefined || epochMs >= p.since));
+  return own ? own.abbr.code : intl;
 }
 
 /** Minutes east of UTC for a zone at an instant. */

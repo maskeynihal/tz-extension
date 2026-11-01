@@ -6,6 +6,7 @@ import { SCAN_LIMIT } from '../lib/parse';
 // The DST note shares one wording with the popup and the website.
 import { wallClockNote } from '../lib/wall-note';
 import { ZonePicker, ZONE_PICKER_CSS } from '../popup/ZonePicker';
+import type { ShortcutLabel } from '../background/commands';
 
 /** Where a card lives: the transient card, pinned to a spot on the page, or floating on screen. */
 export type CardPlacement = 'transient' | 'pinned' | 'floating';
@@ -44,6 +45,13 @@ export interface PopoverProps {
   readonly onDateOnlyPolicy?: (policy: DateOnlyPolicy) => void;
   /** Re-resolve an ambiguous numeric date with the other day/month order. */
   readonly onDateOrder?: (order: NumericDateOrder) => void;
+  /**
+   * The browser's binding for the "focus the card" command: a label, null
+   * when the user has none set, undefined while not known yet.
+   */
+  readonly focusShortcut?: ShortcutLabel | null;
+  /** True when the selection has more times than the `matchCount` listed. */
+  readonly matchesCapped?: boolean;
 }
 
 /** Small stroke icons, sized by the button font. */
@@ -130,11 +138,35 @@ function pageFocusIsFree(): boolean {
 
 export { wallClockNote };
 
-/** Keys that move focus into an open card and back (see the content script). */
-export const FOCUS_SHORTCUT = 'Alt+Shift+T';
+/** Said when the focus command has no key: where to set one. */
+export const UNBOUND_FOCUS_HINT = "Set a key to focus this card in the browser's extension shortcut settings";
 
-/** "+1 more time in selection", "+2 more times in selection". */
-export function moreTimesText(others: number): string {
+/**
+ * The transient card's focus hint: "Alt+Shift+K to focus", how to set a key
+ * when none is bound, or nothing while the binding is not known.
+ */
+export function focusHint(shortcut: ShortcutLabel | null | undefined): string | undefined {
+  if (shortcut === undefined) return undefined;
+  return shortcut ? `${shortcut.display} to focus` : UNBOUND_FOCUS_HINT;
+}
+
+/** "3 of 7", "3 of 25+" (more times than listed). */
+export function stepCountText(index: number, count: number, capped = false): string {
+  return `${Math.min(Math.max(0, index), count - 1) + 1} of ${count}${capped ? '+' : ''}`;
+}
+
+/** The zones a card lists for these preferences: target zones without aliases, the local zone first. */
+function cardZones(prefs: Preferences): string[] {
+  // Drop aliases of zones already listed (e.g. Asia/Katmandu vs Asia/Kathmandu).
+  const base: string[] = [];
+  for (const z of prefs.targetZones) if (!base.some((b) => sameZone(b, z))) base.push(z);
+  if (isValidZone(LOCAL_ZONE) && !base.some((z) => sameZone(z, LOCAL_ZONE))) base.unshift(LOCAL_ZONE);
+  return base;
+}
+
+/** "+1 more time in selection", "+2 more times in selection"; "+24 or more times…" when not all are listed. */
+export function moreTimesText(others: number, capped = false): string {
+  if (capped) return `+${others} or more times in selection`;
   return `+${others} more ${others === 1 ? 'time' : 'times'} in selection`;
 }
 
@@ -218,6 +250,8 @@ const STYLE = `
 .tzx-stepbtn:hover { border-color: #1313ba; }
 .tzx-stepbtn:focus-visible { outline: 2px solid #1313ba; outline-offset: 1px; }
 .tzx-stepcount { font-variant-numeric: tabular-nums; font-weight: 600; color: #5b5e68; }
+.tzx-step.mini { margin-top: 3px; gap: 3px; font-size: 10px; }
+.tzx-step.mini .tzx-stepbtn { font-size: 11px; min-width: 18px; padding: 0 4px; }
 .tzx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 :host([data-tz-theme='dark']) .tzx-stepbtn { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
 :host([data-tz-theme='dark']) .tzx-stepcount { color: #a0a3ac; }
@@ -342,6 +376,8 @@ export function Popover({
   onDragStart,
   onDateOnlyPolicy,
   onDateOrder,
+  focusShortcut,
+  matchesCapped = false,
 }: PopoverProps): JSX.Element {
   const where: CardPlacement = placement ?? (pinned ? 'pinned' : 'transient');
   const cardRef = useRef<HTMLDivElement>(null);
@@ -355,13 +391,18 @@ export function Popover({
     // Only on open: re-renders (size, order, zones) must not move focus.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [zones, setZones] = useState<string[]>(() => {
-    // Drop aliases of zones already listed (e.g. Asia/Katmandu vs Asia/Kathmandu).
-    const base: string[] = [];
-    for (const z of prefs.targetZones) if (!base.some((b) => sameZone(b, z))) base.push(z);
-    if (isValidZone(LOCAL_ZONE) && !base.some((z) => sameZone(z, LOCAL_ZONE))) base.unshift(LOCAL_ZONE);
-    return base;
-  });
+  const [zones, setZones] = useState<string[]>(() => cardZones(prefs));
+  // Target zones changed in Settings (another tab): list the new ones. Zones
+  // added or removed on this card only are dropped then.
+  const targetKey = prefs.targetZones.join('\n');
+  const shownTargets = useRef(targetKey);
+  useEffect(() => {
+    if (shownTargets.current === targetKey) return;
+    shownTargets.current = targetKey;
+    setZones(cardZones(prefs));
+    // prefs is read for its target zones only, which targetKey stands for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetKey]);
   const suggested = useMemo(
     () => [prefs.homeZone, 'UTC', 'abbr:PT', 'abbr:ET', 'Europe/London', 'Asia/Tokyo'].filter((z) => !zones.includes(z)),
     [prefs.homeZone, zones],
@@ -420,14 +461,40 @@ export function Popover({
 
   const pinLabel = where === 'pinned' ? 'Float on screen' : 'Pin to page';
   const dstNote = wallClockNote(parsed, prefs.hour12);
+  const hint = where === 'transient' ? focusHint(focusShortcut) : undefined;
+  const keys = where === 'transient' && focusShortcut ? focusShortcut.aria : undefined;
+  const countText = stepCountText(matchIndex, matchCount, matchesCapped);
+  const cappedTitle = matchesCapped ? `Only the first ${matchCount} times are listed` : undefined;
+  const stepper =
+    matchCount > 1 && onStep ? (
+      <div
+        className={`tzx-more tzx-step${compact ? ' mini' : ''}`}
+        role="group"
+        aria-label="Times in selection"
+        title={cappedTitle}
+      >
+        <button type="button" className="tzx-stepbtn" aria-label="Previous time" title="Previous time" onClick={() => onStep(-1)}>
+          ‹
+        </button>
+        <span className="tzx-stepcount" aria-live="polite" aria-atomic="true">
+          <span className="tzx-sr">Time </span>
+          {compact ? countText.replace(' of ', '/') : countText}
+          {cappedTitle && <span className="tzx-sr">. {cappedTitle}</span>}
+        </span>
+        <button type="button" className="tzx-stepbtn" aria-label="Next time" title="Next time" onClick={() => onStep(1)}>
+          ›
+        </button>
+        {!compact && <span className="tzx-stepnote">times in selection</span>}
+      </div>
+    ) : null;
 
   return (
     <div
       className={`tzx-card${pinned ? ' pinned' : ''}${where === 'floating' ? ' floating' : ''}${compact ? ' compact' : ''}`}
       role="dialog"
       aria-label="Timezone conversion"
-      aria-description={where === 'transient' ? `${FOCUS_SHORTCUT} to focus` : undefined}
-      aria-keyshortcuts={where === 'transient' ? FOCUS_SHORTCUT : undefined}
+      aria-description={hint}
+      aria-keyshortcuts={keys}
       tabIndex={-1}
       ref={cardRef}
       onMouseDown={keepPageSelection}
@@ -436,7 +503,7 @@ export function Popover({
       <div
         className="tzx-head"
         onPointerDown={onDragStart}
-        title={where === 'transient' ? `Drag to move · ${FOCUS_SHORTCUT} to focus` : 'Drag to move'}
+        title={hint ? `Drag to move · ${hint}` : 'Drag to move'}
       >
         <span className="tzx-title">
           <span className="tzx-grip" aria-hidden>⋮⋮</span>
@@ -563,22 +630,12 @@ export function Popover({
         );
       })}
 
-      {!compact && matchCount > 1 && onStep && (
-        <div className="tzx-more tzx-step" role="group" aria-label="Times in selection">
-          <button type="button" className="tzx-stepbtn" aria-label="Previous time" title="Previous time" onClick={() => onStep(-1)}>
-            ‹
-          </button>
-          <span className="tzx-stepcount" aria-live="polite" aria-atomic="true">
-            <span className="tzx-sr">Time </span>
-            {Math.min(matchIndex, matchCount - 1) + 1} of {matchCount}
-          </span>
-          <button type="button" className="tzx-stepbtn" aria-label="Next time" title="Next time" onClick={() => onStep(1)}>
-            ›
-          </button>
-          <span className="tzx-stepnote">times in selection</span>
+      {stepper}
+      {!compact && matchCount > 1 && !onStep && (
+        <div className="tzx-more" title={cappedTitle}>
+          {moreTimesText(matchCount - 1, matchesCapped)}
         </div>
       )}
-      {!compact && matchCount > 1 && !onStep && <div className="tzx-more">{moreTimesText(matchCount - 1)}</div>}
 
       {!compact && (
         <div className="tzx-add">

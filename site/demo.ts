@@ -18,7 +18,7 @@ import {
 } from '../src/lib/storage';
 import { ZonePicker } from '../src/popup/ZonePicker';
 import { readingLabel } from './reading';
-import { EPOCH_INPUT_HINT, readEpochInput, wallClockNote } from './convert';
+import { EPOCH_INPUT_HINT, matchKey, readEpochInput, readingOrder, wallClockNote } from './convert';
 import {
   DEFAULT_PREFERENCES,
   type NumericDateOrder,
@@ -89,6 +89,46 @@ function mountDemo(): void {
   const note = h('p', { class: 'demo-note' });
   const orderBox = h('div', { class: 'demo-order', role: 'group', 'aria-label': 'Read this date as' });
   const out = h('div', { class: 'demo-out' });
+
+  // "‹ 1 of N ›": the other times found in the input, in reading order, like
+  // the extension card. The element stays in place across renders so a
+  // stepper button keeps focus while it is pressed repeatedly.
+  const stepper = h('div', { class: 'demo-step', role: 'group', 'aria-label': 'Times in the input' });
+  const prevBtn = h('button', { class: 'demo-stepbtn', type: 'button', 'aria-label': 'Previous time', title: 'Previous time' }, ['‹']);
+  const stepCount = h('span', { class: 'demo-stepcount', 'aria-live': 'polite', 'aria-atomic': 'true' });
+  const nextBtn = h('button', { class: 'demo-stepbtn', type: 'button', 'aria-label': 'Next time', title: 'Next time' }, ['›']);
+  stepper.append(prevBtn, stepCount, nextBtn, h('span', { class: 'demo-stepnote' }, ['times in the input']));
+  stepper.hidden = true;
+  // Which match is shown: its key, and the input text it was chosen for. A
+  // new input opens on the parser's best match; a re-render of the same input
+  // (a setting changed here or in another tab) keeps the match if it is still
+  // found.
+  let stepKey: string | null = null;
+  let stepText: string | null = null;
+  let shown: readonly ParsedTime[] = [];
+  let shownIndex = 0;
+  function step(delta: number): void {
+    const n = shown.length;
+    if (n < 2) return;
+    shownIndex = (shownIndex + delta + n) % n;
+    stepKey = matchKey(shown[shownIndex] as ParsedTime);
+    render();
+  }
+  /** Pick the match to show for `raw` among `times` (reading order). */
+  function chooseStep(raw: string, times: readonly ParsedTime[], best: number): number {
+    if (raw === stepText && stepKey !== null) {
+      const i = times.findIndex((p) => matchKey(p) === stepKey);
+      if (i >= 0) return i;
+    }
+    return best;
+  }
+  function renderStepper(): void {
+    const n = shown.length;
+    stepper.hidden = n < 2;
+    stepCount.replaceChildren(h('span', { class: 'demo-sr' }, ['Time ']), `${shownIndex + 1} of ${n}`);
+  }
+  prevBtn.addEventListener('click', () => step(-1));
+  nextBtn.addEventListener('click', () => step(1));
 
   // 12h | 24h: the same labelled segmented control as the extension popup.
   const clock = h('div', { class: 'demo-seg', role: 'group', 'aria-label': 'Clock format' });
@@ -181,6 +221,9 @@ function mountDemo(): void {
     format.textContent = '';
     note.textContent = '';
     orderBox.hidden = true;
+    shown = [];
+    shownIndex = 0;
+    renderStepper();
     const raw = input.value.trim();
     if (!raw) {
       hint.textContent = 'Type or paste a time above to see it in every zone.';
@@ -211,8 +254,13 @@ function mountDemo(): void {
       renderPicker();
       return;
     }
-    const matches = parseTimes(raw, opts);
-    const parsed = matches[0];
+    const { times, best } = readingOrder(parseTimes(raw, opts), raw);
+    shown = times;
+    shownIndex = chooseStep(raw, times, best);
+    const parsed = times[shownIndex];
+    stepText = raw;
+    stepKey = parsed ? matchKey(parsed) : null;
+    renderStepper();
     if (!parsed) {
       hint.textContent = readEpochInput(raw)
         ? "Couldn't read that as a time. To read it as a Unix timestamp, use the Epoch tab."
@@ -256,7 +304,7 @@ function mountDemo(): void {
   }
 
   const head = h('div', { class: 'demo-head' }, [tabs, clock]);
-  root.append(head, input, hint, note, format, orderBox, out, pickerHost);
+  root.append(head, input, stepper, hint, note, format, orderBox, out, pickerHost);
 
   input.addEventListener('input', render);
   // Seed with "now" so the demo is alive on load.

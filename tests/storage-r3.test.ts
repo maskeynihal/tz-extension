@@ -373,13 +373,105 @@ describe('previous write id (round 4)', () => {
     expect((await stored()).legacy.pw).toBe(w1);
   });
 
-  it('a legacy item with a different pw (writes in a row, the middle extras lost) uses extras whole', () => {
-    // Device B wrote twice after A; the peer has B's second legacy item and A's extras.
+  it('a legacy item with a different pw but pt >= extras t (writes in a row, the middle extras lost) merges', () => {
+    // Round 5 (review #1): this used to read extras whole and bring Tokyo
+    // back. B wrote twice after A; the peer has B's second legacy item and
+    // A's extras. B's pt (its first write's t) is above A's t, so legacy follows.
     const a = toSyncItems(START);
-    toSyncItems({ ...START, targetZones: NO_TOKYO });
+    const b1 = toSyncItems({ ...START, targetZones: NO_TOKYO });
     const b2 = toSyncItems({ ...START, targetZones: [...NO_TOKYO, 'America/New_York'] });
     const legacy = b2[PREFS_KEY] as Item;
     expect(legacy.pw).not.toBe((a[PREFS_EXTRAS_KEY] as Item).w);
-    expect(fromSyncItems({ [PREFS_KEY]: legacy, [PREFS_EXTRAS_KEY]: a[PREFS_EXTRAS_KEY] }).targetZones).toEqual(START.targetZones);
+    expect(legacy.pw).toBe((b1[PREFS_EXTRAS_KEY] as Item).w);
+    expect(legacy.pt).toBe((b1[PREFS_EXTRAS_KEY] as Item).t);
+    expect(fromSyncItems({ [PREFS_KEY]: legacy, [PREFS_EXTRAS_KEY]: a[PREFS_EXTRAS_KEY] }).targetZones).toEqual([
+      ...NO_TOKYO,
+      'America/New_York',
+    ]);
+  });
+});
+
+/*
+ * Round 5 (review #1): two saves in a row. The legacy item carries `pt`, the
+ * write time of the extras it follows, so a peer can tell "B saved twice
+ * before its extras landed" from "two devices' halves". As consec.mjs.
+ */
+describe('previous write time (round 5)', () => {
+  type Storage = typeof import('../src/lib/storage');
+  const device = async (): Promise<Storage> => {
+    vi.resetModules();
+    return import('../src/lib/storage');
+  };
+  const KTM: Preferences = {
+    ...DEFAULT_PREFERENCES,
+    homeZone: 'Asia/Kathmandu',
+    targetZones: ['Europe/London', 'UTC+05:45', 'Asia/Tokyo'],
+    cardSize: 'last',
+  };
+  const KTM_NO_TOKYO = ['Europe/London', 'UTC+05:45'];
+
+  it('consec.mjs: B saves twice before its extras lands; the peer writes lastCardSize; Tokyo stays removed', async () => {
+    const A = await device();
+    const B = await device();
+    const P = await device();
+    await A.savePreferences(KTM);
+    const extrasA = (await stored()).extras;
+    await B.loadPreferences();
+    await B.savePreferences({ ...KTM, targetZones: KTM_NO_TOKYO }); // remove Tokyo
+    const b1 = (await stored()).extras;
+    await B.savePreferences({ ...KTM, targetZones: KTM_NO_TOKYO, hour12: true }); // then toggle 12h
+    const { legacy } = await stored();
+    expect(legacy.pw).toBe(b1?.w);
+    expect(legacy.pt).toBe(b1?.t);
+    // The peer has B's newest legacy item, the extras still A's.
+    await sync().set({ [PREFS_EXTRAS_KEY]: extrasA });
+    const p = await P.loadPreferences();
+    expect(p).toMatchObject({ targetZones: KTM_NO_TOKYO, hour12: true, homeZone: 'Asia/Kathmandu' });
+    await P.savePreferences({ ...p, lastCardSize: 'compact' });
+    expect(await P.loadPreferences()).toMatchObject({ targetZones: KTM_NO_TOKYO, hour12: true, lastCardSize: 'compact' });
+    expect((await A.loadPreferences()).targetZones).toEqual(KTM_NO_TOKYO);
+  });
+
+  it('the first write of a context has neither pw nor pt; a write after a load follows the extras it read', async () => {
+    const A = await device();
+    await A.savePreferences(KTM);
+    const first = await stored();
+    expect(first.legacy).not.toHaveProperty('pt');
+    const B = await device();
+    await B.loadPreferences();
+    await B.savePreferences(KTM);
+    expect((await stored()).legacy).toMatchObject({ pw: first.extras?.w, pt: first.extras?.t });
+  });
+
+  it("two devices' halves stay extras-whole: each device's pt is below the other's extras t", async () => {
+    // Both read a common write C, then wrote without seeing each other.
+    const C = await device();
+    await C.savePreferences(KTM);
+    const A = await device();
+    const B = await device();
+    const P = await device();
+    await A.loadPreferences();
+    await B.loadPreferences();
+    vi.useFakeTimers({ now: Date.now() + 3_600_000, toFake: ['Date'] });
+    await A.savePreferences({ ...KTM, targetZones: ['Europe/London'] });
+    vi.useRealTimers();
+    const legacyA = (await stored()).legacy;
+    const bList = ['UTC+05:45', 'America/New_York'];
+    await B.savePreferences({ ...KTM, targetZones: bList });
+    const extrasB = (await stored()).extras;
+    await sync().set({ [PREFS_KEY]: legacyA });
+    expect(legacyA.t as number).toBeGreaterThan(extrasB?.t as number);
+    expect(legacyA.pt as number).toBeLessThan(extrasB?.t as number);
+    expect((await P.loadPreferences()).targetZones).toEqual(bList);
+  });
+
+  it('pt is restored after a failed save', async () => {
+    const A = await device();
+    await A.savePreferences(KTM);
+    const first = (await stored()).extras;
+    vi.mocked(sync().set).mockRejectedValueOnce(new Error('network'));
+    expect((await A.savePreferences({ ...KTM, theme: 'light' })).ok).toBe(false);
+    await A.savePreferences({ ...KTM, theme: 'dark' });
+    expect((await stored()).legacy).toMatchObject({ pw: first?.w, pt: first?.t });
   });
 });
