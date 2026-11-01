@@ -1,6 +1,7 @@
 import type { CustomFormat, DateOnlyPolicy, NumericDateOrder, ParsedTime } from '../types';
 import { BUILTIN_FORMATS, type BuiltinMatchContext } from './builtin-formats';
 import { isVeto, matchCustomFormat, now, type Candidate, type MatchResult } from './custom-formats';
+import { normalizeSigns } from './time-tokens';
 
 /**
  * Only this many characters of a selection are scanned. Built-in and token
@@ -45,8 +46,21 @@ function specificity(p: ParsedTime): number {
   // An epoch is a full instant, but a bare 10-digit run is weaker evidence
   // than a written timestamp with a zone (it may be a phone or ticket number).
   if (p.kind === 'epoch-seconds' || p.kind === 'epoch-millis') return 3;
+  // "2024-001" alone is often an id ("Invoice 2024-001 due 10:00"): a time
+  // of day next to it leads instead.
+  if (p.formatId === 'iso-ordinal' && p.dateOnly) return 0.5;
   const hasDate = p.kind !== 'time-of-day' && p.kind !== 'offset' && !p.timeOnly;
   return (hasDate ? 2 : 0) + (p.dateOnly ? 0 : 1) + (p.assumed ? 0 : 1);
+}
+
+/** Put back the original characters ("−") in a match read from the sign-normalized text. */
+function withOriginalText(c: Candidate, src: string, original: string): ParsedTime {
+  if (src === original) return c.parsed;
+  const text = c.parsed.matchedText;
+  const at = src.indexOf(text, c.index);
+  if (at < 0) return c.parsed;
+  const span = original.slice(at, at + text.length);
+  return span === text ? c.parsed : { ...c.parsed, matchedText: span };
 }
 
 function overlaps(a: { index: number; length: number }, b: { index: number; length: number }): boolean {
@@ -67,8 +81,11 @@ function overlaps(a: { index: number; length: number }, b: { index: number; leng
  */
 export function parseTimes(text: string, opts: string | ParseOptions): ParsedTime[] {
   const o: ParseOptions = typeof opts === 'string' ? { assumedZone: opts } : opts;
-  const src = text.trim().slice(0, SCAN_LIMIT);
-  if (src.length === 0) return [];
+  const original = text.trim().slice(0, SCAN_LIMIT);
+  if (original.length === 0) return [];
+  // Formats see ASCII minus signs ("UTC−5" -> "UTC-5"). The replacement keeps
+  // every index, so the highlighted text is cut from the original below.
+  const src = normalizeSigns(original);
 
   const ctx: BuiltinMatchContext = {
     assumedZone: o.assumedZone,
@@ -120,7 +137,7 @@ export function parseTimes(text: string, opts: string | ParseOptions): ParsedTim
     const key = `${c.parsed.epochMs}:${c.parsed.matchedText}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(c.parsed);
+    out.push(withOriginalText(c, src, original));
   }
   return out;
 }

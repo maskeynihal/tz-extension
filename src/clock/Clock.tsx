@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { resolveLocalZone, type Preferences, type Theme } from '../types';
 import { loadPreferences, onPreferencesChanged, savePreferences } from '../lib/storage';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
@@ -198,14 +198,22 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
     d.el.style.transform = `translate(${x}px, ${y}px)`;
   }, []);
 
+  /** Card positions relative to the grid. Reads layout, so only on demand. */
+  const measure = useCallback((): Map<string, { x: number; y: number }> => {
+    const next = new Map<string, { x: number; y: number }>();
+    for (const [zone, el] of itemRefs.current) next.set(zone, { x: el.offsetLeft, y: el.offsetTop });
+    return next;
+  }, []);
+
+  // FLIP runs only when the card order changes, not on every one-second tick:
+  // reading offsetLeft/offsetTop of every card forces a layout.
   useLayoutEffect(() => {
     const changed = lastOrderKey.current !== '' && lastOrderKey.current !== orderKey;
-    const next = new Map<string, { x: number; y: number }>();
-    for (const [zone, el] of itemRefs.current) {
-      const pos = { x: el.offsetLeft, y: el.offsetTop };
-      next.set(zone, pos);
+    const next = measure();
+    for (const [zone, pos] of next) {
+      const el = itemRefs.current.get(zone);
       const prev = lastPos.current.get(zone);
-      if (!changed || !prev || zone === drag.current?.zone || !canAnimate(el)) continue;
+      if (!el || !changed || !prev || zone === drag.current?.zone || !canAnimate(el)) continue;
       const dx = prev.x - pos.x;
       const dy = prev.y - pos.y;
       if (dx !== 0 || dy !== 0) {
@@ -218,6 +226,29 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
     lastPos.current = next;
     lastOrderKey.current = orderKey;
     if (drag.current?.moved) positionDragged();
+  }, [orderKey, measure, positionDragged]);
+
+  // The last positions go stale when the layout changes without a reorder
+  // (window resize, cards growing); refresh them then, so the next FLIP starts
+  // from where the cards really were.
+  const hasGrid = prefs !== null;
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const refresh = (): void => {
+      if (!drag.current) lastPos.current = measure();
+    };
+    window.addEventListener('resize', refresh);
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refresh) : null;
+    ro?.observe(grid);
+    return () => {
+      window.removeEventListener('resize', refresh);
+      ro?.disconnect();
+    };
+  }, [hasGrid, measure]);
+
+  // Focus restore after a reorder, remove or make-home (cheap: a ref check).
+  useLayoutEffect(() => {
     const pf = pendingFocus.current;
     if (pf) {
       pendingFocus.current = null;
@@ -378,6 +409,14 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
     [update],
   );
 
+  // Stable handlers, so a memoized ZoneCard only re-renders when what it shows changes.
+  const dropDrag = useCallback(() => endDrag(true), [endDrag]);
+  const cancelDrag = useCallback(() => endDrag(false), [endDrag]);
+  const registerRef = useCallback((zone: string, el: HTMLLIElement | null) => {
+    if (el) itemRefs.current.set(zone, el);
+    else itemRefs.current.delete(zone);
+  }, []);
+
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => undefined);
     else void document.documentElement.requestFullscreen?.().catch(() => undefined);
@@ -420,6 +459,8 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
               type="button"
               className="tzc-seg-btn"
               aria-pressed={hour12}
+              aria-label="12-hour clock"
+              title="12-hour clock (3:04 PM)"
               disabled={!prefs}
               onClick={() => prefs && !prefs.hour12 && update({ ...prefs, hour12: true })}
             >
@@ -429,6 +470,8 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
               type="button"
               className="tzc-seg-btn"
               aria-pressed={!hour12}
+              aria-label="24-hour clock"
+              title="24-hour clock (15:04)"
               disabled={!prefs}
               onClick={() => prefs && prefs.hour12 && update({ ...prefs, hour12: false })}
             >
@@ -449,21 +492,26 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
               </button>
             ))}
           </div>
-          {fullscreenSupported() && (
-            <button
-              type="button"
-              className="tzc-icon-btn"
-              aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
-              title={isFullscreen ? 'Exit full screen' : 'Full screen'}
-              onClick={toggleFullscreen}
-            >
-              {isFullscreen ? <ShrinkIcon /> : <ExpandIcon />}
-            </button>
-          )}
-          {openSettings && (
-            <button type="button" className="tzc-icon-btn" aria-label="Open settings" title="Settings" onClick={openSettings}>
-              <SettingsIcon />
-            </button>
+          {(fullscreenSupported() || openSettings) && (
+            // Kept together so the gear never wraps onto a line of its own.
+            <div className="tzc-actions">
+              {fullscreenSupported() && (
+                <button
+                  type="button"
+                  className="tzc-icon-btn"
+                  aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+                  title={isFullscreen ? 'Exit full screen' : 'Full screen'}
+                  onClick={toggleFullscreen}
+                >
+                  {isFullscreen ? <ShrinkIcon /> : <ExpandIcon />}
+                </button>
+              )}
+              {openSettings && (
+                <button type="button" className="tzc-icon-btn" aria-label="Open settings" title="Settings" onClick={openSettings}>
+                  <SettingsIcon />
+                </button>
+              )}
+            </div>
           )}
         </div>
       </header>
@@ -519,17 +567,14 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
                   hour12={hour12}
                   planning={planning}
                   dragging={draggingZone === zone}
-                  refCb={(el) => {
-                    if (el) itemRefs.current.set(zone, el);
-                    else itemRefs.current.delete(zone);
-                  }}
-                  onMove={(delta) => moveZone(zone, delta)}
-                  onRemove={() => removeZone(zone)}
-                  onMakeHome={() => setHome(zone)}
-                  onHandlePointerDown={(e) => onHandlePointerDown(zone, e)}
+                  registerRef={registerRef}
+                  onMove={moveZone}
+                  onRemove={removeZone}
+                  onMakeHome={setHome}
+                  onHandlePointerDown={onHandlePointerDown}
                   onHandlePointerMove={onHandlePointerMove}
-                  onHandlePointerUp={() => endDrag(true)}
-                  onHandlePointerCancel={() => endDrag(false)}
+                  onHandlePointerUp={dropDrag}
+                  onHandlePointerCancel={cancelDrag}
                 />
               ))}
               {others.length === 0 && (
@@ -672,19 +717,27 @@ interface ZoneCardProps {
   readonly hour12: boolean;
   readonly planning: boolean;
   readonly dragging: boolean;
-  readonly refCb: (el: HTMLLIElement | null) => void;
-  readonly onMove: (delta: number) => void;
-  readonly onRemove: () => void;
-  readonly onMakeHome: () => void;
-  readonly onHandlePointerDown: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  /** Stable callbacks taking the zone, so the memoized card skips unchanged renders. */
+  readonly registerRef: (zone: string, el: HTMLLIElement | null) => void;
+  readonly onMove: (zone: string, delta: number) => void;
+  readonly onRemove: (zone: string) => void;
+  readonly onMakeHome: (zone: string) => void;
+  readonly onHandlePointerDown: (zone: string, e: React.PointerEvent<HTMLButtonElement>) => void;
   readonly onHandlePointerMove: (e: React.PointerEvent<HTMLButtonElement>) => void;
   readonly onHandlePointerUp: () => void;
   readonly onHandlePointerCancel: () => void;
 }
 
-function ZoneCard(props: ZoneCardProps): JSX.Element {
-  const { zone, isHome, position, count, instant, home, hour12, planning, dragging } = props;
+/**
+ * One clock card. Memoized on its props, which are exactly what it displays
+ * plus stable callbacks: while planning, `instant` holds still, so a tick does
+ * not re-render any card; live, each card re-renders once a second for its
+ * seconds digits and nothing else does.
+ */
+const ZoneCard = memo(function ZoneCard(props: ZoneCardProps): JSX.Element {
+  const { zone, isHome, position, count, instant, home, hour12, planning, dragging, registerRef } = props;
   const uid = useId();
+  const refCb = useCallback((el: HTMLLIElement | null) => registerRef(zone, el), [registerRef, zone]);
   const parts = wallParts(instant, zone);
   const face = clockText(parts, hour12);
   const phase = dayPhase(parts.hour + parts.minute / 60);
@@ -702,16 +755,16 @@ function ZoneCard(props: ZoneCardProps): JSX.Element {
     if (isHome || !e.altKey) return;
     if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
       e.preventDefault();
-      props.onMove(-1);
+      props.onMove(zone, -1);
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
       e.preventDefault();
-      props.onMove(1);
+      props.onMove(zone, 1);
     }
   };
 
   return (
     <li
-      ref={props.refCb}
+      ref={refCb}
       className={`tzc-card tzc-phase-${phase}${isHome ? ' is-home' : ''}${dragging ? ' is-dragging' : ''}`}
       data-zone={zone}
       aria-labelledby={`${uid}-t`}
@@ -774,7 +827,7 @@ function ZoneCard(props: ZoneCardProps): JSX.Element {
             aria-label={`Reorder ${place}, position ${position + 1} of ${count}`}
             aria-describedby={`${uid}-hint`}
             title="Drag to reorder (Alt+↑/↓)"
-            onPointerDown={props.onHandlePointerDown}
+            onPointerDown={(e) => props.onHandlePointerDown(zone, e)}
             onPointerMove={props.onHandlePointerMove}
             onPointerUp={props.onHandlePointerUp}
             onPointerCancel={props.onHandlePointerCancel}
@@ -784,10 +837,10 @@ function ZoneCard(props: ZoneCardProps): JSX.Element {
               if (e.altKey) return;
               if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
                 e.preventDefault();
-                props.onMove(-1);
+                props.onMove(zone, -1);
               } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
                 e.preventDefault();
-                props.onMove(1);
+                props.onMove(zone, 1);
               }
             }}
           >
@@ -796,7 +849,7 @@ function ZoneCard(props: ZoneCardProps): JSX.Element {
           <span className="tzc-sr-only" id={`${uid}-hint`}>
             Use arrow keys here, or Alt plus arrow keys anywhere on the card, to move it.
           </span>
-          <button type="button" className="tzc-tool tzc-tool-text" onClick={props.onMakeHome} aria-label={`Make ${place} home`}>
+          <button type="button" className="tzc-tool tzc-tool-text" onClick={() => props.onMakeHome(zone)} aria-label={`Make ${place} home`}>
             <HomeIcon size={14} />
             <span>Make home</span>
           </button>
@@ -804,7 +857,7 @@ function ZoneCard(props: ZoneCardProps): JSX.Element {
             type="button"
             className="tzc-tool tzc-remove"
             data-remove
-            onClick={props.onRemove}
+            onClick={() => props.onRemove(zone)}
             aria-label={`Remove ${place}`}
             title="Remove"
           >
@@ -814,4 +867,4 @@ function ZoneCard(props: ZoneCardProps): JSX.Element {
       )}
     </li>
   );
-}
+});

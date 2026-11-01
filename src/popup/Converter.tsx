@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { Preferences } from '../types';
 import { resolveLocalZone } from '../types';
-import { viewInZone, wallClockToEpochMs, epochMsToWallClock, isValidZone, zoneLabel } from '../lib/tz';
+import { viewInZone, wallClockToEpochMs, isValidZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from './ZonePicker';
 
 export interface ConverterProps {
@@ -12,16 +12,21 @@ export interface ConverterProps {
 
 const LOCAL_ZONE = resolveLocalZone();
 
-/** Format a Date as the value a datetime-local input expects (no seconds). */
-function toLocalInputValue(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+/**
+ * The value a datetime-local input expects (no seconds) for an instant shown
+ * as the wall clock of `zone`. Formatted in the zone itself, so the browser's
+ * own timezone (and its DST gaps) never leaks into the digits.
+ */
+function wallInputValue(epochMs: number, zone: string): string {
+  const v = viewInZone(epochMs, zone, false);
+  return `${v.date}T${v.time.slice(0, 5)}`;
 }
 
 export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element {
   const [sourceZone, setSourceZone] = useState(prefs.homeZone);
+  // Start at "now", written as the source zone's wall clock.
   const [localValue, setLocalValue] = useState<string>(() =>
-    toLocalInputValue(new Date()),
+    isValidZone(prefs.homeZone) ? wallInputValue(Date.now(), prefs.homeZone) : '',
   );
 
   const result = useMemo(() => {
@@ -38,7 +43,17 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
   }, [localValue, sourceZone]);
 
   function setNow(): void {
-    setLocalValue(toLocalInputValue(epochMsToWallClock(Date.now(), sourceZone)));
+    if (isValidZone(sourceZone)) setLocalValue(wallInputValue(Date.now(), sourceZone));
+  }
+
+  /**
+   * Change the source zone but keep the same instant: the input is rewritten
+   * as the new zone's wall clock, so every result stays put.
+   */
+  function changeSource(zone: string): void {
+    if (!isValidZone(zone)) return;
+    if (result.epochMs !== null) setLocalValue(wallInputValue(result.epochMs, zone));
+    setSourceZone(zone);
   }
 
   function addTarget(zone: string): void {
@@ -81,7 +96,7 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
                 : `Use your local timezone (${LOCAL_ZONE})`
             }
             aria-pressed={sourceIsLocal}
-            onClick={() => setSourceZone(LOCAL_ZONE)}
+            onClick={() => changeSource(LOCAL_ZONE)}
             disabled={!isValidZone(LOCAL_ZONE)}
           >
             Local
@@ -90,7 +105,7 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
         <ZonePicker
           label="Source timezone"
           placeholder="Change source timezone…"
-          onSelect={setSourceZone}
+          onSelect={changeSource}
         />
       </div>
 

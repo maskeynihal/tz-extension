@@ -105,6 +105,14 @@ body:has(> #root > .tzc-app) {
 .tzc-local-sec { color: var(--tzc-sub); font-weight: var(--tz-fw-medium); }
 
 .tzc-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Full screen + settings stay side by side; the pair wraps as one. */
+.tzc-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+/* Phones (390 px): tighten the header so both segments and the icon pair fit one row. */
+@media (max-width: 480px) {
+  .tzc-controls, .tzc-actions { gap: 6px; }
+  .tzc-seg-btn { padding: 6px 8px; }
+  .tzc-icon-btn { width: 34px; height: 34px; }
+}
 
 .tzc-seg {
   display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px;

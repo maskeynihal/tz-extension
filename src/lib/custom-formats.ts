@@ -3,6 +3,7 @@ import {
   buildParsed,
   dateOnlyTime,
   monthFromName,
+  normalizeSigns,
   resolveZoneToken,
   to24h,
   todayIn,
@@ -624,9 +625,17 @@ export function matchCustomFormat(
   if (!fmt.enabled) return [];
   const compiled = compiledFor(fmt);
   if (!compiled.ok) return [];
-  return fmt.advanced
-    ? matchWindowed(text.slice(0, ADVANCED_SCAN_LIMIT), compiled.regex.source, fmt, ctx)
-    : matchGlobal(text, compiled.regex.source, fmt, ctx);
+  // Offsets read with ASCII signs ("UTC−5" -> "UTC-5"); the replacement keeps
+  // every index, so the matched text is cut back out of the original.
+  const src = normalizeSigns(text);
+  const found = fmt.advanced
+    ? matchWindowed(src.slice(0, ADVANCED_SCAN_LIMIT), compiled.regex.source, fmt, ctx)
+    : matchGlobal(src, compiled.regex.source, fmt, ctx);
+  if (src === text) return found;
+  return found.map((c) => {
+    const original = text.slice(c.index, c.index + c.parsed.matchedText.length);
+    return original === c.parsed.matchedText ? c : { ...c, parsed: { ...c.parsed, matchedText: original } };
+  });
 }
 
 function toCandidate(

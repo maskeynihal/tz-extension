@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect, useCallback, useId } from 'react';
-import { searchZones, type ZoneOption } from '../lib/tz';
+import { excludedMatch, searchZones, zoneLabel, type ZoneOption } from '../lib/tz';
 
 export interface ZonePickerProps {
   /** Called with a chosen zone id (IANA, "UTC+05:45" or "abbr:PDT"). */
@@ -17,16 +17,22 @@ export interface ZonePickerProps {
   readonly autoFocus?: boolean;
 }
 
+/** Shared empty defaults, so the search memo isn't invalidated on every render. */
+const NO_ZONES: readonly string[] = [];
+
 /**
  * Searchable, grouped timezone combobox: Suggested · UTC offsets ·
- * Abbreviations · regions. Type any part of a name, city, abbreviation or
- * offset ("kath", "pdt", "+5:30", "utc-8"). Arrow keys move through every
- * group; Enter picks; Escape or Tab away closes.
+ * Abbreviations · regions. Type any part of a name, city, country,
+ * abbreviation or offset ("kath", "mumbai", "pdt", "+545", "utc−8").
+ * Arrow keys, Page Up/Down and Home/End move through every group; Enter
+ * picks. Escape clears the search and closes the list; an Escape with
+ * nothing to clear or close is left to the surrounding UI (a card closes).
+ * Tab away closes.
  */
 export function ZonePicker({
   onSelect,
-  exclude = [],
-  suggested = [],
+  exclude = NO_ZONES,
+  suggested = NO_ZONES,
   placeholder = 'Search timezones…',
   label,
   className,
@@ -49,6 +55,13 @@ export function ZonePicker({
     [query, exclude, suggested],
   );
   const flat = useMemo(() => groups.flatMap((g) => g.options), [groups]);
+  const hasQuery = query.trim().length > 0;
+  // A query that names an added zone says so rather than "no match".
+  const added = useMemo(
+    () => (hasQuery && flat.length === 0 ? excludedMatch(query, exclude) : null),
+    [hasQuery, flat.length, query, exclude],
+  );
+  const listShown = open && (flat.length > 0 || hasQuery);
 
   useEffect(() => {
     setActive(0);
@@ -82,42 +95,61 @@ export function ZonePicker({
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      // Keep page shortcuts (and the card's own Escape handler) out of typing.
+      if (e.key === 'Escape') {
+        // First Escape clears the search and closes the list, and stops there.
+        // With nothing to clear or close it propagates, so a card can close.
+        if (hasQuery || listShown) {
+          e.preventDefault();
+          e.stopPropagation();
+          setQuery('');
+          setOpen(false);
+        }
+        return;
+      }
+      // Keep page shortcuts out of typing.
       e.stopPropagation();
+      const last = flat.length - 1;
       if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        e.preventDefault();
         setOpen(true);
+        return;
+      }
+      if (!open || last < 0) {
+        if (e.key === 'Enter') e.preventDefault();
         return;
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setActive((a) => Math.min(a + 1, flat.length - 1));
+        setActive((a) => Math.min(a + 1, last));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setActive((a) => Math.max(a - 1, 0));
       } else if (e.key === 'PageDown') {
         e.preventDefault();
-        setActive((a) => Math.min(a + 10, flat.length - 1));
+        setActive((a) => Math.min(a + 10, last));
       } else if (e.key === 'PageUp') {
         e.preventDefault();
         setActive((a) => Math.max(a - 10, 0));
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        setActive(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        setActive(last);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const chosen = flat[active];
         if (chosen) choose(chosen.id);
-      } else if (e.key === 'Escape') {
-        if (open) {
-          e.preventDefault();
-          setOpen(false);
-        }
       }
     },
-    [open, flat, active, choose],
+    [open, flat, active, choose, hasQuery, listShown],
   );
 
   let index = -1;
   const renderOption = (o: ZoneOption): JSX.Element => {
     index += 1;
     const i = index;
+    const detail = [o.matched, o.detail].filter(Boolean).join(' · ');
     return (
       <li
         key={o.id}
@@ -133,7 +165,7 @@ export function ZonePicker({
         }}
       >
         <span className="tzx-opt-label">{o.label}</span>
-        {o.detail && <span className="tzx-opt-detail">{o.detail}</span>}
+        {detail && <span className="tzx-opt-detail">{detail}</span>}
       </li>
     );
   };
@@ -159,9 +191,9 @@ export function ZonePicker({
         id={inputId}
         type="text"
         role="combobox"
-        aria-expanded={open && flat.length > 0}
+        aria-expanded={listShown}
         aria-controls={listId}
-        aria-activedescendant={open && flat[active] ? optId(active) : undefined}
+        aria-activedescendant={listShown && flat[active] ? optId(active) : undefined}
         aria-autocomplete="list"
         autoComplete="off"
         spellCheck={false}
@@ -176,7 +208,7 @@ export function ZonePicker({
         onClick={() => setOpen(true)}
         onKeyDown={onKeyDown}
       />
-      {open && flat.length > 0 && (
+      {listShown && flat.length > 0 && (
         <ul className="tzx-listbox" id={listId} role="listbox" aria-label={label} tabIndex={-1} ref={listRef}>
           {groups.map((g) => (
             <li key={g.id} role="presentation" className="tzx-optgroup">
@@ -190,10 +222,10 @@ export function ZonePicker({
           ))}
         </ul>
       )}
-      {open && query.trim().length > 0 && flat.length === 0 && (
-        <ul className="tzx-listbox" role="listbox" aria-label={label} tabIndex={-1}>
+      {listShown && flat.length === 0 && (
+        <ul className="tzx-listbox" id={listId} role="listbox" aria-label={label} tabIndex={-1}>
           <li className="tzx-opt tzx-opt-empty" role="option" aria-selected={false} aria-disabled="true">
-            No matching timezone
+            {added ? `Already added: ${zoneLabel(added)}` : 'No matching timezone'}
           </li>
         </ul>
       )}
@@ -201,18 +233,49 @@ export function ZonePicker({
   );
 }
 
-/** CSS for the picker, for contexts without popup.css (the in-page card's shadow root). */
+/*
+ * CSS for the picker in contexts without popup.css (the in-page card's
+ * shadow root). The active option keeps at least 4.5:1 contrast for label
+ * and detail text in both themes (tests/zone-picker.test.tsx checks it).
+ */
+const DARK = `
+.tzx-picker input, .tzx-listbox { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
+.tzx-opt { color: #e7e8ec; }
+.tzx-optgroup-label, .tzx-opt-detail, .tzx-opt-empty { color: #a0a3ac; }
+.tzx-opt-active { background: #8989dd; color: #0f1115; }
+.tzx-opt-active .tzx-opt-detail { color: #1b1d24; }
+`;
+
+function scoped(css: string, prefix: string): string {
+  return css
+    .trim()
+    .split('\n')
+    .map((rule) => {
+      const [selectors, body] = rule.split('{') as [string, string];
+      const scopedSelectors = selectors
+        .split(',')
+        .map((s) => `${prefix} ${s.trim()}`)
+        .join(', ');
+      return `${scopedSelectors} {${body}`;
+    })
+    .join('\n');
+}
+
 export const ZONE_PICKER_CSS = `
 .tzx-picker { position: relative; }
 .tzx-picker input { width: 100%; font: inherit; font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 1px solid #dcdee4; background: #fff; color: #24262e; outline: none; }
 .tzx-picker input:focus { border-color: #1313ba; box-shadow: 0 0 0 3px rgba(19,19,186,0.15); }
 .tzx-listbox { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 2; margin: 0; padding: 4px; list-style: none; max-height: 220px; overflow: auto; background: #fff; border: 1px solid #e6e7ec; border-radius: 8px; box-shadow: 0 10px 30px rgba(15,17,21,0.14); }
 .tzx-listbox ul { list-style: none; margin: 0; padding: 0; }
-.tzx-optgroup-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #898c96; padding: 6px 8px 2px; }
+.tzx-optgroup-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #5b5e68; padding: 6px 8px 2px; }
 .tzx-opt { display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; color: #24262e; }
-.tzx-opt-detail { color: #898c96; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tzx-opt-detail { color: #5b5e68; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tzx-opt-active { background: #1313ba; color: #fff; }
 .tzx-opt-active .tzx-opt-detail { color: #dcdcf7; }
-.tzx-opt-empty { color: #898c96; cursor: default; }
+.tzx-opt-empty { color: #5b5e68; cursor: default; }
 .tzx-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+${scoped(DARK, ":host([data-tz-theme='dark'])")}
+@media (prefers-color-scheme: dark) {
+${scoped(DARK, ":host(:not([data-tz-theme='light']):not([data-tz-theme='dark']))")}
+}
 `;

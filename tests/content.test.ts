@@ -137,13 +137,21 @@ describe('content script: cards, pins and the dock', () => {
     return { listener, set };
   }
 
-  it('opens compact when the card size setting says so, and remembers the last size', async () => {
+  it('opens compact when the card size setting says so, and does not save the size for a fixed setting', async () => {
     const { set } = await openCard({ homeZone: 'UTC', cardSize: 'compact', lastCardSize: 'compact' });
     expect(transient().querySelector('.tzx-card')?.classList.contains('compact')).toBe(true);
     button(transient(), 'Expand card').click();
     await vi.waitFor(() => expect(transient().querySelector('.tzx-card')?.classList.contains('compact')).toBe(false));
-    const saved = set.mock.calls.at(-1)?.[0]['tz-extension-prefs'];
-    expect(saved.lastCardSize).toBe('full');
+    // Only "Last used" reads lastCardSize, so a fixed size writes nothing.
+    await new Promise((r) => setTimeout(r, 700));
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('"Last used" remembers the last size toggled', async () => {
+    const { set } = await openCard({ homeZone: 'UTC', cardSize: 'last', lastCardSize: 'compact' });
+    button(transient(), 'Expand card').click();
+    await vi.waitFor(() => expect(set).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(set.mock.calls.at(-1)?.[0]['tz-extension-prefs'].lastCardSize).toBe('full');
   });
 
   it('"Last used" opens at the remembered size', async () => {
@@ -154,14 +162,14 @@ describe('content script: cards, pins and the dock', () => {
   it('offers the day/month choice for an ambiguous date and re-reads it', async () => {
     const { set } = await openCard({ homeZone: 'UTC', numericDateOrder: 'dmy' }, '03/04/2024 10:00');
     const group = transient().querySelector('.tzx-order');
-    expect(group?.textContent).toContain('3 Apr');
-    expect(group?.textContent).toContain('4 Mar');
-    const monthFirst = Array.from(group?.querySelectorAll('button') ?? []).find((b) => b.textContent?.includes('4 Mar'));
+    expect(group?.textContent).toContain('3 Apr 2024');
+    expect(group?.textContent).toContain('Mar 4, 2024');
+    const monthFirst = Array.from(group?.querySelectorAll('button') ?? []).find((b) => b.textContent?.includes('Mar 4'));
     monthFirst?.click();
     await vi.waitFor(() =>
-      expect(transient().querySelector('.tzx-order-btn.on')?.textContent).toContain('4 Mar'),
+      expect(transient().querySelector('.tzx-order-btn.on')?.textContent).toContain('Mar 4, 2024'),
     );
-    expect(set.mock.calls.at(-1)?.[0]['tz-extension-prefs'].numericDateOrder).toBe('mdy');
+    await vi.waitFor(() => expect(set.mock.calls.at(-1)?.[0]['tz-extension-prefs'].numericDateOrder).toBe('mdy'));
     expect(transient().querySelector('.tzx-date')?.textContent).toBe('2024-03-04');
   });
 

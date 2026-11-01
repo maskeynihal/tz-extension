@@ -26,6 +26,9 @@ const DEBOUNCE_MS = 200;
 const CARD_MAX_W = 360;
 const MARGIN = 8;
 const EST_HEIGHT = 200;
+/** Cards sit one level below the dock, so the dock is never covered. */
+const CARD_Z = '2147483646';
+const DOCK_Z = '2147483647';
 
 let prefs: Preferences = DEFAULT_PREFERENCES;
 /** Until stored prefs arrive we do not know whether select-to-convert is on. */
@@ -47,10 +50,27 @@ function parseWithPrefs(text: string): ParsedTime[] {
   });
 }
 
-/** Save a preference change made from a card, keeping the in-memory copy current. */
-function patchPrefs(patch: Partial<Preferences>): void {
+/** Card writes run one after another, so two quick changes cannot overwrite each other. */
+let prefsWrite: Promise<void> = Promise.resolve();
+
+/**
+ * Save a preference change made from a card. The in-memory copy updates now;
+ * the write merges the patch into the preferences read from storage right
+ * before it, so a change made meanwhile elsewhere (Settings, another tab) is
+ * not overwritten with this tab's possibly stale copy.
+ */
+function patchPrefs(patch: Partial<Preferences>): Promise<void> {
   prefs = { ...prefs, ...patch };
-  void savePreferences(prefs);
+  prefsWrite = prefsWrite
+    .then(async () => {
+      const stored = await loadPreferences();
+      // loadPreferences answers the shared defaults object when storage
+      // cannot be read; merging into that would reset every other setting.
+      const base = stored === DEFAULT_PREFERENCES ? prefs : stored;
+      await savePreferences({ ...base, ...patch });
+    })
+    .catch(() => undefined);
+  return prefsWrite;
 }
 
 /** Size a new card opens at, per the "card size on open" setting. */
@@ -59,10 +79,23 @@ function opensCompact(): boolean {
   return size === 'compact';
 }
 
-/** Remember the size the user just switched a card to (for "Last used"). */
+/** Quiet time before a size toggle is saved (a burst of toggles writes once). */
+export const REMEMBER_SIZE_MS = 500;
+let sizeTimer: number | undefined;
+
+/**
+ * Remember the size the user just switched a card to, for "Last used". Only
+ * that setting reads it, so nothing is written otherwise; toggles are
+ * debounced so sync storage sees one write per burst.
+ */
 function rememberSize(compact: boolean): void {
+  if (prefs.cardSize !== 'last') return;
   const size = compact ? 'compact' : 'full';
-  if (prefs.lastCardSize !== size) patchPrefs({ lastCardSize: size });
+  window.clearTimeout(sizeTimer);
+  sizeTimer = window.setTimeout(() => {
+    sizeTimer = undefined;
+    if (prefs.cardSize === 'last' && prefs.lastCardSize !== size) void patchPrefs({ lastCardSize: size });
+  }, REMEMBER_SIZE_MS);
 }
 
 /**
@@ -270,8 +303,13 @@ function clearLiveHighlight(): void {
   liveRange = null;
 }
 
-/** Promote the live range into a numbered pin slot's own colored highlight. */
+/**
+ * Mark a pin's text in its slot color. Like the live mark, only when "also
+ * mark the matched text" is on; the pin keeps its range either way, so the
+ * mark can come back when the setting is turned on.
+ */
 function setPinHighlight(slot: number, range: Range | null): void {
+  if (!prefs.keepSelection) return;
   const reg = highlightRegistry();
   const Ctor = HighlightCtor();
   if (!reg || !Ctor || !range) return;
@@ -294,7 +332,49 @@ function clearPinHighlight(slot: number): void {
   }
 }
 
+/**
+ * Bring every mark in line with the "also mark the matched text" setting:
+ * paint the live and pin marks when it is on, remove them when it is off.
+ * Runs when the setting changes, so open cards follow it right away.
+ */
+function syncHighlights(): void {
+  const reg = highlightRegistry();
+  if (!prefs.keepSelection) {
+    try {
+      reg?.delete(LIVE_HL);
+    } catch {
+      /* ignore */
+    }
+    for (const pin of pins) clearPinHighlight(pin.slot);
+    return;
+  }
+  const Ctor = HighlightCtor();
+  if (reg && Ctor && liveRange && tHost) {
+    try {
+      ensureHighlightStyle();
+      reg.set(LIVE_HL, new Ctor(liveRange));
+    } catch {
+      /* highlights unavailable */
+    }
+  }
+  for (const pin of pins) setPinHighlight(pin.slot, pin.range);
+}
+
 // --- Positioning ----------------------------------------------------------
+
+/**
+ * Move a fixed (viewport) box of size w×h up out of the dock's way, when it
+ * would overlap the dock and there is room above it.
+ */
+function avoidDock(box: { top: number; left: number }, w: number, h: number): { top: number; left: number } {
+  if (!dockHost || !dockHost.isConnected) return box;
+  const d = dockHost.getBoundingClientRect();
+  if (!d.width || !d.height) return box;
+  const overlaps = box.left < d.right && box.left + w > d.left && box.top < d.bottom && box.top + h > d.top;
+  if (!overlaps) return box;
+  const above = d.top - MARGIN - h;
+  return above >= MARGIN ? { top: above, left: box.left } : box;
+}
 
 /** Clamp a viewport-space (fixed) card near a rect, flipping above if needed. */
 function positionFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
@@ -334,6 +414,8 @@ function refitFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
       const above = rect.top - MARGIN - h;
       top = above >= MARGIN ? above : Math.max(MARGIN, vh - h - MARGIN);
     }
+    const r = hostEl.getBoundingClientRect();
+    top = avoidDock({ top, left: r.left }, r.width, h).top;
     hostEl.style.setProperty('top', `${top}px`, 'important');
   };
   if (typeof ResizeObserver === 'function') {
@@ -348,9 +430,7 @@ function refitFixed(hostEl: HTMLDivElement, rect: DOMRect): void {
 /** Place a pinned card at a document-space point (scrolls with the page). */
 function positionAbsolute(hostEl: HTMLDivElement, pageX: number, pageY: number): void {
   // Clamp horizontally within the document width so it never overflows off-screen.
-  const docW = document.documentElement.scrollWidth;
-  const left = Math.max(MARGIN, Math.min(pageX, docW - CARD_MAX_W - MARGIN));
-  applyBox(hostEl, 'absolute', pageY, left);
+  applyBox(hostEl, 'absolute', pageY, clampPageLeft(pageX));
 }
 
 function applyBox(
@@ -364,7 +444,7 @@ function applyBox(
   hostEl.style.setProperty('left', `${left}px`, 'important');
   hostEl.style.setProperty('margin', '0', 'important');
   hostEl.style.setProperty('padding', '0', 'important');
-  hostEl.style.setProperty('z-index', '2147483647', 'important');
+  hostEl.style.setProperty('z-index', CARD_Z, 'important');
 }
 
 /**
@@ -451,14 +531,27 @@ function onDocMouseDown(e: MouseEvent): void {
   }
 }
 
+/** True when a key event started inside one of our cards or the dock. */
+function fromOurUi(e: Event): boolean {
+  return e.target instanceof Node && inOurUi(e.target);
+}
+
+/**
+ * Escape from the page (capture, so page handlers cannot swallow it) closes
+ * the transient card. Escape from inside our UI is left to the bubble phase
+ * below, so the zone search and the dock can use it first.
+ */
 function onKeyDown(e: KeyboardEvent): void {
-  if (e.key !== 'Escape') return;
-  // Escape inside a card's own fields (the timezone search) closes that list first.
-  const origin = e.composedPath()[0];
-  if (origin instanceof Element && origin.closest('input, select, textarea') && origin.getRootNode() instanceof ShadowRoot) {
-    const host = (origin.getRootNode() as ShadowRoot).host;
-    if (inOurUi(host)) return;
-  }
+  if (e.key !== 'Escape' || fromOurUi(e)) return;
+  dismissTransient();
+}
+
+/**
+ * Escape from inside a card or the dock that nothing there handled (the zone
+ * search stops the Escape that clears or closes it) closes the card.
+ */
+function onKeyDownBubble(e: KeyboardEvent): void {
+  if (e.key !== 'Escape' || !fromOurUi(e)) return;
   dismissTransient();
 }
 
@@ -568,6 +661,57 @@ interface PinSpec {
   readonly placement?: 'pinned' | 'floating';
   /** Exact host position to restore (viewport for floating, page for pinned). */
   readonly box?: { readonly top: number; readonly left: number };
+  /** Highlight slot (number and color) to take back, when it is free. */
+  readonly slot?: number;
+}
+
+/** Left edge a pinned card gets for a page x (kept inside the document width). */
+function clampPageLeft(pageX: number): number {
+  const docW = document.documentElement.scrollWidth;
+  return Math.max(MARGIN, Math.min(pageX, docW - CARD_MAX_W - MARGIN));
+}
+
+/** Where a card is now, in page coordinates (after any drag, float or clamp). */
+function currentPagePos(pin: Pin): { x: number; y: number } {
+  const left = parseFloat(pin.host.style.getPropertyValue('left')) || 0;
+  const top = parseFloat(pin.host.style.getPropertyValue('top')) || 0;
+  return pin.placement === 'floating' ? { x: left + window.scrollX, y: top + window.scrollY } : { x: left, y: top };
+}
+
+/**
+ * Step a page point down-right until no other card sits within 48 px of it,
+ * so a new or re-pinned card never lands on top of another one. Compares
+ * against where the other cards are now, not where they were first placed.
+ */
+function cascadeFrom(pageX: number, pageY: number, skip?: Pin): { x: number; y: number } {
+  let px = pageX;
+  let py = pageY;
+  const tooClose = (): boolean => {
+    const left = clampPageLeft(px);
+    for (const p of pins) {
+      if (p === skip) continue;
+      const at = currentPagePos(p);
+      if (Math.abs(at.x - left) < 48 && Math.abs(at.y - py) < 48) return true;
+    }
+    return false;
+  };
+  for (let guard = 0; tooClose() && guard < 12; guard++) {
+    px += 36;
+    py += 36;
+  }
+  return { x: px, y: py };
+}
+
+/**
+ * Page point just below a pin's source text, if the text is still on the
+ * page. Null when the page removed or emptied it.
+ */
+function sourceAnchor(range: Range | null): { x: number; y: number } | null {
+  if (!range || range.collapsed || !range.startContainer.isConnected) return null;
+  if (typeof range.getBoundingClientRect !== 'function') return null;
+  const r = range.getBoundingClientRect();
+  if (!r.width && !r.height) return null;
+  return { x: r.left + window.scrollX, y: r.bottom + MARGIN + window.scrollY };
 }
 
 /** Viewport box of a card, clamped so the whole card is on screen. */
@@ -577,28 +721,48 @@ function clampToViewport(host: HTMLElement): { top: number; left: number } {
   const h = r.height || EST_HEIGHT;
   const top = Math.min(Math.max(MARGIN, r.top), Math.max(MARGIN, window.innerHeight - h - MARGIN));
   const left = Math.min(Math.max(MARGIN, r.left), Math.max(MARGIN, window.innerWidth - w - MARGIN));
-  return { top, left };
+  return avoidDock({ top, left }, w, h);
 }
 
-/** Pin ↔ float, keeping the card exactly where it is on screen (floats are brought into view). */
+/**
+ * Pin ↔ float. Floating keeps the card where it is on screen (brought into
+ * view). Pinning puts it back next to its source text when that text is
+ * still on the page, else where it is now, in page coordinates.
+ */
 function setPlacement(pin: Pin, placement: 'pinned' | 'floating'): void {
   if (pin.placement === placement) return;
   if (placement === 'floating') {
     const { top, left } = clampToViewport(pin.host);
     applyBox(pin.host, 'fixed', top, left);
   } else {
-    const r = pin.host.getBoundingClientRect();
-    applyBox(pin.host, 'absolute', r.top + window.scrollY, r.left + window.scrollX);
+    const anchor = sourceAnchor(pin.range);
+    if (anchor) {
+      const at = cascadeFrom(anchor.x, anchor.y, pin);
+      positionAbsolute(pin.host, at.x, at.y);
+    } else {
+      const r = pin.host.getBoundingClientRect();
+      applyBox(pin.host, 'absolute', r.top + window.scrollY, r.left + window.scrollX);
+    }
   }
   pin.placement = placement;
   pin.render();
 }
 
-function createPin(spec: PinSpec): Pin | null {
+/**
+ * Create a pinned card. `restore` is set by Undo: the card comes back with its
+ * own slot, and the transient card the user may have opened since stays.
+ */
+function createPin(spec: PinSpec, restore = false): Pin | null {
   try {
     // Allocate this pin's own highlight slot and mark its text in that color,
     // so the selected text stays tied to the card.
-    const slot = nextSlot();
+    let slot: number;
+    if (spec.slot !== undefined && !usedSlots.has(spec.slot)) {
+      slot = spec.slot;
+      usedSlots.add(slot);
+    } else {
+      slot = nextSlot();
+    }
     const range = spec.range;
     setPinHighlight(slot, range);
     const color = pinColor(slot);
@@ -614,19 +778,7 @@ function createPin(spec: PinSpec): Pin | null {
     // on the page), cascade it down-right so every pinned card stays visible.
     let px = spec.pageX;
     let py = spec.pageY;
-    if (!spec.box) {
-      let guard = 0;
-      const tooClose = (): boolean => {
-        for (const p of pins) {
-          if (Math.abs(p.pageX - px) < 48 && Math.abs(p.pageY - py) < 48) return true;
-        }
-        return false;
-      };
-      while (tooClose() && guard++ < 12) {
-        px += 36;
-        py += 36;
-      }
-    }
+    if (!spec.box) ({ x: px, y: py } = cascadeFrom(px, py));
     const placement = spec.placement ?? 'pinned';
     if (spec.box) applyBox(host, placement === 'floating' ? 'fixed' : 'absolute', spec.box.top, spec.box.left);
     else positionAbsolute(host, px, py);
@@ -693,11 +845,13 @@ function createPin(spec: PinSpec): Pin | null {
     pins.add(pin);
     pin.render();
 
-    // The value is pinned in its own slot; drop the transient card and its live
-    // amber highlight (the pin's colored highlight has taken over).
-    clearLiveHighlight();
-    teardownTransient();
-    closedPins = null;
+    if (!restore) {
+      // The value is pinned in its own slot; drop the transient card and its
+      // live amber highlight (the pin's colored highlight has taken over).
+      clearLiveHighlight();
+      teardownTransient();
+      closedPins = null;
+    }
     refreshDock();
     return pin;
   } catch {
@@ -727,7 +881,15 @@ let dockRoot: Root | null = null;
 let closedPins: PinSpec[] | null = null;
 
 function specOf(pin: Pin): PinSpec {
+  // The box we set (viewport for floating, page for pinned); the measured
+  // rect only when a style is missing.
+  const top = parseFloat(pin.host.style.getPropertyValue('top'));
+  const left = parseFloat(pin.host.style.getPropertyValue('left'));
   const r = pin.host.getBoundingClientRect();
+  const measured =
+    pin.placement === 'floating'
+      ? { top: r.top, left: r.left }
+      : { top: r.top + window.scrollY, left: r.left + window.scrollX };
   return {
     parsed: pin.parsed,
     count: pin.count,
@@ -737,10 +899,8 @@ function specOf(pin: Pin): PinSpec {
     compact: pin.compact,
     range: pin.range,
     placement: pin.placement,
-    box:
-      pin.placement === 'floating'
-        ? { top: r.top, left: r.left }
-        : { top: r.top + window.scrollY, left: r.left + window.scrollX },
+    slot: pin.slot,
+    box: Number.isFinite(top) && Number.isFinite(left) ? { top, left } : measured,
   };
 }
 
@@ -769,7 +929,9 @@ function togglePlacementAll(): void {
       if (offscreen) {
         const top = Math.min(window.innerHeight - EST_HEIGHT - MARGIN, 64 + cascade * 28);
         const left = Math.max(MARGIN, window.innerWidth - CARD_MAX_W - 24 - cascade * 28);
-        applyBox(pin.host, 'fixed', Math.max(MARGIN, top), left);
+        const r = pin.host.getBoundingClientRect();
+        const box = avoidDock({ top: Math.max(MARGIN, top), left }, r.width || CARD_MAX_W, r.height || EST_HEIGHT);
+        applyBox(pin.host, 'fixed', box.top, box.left);
         cascade += 1;
       }
     }
@@ -789,7 +951,10 @@ function undoCloseAll(): void {
   const specs = closedPins;
   closedPins = null;
   if (!specs) return;
-  for (const spec of specs) createPin(spec);
+  // Lowest slots first, so a slot taken meanwhile falls to the next free one
+  // without bumping a card that could have kept its own.
+  const ordered = [...specs].sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+  for (const spec of ordered) createPin(spec, true);
   refreshDock();
 }
 
@@ -830,7 +995,7 @@ function refreshDock(): void {
         top: 'auto',
         margin: '0',
         padding: '0',
-        'z-index': '2147483647',
+        'z-index': DOCK_Z,
       })) {
         dockHost.style.setProperty(k, v, 'important');
       }
@@ -930,8 +1095,12 @@ function renderNoMatch(rect: DOMRect, text: string, truncated: boolean): void {
 /** Read the active selection from the page OR from an input/textarea. */
 function readSelection(): { text: string; rect: DOMRect; range: Range | null } | null {
   const active = document.activeElement;
-  // Typing in a card's own search box is not a page selection.
-  if (active && inOurUi(active)) return null;
+  // Typing in a card's own search box is not a page selection. Focus on a
+  // card itself (it takes focus when it opens) still reads the page selection.
+  if (active && inOurUi(active)) {
+    const inner = active.shadowRoot?.activeElement;
+    if (!inner || inner.closest('input, textarea, select, [contenteditable="true"]')) return null;
+  }
 
   // <input> / <textarea>: use selectionStart/End and a mirror rect.
   if (
@@ -1107,11 +1276,14 @@ function install(): ContentInstance {
   prefsReady = loadPreferences().then((p) => {
     prefs = p;
     prefsLoaded = true;
+    syncHighlights();
   });
   const unsubscribe = onPreferencesChanged((p) => {
+    const marked = prefs.keepSelection;
     prefs = p;
     prefsLoaded = true;
     if (!p.selectToConvert) window.clearTimeout(debounceTimer);
+    if (p.keepSelection !== marked) syncHighlights();
   });
 
   document.addEventListener('mouseup', onMouseUp);
@@ -1119,6 +1291,7 @@ function install(): ContentInstance {
   document.addEventListener('keydown', onKeyDownSelect, true);
   document.addEventListener('mousedown', onDocMouseDown, true);
   document.addEventListener('keydown', onKeyDown, true);
+  document.addEventListener('keydown', onKeyDownBubble);
   document.addEventListener('contextmenu', onContextMenu, true);
   try {
     chrome.runtime.onMessage.addListener(onRuntimeMessage);
@@ -1139,6 +1312,7 @@ function install(): ContentInstance {
       document.removeEventListener('keydown', onKeyDownSelect, true);
       document.removeEventListener('mousedown', onDocMouseDown, true);
       document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('keydown', onKeyDownBubble);
       document.removeEventListener('contextmenu', onContextMenu, true);
       try {
         chrome.runtime.onMessage.removeListener(onRuntimeMessage);
@@ -1146,6 +1320,8 @@ function install(): ContentInstance {
         /* context already invalidated */
       }
       window.clearTimeout(debounceTimer);
+      // A retired copy must not write a size it remembered for later.
+      window.clearTimeout(sizeTimer);
       dismissTransient();
     },
   };

@@ -101,6 +101,8 @@ export const DOCK_STYLE = `
   border: 1px solid #e6e7ec; border-radius: 999px;
   box-shadow: 0 8px 24px rgba(15,17,21,0.14);
   padding: 4px; opacity: 0.78;
+  /* Never wider than a phone screen (the host sits 16px from the right edge). */
+  max-width: calc(100vw - 32px); flex-wrap: wrap; row-gap: 2px;
   transition: opacity 160ms ease, transform 160ms ease;
   animation: dock-in 200ms cubic-bezier(0.2, 0, 0, 1);
 }
@@ -171,10 +173,37 @@ export function PinDock(props: PinDockProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
+  const countRef = useRef<HTMLButtonElement>(null);
+  /** Set when the undo offer ends while focus was in it: focus the dock's first button next. */
+  const refocus = useRef(false);
   const timer = useRef<number | undefined>(undefined);
   const paused = useRef(false);
   const remaining = useRef(UNDO_MS);
   const startedAt = useRef(0);
+
+  /** True while keyboard focus is inside the dock. */
+  function focusInDock(): boolean {
+    const el = barRef.current;
+    const root = el?.getRootNode();
+    const active = root instanceof ShadowRoot ? root.activeElement : document.activeElement;
+    return Boolean(el && active && el.contains(active));
+  }
+  /** End the undo offer (Undo, Dismiss or timeout), keeping focus in the dock if it was there. */
+  function endOffer(action: () => void): void {
+    refocus.current = focusInDock();
+    action();
+  }
+  const endOfferRef = useRef(endOffer);
+  endOfferRef.current = endOffer;
+
+  // After the offer ends, focus would fall to the page: keep it on the dock
+  // (its first button) if the dock is still there. If it is gone (no cards
+  // left), focus falls back to the page body.
+  useEffect(() => {
+    if (closed !== null || !refocus.current) return;
+    refocus.current = false;
+    countRef.current?.focus({ preventScroll: true });
+  }, [closed]);
 
   // The undo offer times out unless the pointer or focus is on the dock.
   useEffect(() => {
@@ -183,9 +212,14 @@ export function PinDock(props: PinDockProps): JSX.Element {
     const arm = (): void => {
       window.clearTimeout(timer.current);
       startedAt.current = Date.now();
-      timer.current = window.setTimeout(props.onDismissUndo, remaining.current);
+      timer.current = window.setTimeout(() => endOfferRef.current(props.onDismissUndo), remaining.current);
     };
     arm();
+    // Move focus to Undo so keyboard and screen reader users can act on it.
+    // This programmatic focus does not pause the countdown (the listeners
+    // below are not attached yet); moving focus within the dock, or hovering
+    // it, does.
+    undoRef.current?.focus({ preventScroll: true });
     const el = barRef.current;
     let hovered = false;
     let focused = false;
@@ -247,17 +281,19 @@ export function PinDock(props: PinDockProps): JSX.Element {
 
   if (closed !== null) {
     return (
-      <div className="dock open" ref={barRef} role="status" aria-live="polite" onMouseDown={keepSelection}>
+      <div className="dock open" ref={barRef} role="group" aria-label="Closed cards" onMouseDown={keepSelection}>
         <style>{DOCK_STYLE}</style>
         <span className="toast">
-          Closed {closed} card{closed === 1 ? '' : 's'}
+          <span role="status" aria-live="polite">
+            Closed {closed} card{closed === 1 ? '' : 's'}
+          </span>
           <span className="timer" style={{ animationDuration: `${UNDO_MS}ms` }} aria-hidden="true" />
         </span>
-        <button ref={undoRef} type="button" className="undo" onClick={props.onUndo}>
+        <button ref={undoRef} type="button" className="undo" onClick={() => endOffer(props.onUndo)}>
           <Icon name="undo" />
           Undo
         </button>
-        <button type="button" className="btn" aria-label="Dismiss" title="Dismiss" onClick={props.onDismissUndo}>
+        <button type="button" className="btn" aria-label="Dismiss" title="Dismiss" onClick={() => endOffer(props.onDismissUndo)}>
           <Icon name="close" />
         </button>
       </div>
@@ -282,6 +318,7 @@ export function PinDock(props: PinDockProps): JSX.Element {
       <button
         type="button"
         className="count"
+        ref={countRef}
         aria-expanded={open}
         aria-label={`${label}. ${open ? 'Hide' : 'Show'} action names`}
         title={open ? 'Hide labels' : 'Show labels'}
@@ -322,7 +359,7 @@ export function PinDock(props: PinDockProps): JSX.Element {
         aria-label={allFloating ? 'Pin all to page' : 'Unpin all'}
         title={
           allFloating
-            ? 'Pin all to page: each card stays where it is on the page and scrolls with it'
+            ? 'Pin all to page: each card goes back next to its text and scrolls with the page'
             : 'Unpin all: cards leave their spot on the page and float on screen, so they stay in view while you scroll'
         }
         onClick={props.onTogglePlacementAll}

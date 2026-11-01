@@ -4,6 +4,7 @@ import { ClockApp } from '../src/clock/Clock';
 import {
   applyOrder,
   dayPhase,
+  diffFromHome,
   formatDiff,
   makeHome,
   relativeDay,
@@ -11,6 +12,14 @@ import {
   workStatus,
 } from '../src/clock/model';
 import { DEFAULT_PREFERENCES, type Preferences } from '../src/types';
+import * as model from '../src/clock/model';
+import { fromSyncItems } from '../src/lib/storage';
+
+// Pass-through spy on the one model call each ZoneCard render makes, to count card renders.
+vi.mock('../src/clock/model', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/clock/model')>();
+  return { ...real, dayProgress: vi.fn(real.dayProgress) };
+});
 
 const KEY = 'tz-extension-prefs';
 
@@ -36,12 +45,15 @@ function chromeMock(): StorageMock {
   return (globalThis as unknown as { chrome: StorageMock }).chrome;
 }
 
-/** The last preferences written through savePreferences. */
+/**
+ * The last preferences written through savePreferences, read back the way
+ * storage does: the legacy item holds IANA zones only, the extras item the rest.
+ */
 function lastSaved(): Preferences {
   const calls = chromeMock().storage.sync.set.mock.calls;
-  const last = calls[calls.length - 1]?.[0] as Record<string, Preferences> | undefined;
+  const last = calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
   if (!last?.[KEY]) throw new Error('nothing saved');
-  return last[KEY];
+  return fromSyncItems(last);
 }
 
 async function flush(): Promise<void> {
@@ -184,13 +196,18 @@ describe('ClockApp', () => {
     expect(within(card('UTC-08:00')).queryByRole('button', { name: /Reorder|Remove|Make/ })).toBeNull();
   });
 
-  it('toggles 12/24-hour and persists it', async () => {
+  it('toggles 12/24-hour with a labelled segmented control and persists it', async () => {
     await mount();
-    const btn12 = screen.getByRole('button', { name: '12h' });
+    const group = screen.getByRole('group', { name: 'Clock format' });
+    const btn12 = within(group).getByRole('button', { name: '12-hour clock' });
+    const btn24 = within(group).getByRole('button', { name: '24-hour clock' });
+    expect(btn12).toHaveTextContent('12h');
+    expect(btn24).toHaveAttribute('aria-pressed', 'true');
     expect(btn12).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(btn12);
     expect(lastSaved().hour12).toBe(true);
     expect(btn12).toHaveAttribute('aria-pressed', 'true');
+    expect(btn24).toHaveAttribute('aria-pressed', 'false');
     expect(timeOf('UTC')).toBe('8:00:00PM');
     expect(timeOf('UTC-08:00')).toBe('12:00:00PM');
   });
@@ -225,6 +242,94 @@ describe('ClockApp', () => {
     expect(zones).toEqual(['UTC-08:00', 'abbr:PDT']);
     expect(within(card('abbr:PDT')).getByRole('heading', { level: 3 })).toHaveTextContent('PDT');
     expect(within(card('abbr:PDT')).getByText('+1h')).toBeInTheDocument();
+  });
+});
+
+describe('ClockApp rendering cost', () => {
+  it('measures card positions only when the order changes, not on each tick', async () => {
+    await mount();
+    const left = vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get');
+    const top = vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get');
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3005);
+      });
+      expect(timeOf('UTC')).toBe('20:00:03');
+      expect(left).not.toHaveBeenCalled();
+      expect(top).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(card('UTC+05:45'), { key: 'ArrowDown', altKey: true });
+      // One measurement of every card for the reorder's FLIP.
+      expect(left).toHaveBeenCalledTimes(3);
+      expect(top).toHaveBeenCalledTimes(3);
+    } finally {
+      left.mockRestore();
+      top.mockRestore();
+    }
+  });
+
+  it('cards re-render only when what they show changes', async () => {
+    await mount();
+    const renders = vi.mocked(model.dayProgress);
+    renders.mockClear();
+    // Live: each card shows seconds, so each re-renders once per tick.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1005);
+    });
+    expect(renders).toHaveBeenCalledTimes(3);
+
+    // Planning: the shown instant holds still, so ticks re-render no card.
+    fireEvent.change(screen.getByLabelText('Shift all clocks'), { target: { value: '4' } });
+    renders.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(renders).not.toHaveBeenCalled();
+
+    // A change one card shows (12/24h) re-renders all of them, once.
+    fireEvent.click(screen.getByRole('button', { name: '12-hour clock' }));
+    expect(renders).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('clock across DST transitions', () => {
+  it('New York spring-forward (2026-03-08 07:00 UTC): diff and relative day', () => {
+    const before = Date.UTC(2026, 2, 8, 6, 59); // 01:59 EST, 06:59 London
+    const after = Date.UTC(2026, 2, 8, 7, 0); // 03:00 EDT, 07:00 London
+    expect(diffFromHome(before, 'Europe/London', 'America/New_York')).toBe(300);
+    expect(diffFromHome(after, 'Europe/London', 'America/New_York')).toBe(240);
+    expect(relativeDay(before, 'Europe/London', 'America/New_York')).toBe('Today');
+    // 23:30 EST on the 7th vs 04:30 on the 8th in London.
+    expect(relativeDay(Date.UTC(2026, 2, 8, 4, 30), 'Europe/London', 'America/New_York')).toBe('Tomorrow');
+    expect(relativeDay(Date.UTC(2026, 2, 8, 4, 30), 'America/New_York', 'Europe/London')).toBe('Yesterday');
+  });
+
+  it('London spring-forward (2026-03-29 01:00 UTC): diff and relative day', () => {
+    const before = Date.UTC(2026, 2, 29, 0, 59); // 00:59 GMT, 20:59 EDT on the 28th
+    const after = Date.UTC(2026, 2, 29, 1, 0); // 02:00 BST, 21:00 EDT on the 28th
+    expect(diffFromHome(before, 'America/New_York', 'Europe/London')).toBe(-240);
+    expect(diffFromHome(after, 'America/New_York', 'Europe/London')).toBe(-300);
+    expect(diffFromHome(before, 'UTC', 'Europe/London')).toBe(0);
+    expect(diffFromHome(after, 'UTC', 'Europe/London')).toBe(-60);
+    expect(relativeDay(before, 'America/New_York', 'Europe/London')).toBe('Yesterday');
+    expect(relativeDay(after, 'America/New_York', 'Europe/London')).toBe('Yesterday');
+    // 23:30 UTC on the 28th is 23:30 GMT in London: same day.
+    expect(relativeDay(Date.UTC(2026, 2, 28, 23, 30), 'UTC', 'Europe/London')).toBe('Today');
+  });
+
+  it('cards show the new gap right after the transition', async () => {
+    vi.setSystemTime(Date.UTC(2026, 2, 29, 0, 59, 58));
+    await mount({ ...base, homeZone: 'Europe/London', targetZones: ['America/New_York', 'UTC'] });
+    expect(within(card('America/New_York')).getByText('−4h')).toBeInTheDocument();
+    expect(within(card('America/New_York')).getByText('Yesterday')).toBeInTheDocument();
+    expect(within(card('UTC')).getByText('same time')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2010);
+    });
+    expect(timeOf('Europe/London')).toBe('02:00:00');
+    expect(within(card('America/New_York')).getByText('−5h')).toBeInTheDocument();
+    expect(within(card('UTC')).getByText('−1h')).toBeInTheDocument();
+    expect(within(card('UTC')).getByText('Today')).toBeInTheDocument();
   });
 });
 

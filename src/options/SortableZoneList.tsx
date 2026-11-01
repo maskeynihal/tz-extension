@@ -382,8 +382,21 @@ export function SortableList(props: SortableListProps): JSX.Element {
 
   function onPointerDown(e: ReactPointerEvent<HTMLButtonElement>, key: string): void {
     const list = listRef.current;
-    if (!list || drag.current || !e.isPrimary || exiting.current.size > 0) return;
+    if (!list || !e.isPrimary || exiting.current.size > 0) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const stale = drag.current;
+    if (stale) {
+      // A drag is only live while its handle still holds that pointer. A
+      // pointer that is pressed again, or a drag whose capture is gone (its
+      // pointerup or cancel never arrived), is stuck: drop it so it cannot
+      // block this one.
+      const live =
+        stale.pointerId !== e.pointerId &&
+        stale.handle.isConnected &&
+        stale.handle.hasPointerCapture?.(stale.pointerId) === true;
+      if (live) return;
+      endDrag('cancel');
+    }
     const rows = rowsOf(list);
     const from = rows.findIndex((r) => r.dataset.sortKey === key);
     const row = rows[from];
@@ -544,6 +557,11 @@ export function SortableList(props: SortableListProps): JSX.Element {
                 onPointerMove={onPointerMove}
                 onPointerUp={(e) => onPointerEnd(e, 'drop')}
                 onPointerCancel={(e) => onPointerEnd(e, 'cancel')}
+                // Capture can be taken away without a pointerup or
+                // pointercancel (e.g. the handle re-renders or the window loses
+                // the pointer). Our own release after a drop fires this too,
+                // but by then the drag is already over and it is a no-op.
+                onLostPointerCapture={(e) => onPointerEnd(e, 'cancel')}
               >
                 <GripIcon />
               </button>

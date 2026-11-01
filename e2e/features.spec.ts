@@ -46,7 +46,10 @@ test.describe('formats, context menu, select-to-convert', () => {
   async function setPrefs(patch: Record<string, unknown>): Promise<void> {
     await sw.evaluate(
       async ({ key, patch }) => {
+        // Write a clean single-item state (as a fresh install would read it):
+        // drop the extras item so the patch is not taken for an old device's edit.
         const got = await chrome.storage.sync.get(key);
+        await chrome.storage.sync.remove(`${key}-v2-extras`);
         await chrome.storage.sync.set({ [key]: { ...(got[key] ?? {}), homeZone: 'UTC', ...patch } });
       },
       { key: KEY, patch },

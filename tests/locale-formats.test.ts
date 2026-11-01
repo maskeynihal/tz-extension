@@ -347,7 +347,11 @@ describe('day/month ambiguity', () => {
   it('the ambiguous Talend example offers both readings', () => {
     const [mdy] = at('03/11/22', 'mdy');
     expect(iso(mdy!.epochMs)).toBe('2022-03-11T00:00:00.000Z');
-    expect(mdy!.dateOrder).toEqual({ order: 'mdy', alternate: { epochMs: Date.UTC(2022, 10, 3), order: 'dmy' } });
+    expect(mdy!.dateOrder).toEqual({
+      order: 'mdy',
+      date: { y: 2022, mo: 3, d: 11 },
+      alternate: { epochMs: Date.UTC(2022, 10, 3), order: 'dmy', date: { y: 2022, mo: 11, d: 3 } },
+    });
     const [dmy] = at('03/11/22', 'dmy');
     expect(iso(dmy!.epochMs)).toBe('2022-11-03T00:00:00.000Z');
     expect(dmy!.dateOrder?.alternate.epochMs).toBe(Date.UTC(2022, 2, 11));
@@ -356,7 +360,11 @@ describe('day/month ambiguity', () => {
   it('follows the order setting, day first by default, and keeps the time', () => {
     expect(iso(at('03/04/2024 10:30')[0]!.epochMs)).toBe('2024-04-03T10:30:00.000Z');
     expect(iso(at('03/04/2024 10:30', 'mdy')[0]!.epochMs)).toBe('2024-03-04T10:30:00.000Z');
-    expect(at('03/04/2024 10:30', 'mdy')[0]!.dateOrder?.alternate).toEqual({ epochMs: Date.UTC(2024, 3, 3, 10, 30), order: 'dmy' });
+    expect(at('03/04/2024 10:30', 'mdy')[0]!.dateOrder?.alternate).toEqual({
+      epochMs: Date.UTC(2024, 3, 3, 10, 30),
+      order: 'dmy',
+      date: { y: 2024, mo: 4, d: 3 },
+    });
     expect(iso(at('05:06 03/04/24', 'mdy')[0]!.epochMs)).toBe('2024-03-04T05:06:00.000Z');
   });
 

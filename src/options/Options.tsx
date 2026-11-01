@@ -261,9 +261,15 @@ export function Options(): JSX.Element {
 
         <div className="tzx-field">
           <h3 className="tzx-field-label">Clock format</h3>
-          <button type="button" className="tzx-chip" onClick={() => update({ ...prefs, hour12: !prefs.hour12 })}>
-            {prefs.hour12 ? '12-hour' : '24-hour'}
-          </button>
+          <Segmented
+            label="Clock format"
+            value={prefs.hour12 ? '12' : '24'}
+            options={[
+              { value: '12', label: '12-hour (3:04 PM)' },
+              { value: '24', label: '24-hour (15:04)' },
+            ]}
+            onChange={(v) => update({ ...prefs, hour12: v === '12' })}
+          />
         </div>
 
         <div className="tzx-field">

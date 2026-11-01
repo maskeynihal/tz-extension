@@ -1,30 +1,51 @@
 import { DEFAULT_PREFERENCES, type Preferences } from '../types';
-import { isValidZone } from './tz';
+import { ianaEquivalent, isValidZone, resolveZone } from './tz';
 import { BUILTIN_FORMAT_IDS } from './builtin-formats';
 import { MAX_ADVANCED_PATTERN } from './custom-formats';
 
-const KEY = 'tz-extension-prefs';
+/** The settings item every version reads and writes. */
+export const PREFS_KEY = 'tz-extension-prefs';
+/** Second sync item with what 0.6.x can't keep (see "Sync across versions"). */
+export const PREFS_EXTRAS_KEY = 'tz-extension-prefs-v2-extras';
 
-type StorageArea = chrome.storage.StorageArea | undefined;
+const KEY = PREFS_KEY;
+const EXTRAS_KEY = PREFS_EXTRAS_KEY;
 
-function hasChromeStorage(): boolean {
-  return (
-    typeof chrome !== 'undefined' &&
-    typeof chrome.storage !== 'undefined' &&
-    (typeof chrome.storage.sync !== 'undefined' ||
-      typeof chrome.storage.local !== 'undefined')
-  );
-}
-
-function area(): StorageArea {
-  if (!hasChromeStorage()) return undefined;
-  return chrome.storage.sync ?? chrome.storage.local;
-}
+/*
+ * Backends
+ * --------
+ * - Extension pages and content scripts: chrome.storage (sync, else local).
+ * - The website: localStorage, only after it calls enableWebStorageBackend().
+ * - Anything else: none. Loads give the defaults, saves report failure, and
+ *   localStorage is never touched, so a content script can never fall back to
+ *   a host page's storage.
+ */
+let webOptIn = false;
 
 /**
- * Outside the extension (the website), settings live in localStorage under
- * the same key and shape.
+ * Opt in to keeping settings in this origin's localStorage. Only the website
+ * calls it, first thing in each entry point. It takes precedence over
+ * chrome.storage.
  */
+export function enableWebStorageBackend(): void {
+  webOptIn = true;
+}
+
+type Backend =
+  | { readonly kind: 'chrome'; readonly area: chrome.storage.StorageArea; readonly name: 'sync' | 'local' }
+  | { readonly kind: 'web'; readonly storage: Storage | undefined }
+  | { readonly kind: 'none' };
+
+function backend(): Backend {
+  if (webOptIn) return { kind: 'web', storage: web() };
+  if (typeof chrome !== 'undefined' && typeof chrome.storage !== 'undefined') {
+    if (typeof chrome.storage.sync !== 'undefined') return { kind: 'chrome', area: chrome.storage.sync, name: 'sync' };
+    if (typeof chrome.storage.local !== 'undefined') return { kind: 'chrome', area: chrome.storage.local, name: 'local' };
+  }
+  return { kind: 'none' };
+}
+
+/** This origin's localStorage, when the browser allows it. */
 function web(): Storage | undefined {
   try {
     return typeof localStorage !== 'undefined' ? localStorage : undefined;
@@ -51,13 +72,27 @@ export function newFormatId(): string {
 /** chrome.storage.sync allows 8,192 bytes per item (key + JSON value). */
 export const SYNC_ITEM_LIMIT = 8192;
 
-/** Bytes these preferences take as one sync item, counted as UTF-8 to be safe. */
+function itemBytes(key: string, value: unknown): number {
+  return new TextEncoder().encode(key + JSON.stringify(value)).length;
+}
+
+/**
+ * Bytes of the largest sync item these preferences are written as, counted
+ * as UTF-8 to be safe. Settings save only while this is at most
+ * SYNC_ITEM_LIMIT.
+ */
 export function syncItemBytes(prefs: Preferences): number {
-  return new TextEncoder().encode(KEY + JSON.stringify(sanitize(prefs))).length;
+  return Math.max(...Object.entries(toSyncItems(prefs)).map(([k, v]) => itemBytes(k, v)));
 }
 
 /** Outcome of a save, so settings UIs can tell the user when it did not stick. */
 export type SaveResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
+
+const TOO_LARGE: SaveResult = {
+  ok: false,
+  error:
+    'Settings are too large for browser sync storage. Remove some custom formats or shorten their labels, then try again.',
+};
 
 /** Clamp any persisted blob back into a valid Preferences object. */
 export function sanitize(input: unknown): Preferences {
@@ -148,21 +183,143 @@ export function sanitize(input: unknown): Preferences {
   };
 }
 
+/*
+ * Sync across versions
+ * --------------------
+ * Builds up to 0.6.x read and write only PREFS_KEY. Their sanitize keeps IANA
+ * ids only and drops fields they don't know, and their next save syncs that
+ * loss to every device. So this build writes two items:
+ *
+ * - PREFS_KEY ("legacy"): every field, but zone values that 0.6.x accepts.
+ *   targetZones loses UTC±hh:mm and abbr:* ids; a homeZone of that kind
+ *   becomes its IANA equivalent (abbr:PT → America/Los_Angeles,
+ *   UTC+05:45 → Asia/Kathmandu, else Etc/GMT±N or UTC).
+ * - PREFS_EXTRAS_KEY ("extras"): the full homeZone and targetZones, the
+ *   fields 0.6.x drops (cardSize, lastCardSize, numericDateOrder), and a
+ *   fingerprint of the legacy homeZone and targetZones just written.
+ *
+ * Reading (fromSyncItems):
+ * - No extras: the legacy item as is.
+ * - homeZone: if the legacy value still matches its fingerprint, nobody else
+ *   changed it, so use the full value from extras. Otherwise an old device
+ *   picked a new home; use the legacy value.
+ * - targetZones: if the legacy list matches its fingerprint, use the full list
+ *   from extras. Otherwise an old device edited the list. Its list is the
+ *   truth for IANA ids (order, additions, removals), and each new-style id
+ *   from extras goes back in right after the IANA id that preceded it in the
+ *   full list (at the start when none did, or that id was removed and no
+ *   earlier one survives).
+ * - cardSize, lastCardSize, numericDateOrder: from extras, else legacy.
+ * - Everything else: from legacy.
+ * The localStorage backend stores the full preferences in one item; no old
+ * version reads it.
+ */
+
+/** New-only fields that 0.6.x drops on save. */
+const EXTRA_FIELDS = ['cardSize', 'lastCardSize', 'numericDateOrder'] as const;
+
+/** Zone ids that 0.6.x accepts: IANA ids only. */
+function isLegacyZone(zone: string): boolean {
+  return resolveZone(zone)?.kind === 'iana';
+}
+
+/** FNV-1a (32-bit) of the JSON form, as hex. Detects edits, not tampering. */
+function fingerprint(value: unknown): string {
+  const s = JSON.stringify(value) ?? '';
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+/** The two sync items for these preferences. */
+export function toSyncItems(prefs: Preferences): Record<string, unknown> {
+  const clean = sanitize(prefs);
+  const targetZones = clean.targetZones.filter(isLegacyZone);
+  const homeZone = isLegacyZone(clean.homeZone) ? clean.homeZone : ianaEquivalent(clean.homeZone);
+  // The legacy item keeps the new-only fields too: 0.6.x ignores them, and a
+  // reader without extras still finds them.
+  const legacy: Preferences = { ...clean, homeZone, targetZones };
+  const extras = {
+    v: 1,
+    homeZone: clean.homeZone,
+    targetZones: clean.targetZones,
+    cardSize: clean.cardSize,
+    lastCardSize: clean.lastCardSize,
+    numericDateOrder: clean.numericDateOrder,
+    fpHome: fingerprint(homeZone),
+    fpTargets: fingerprint(targetZones),
+  };
+  return { [KEY]: legacy, [EXTRAS_KEY]: extras };
+}
+
+function record(v: unknown): Record<string, unknown> | null {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+/** Re-insert the new-style ids of `full` into an old device's `legacy` list. */
+function mergeTargets(legacy: readonly unknown[], full: readonly unknown[]): string[] {
+  const out = legacy.filter((z): z is string => typeof z === 'string');
+  let at = 0;
+  for (const z of full) {
+    if (typeof z !== 'string') continue;
+    if (isLegacyZone(z)) {
+      const i = out.indexOf(z);
+      if (i >= 0) at = i + 1;
+    } else if (!out.includes(z)) {
+      out.splice(at, 0, z);
+      at += 1;
+    }
+  }
+  return out;
+}
+
+/** Preferences from the stored sync items (rules under "Sync across versions"). */
+export function fromSyncItems(items: Record<string, unknown> | undefined | null): Preferences {
+  const legacy = record(items?.[KEY]);
+  const extras = record(items?.[EXTRAS_KEY]);
+  if (!extras) return sanitize(legacy ?? undefined);
+  const out: Record<string, unknown> = { ...(legacy ?? {}) };
+  if (!legacy || typeof legacy.homeZone !== 'string' || fingerprint(legacy.homeZone) === extras.fpHome) {
+    out.homeZone = extras.homeZone;
+  }
+  if (!legacy || !Array.isArray(legacy.targetZones) || fingerprint(legacy.targetZones) === extras.fpTargets) {
+    out.targetZones = extras.targetZones;
+  } else if (Array.isArray(extras.targetZones)) {
+    out.targetZones = mergeTargets(legacy.targetZones, extras.targetZones);
+  }
+  for (const f of EXTRA_FIELDS) if (extras[f] !== undefined) out[f] = extras[f];
+  return sanitize(out);
+}
+
+/**
+ * Last stored items seen in this context, per storage area. A change event
+ * carries only the item that changed; the other comes from here.
+ */
+let known: { readonly area: chrome.storage.StorageArea; readonly items: Record<string, unknown> } | null = null;
+
+function remember(area: chrome.storage.StorageArea, items: Record<string, unknown> | undefined): void {
+  known = { area, items: { [KEY]: items?.[KEY], [EXTRAS_KEY]: items?.[EXTRAS_KEY] } };
+}
+
 export async function loadPreferences(): Promise<Preferences> {
-  const a = area();
-  if (!a) {
-    const w = web();
-    if (!w) return DEFAULT_PREFERENCES;
+  const b = backend();
+  if (b.kind === 'none') return DEFAULT_PREFERENCES;
+  if (b.kind === 'web') {
+    if (!b.storage) return DEFAULT_PREFERENCES;
     try {
-      const raw = w.getItem(KEY);
+      const raw = b.storage.getItem(KEY);
       return sanitize(raw ? JSON.parse(raw) : undefined);
     } catch {
       return DEFAULT_PREFERENCES;
     }
   }
   try {
-    const got = await a.get(KEY);
-    return sanitize(got?.[KEY]);
+    const got: Record<string, unknown> | undefined = await b.area.get<Record<string, unknown>>([KEY, EXTRAS_KEY]);
+    remember(b.area, got);
+    return fromSyncItems(got);
   } catch {
     return DEFAULT_PREFERENCES;
   }
@@ -170,43 +327,48 @@ export async function loadPreferences(): Promise<Preferences> {
 
 /**
  * Persist preferences. Never throws: a failure (sync quota, restricted
- * context) resolves to `{ ok: false, error }` and the caller keeps its
- * in-memory copy.
+ * context, no storage) resolves to `{ ok: false, error }` and the caller
+ * keeps its in-memory copy.
  */
 export async function savePreferences(prefs: Preferences): Promise<SaveResult> {
-  const a = area();
-  if (!a) {
-    const w = web();
-    if (!w) return { ok: true };
+  const b = backend();
+  if (b.kind === 'none') return { ok: false, error: 'Settings storage is not available here.' };
+  if (b.kind === 'web') {
+    if (!b.storage) return { ok: false, error: 'Could not save settings: this browser blocks site storage.' };
     try {
       const clean = sanitize(prefs);
-      w.setItem(KEY, JSON.stringify(clean));
+      b.storage.setItem(KEY, JSON.stringify(clean));
       for (const l of webListeners) l(clean);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: `Could not save settings: ${e instanceof Error ? e.message : String(e)}` };
     }
   }
+  const items = toSyncItems(prefs);
+  if (b.name === 'sync' && Object.entries(items).some(([k, v]) => itemBytes(k, v) > SYNC_ITEM_LIMIT)) {
+    return TOO_LARGE;
+  }
   try {
-    await a.set({ [KEY]: sanitize(prefs) });
+    await b.area.set(items);
+    remember(b.area, items);
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (/quota/i.test(msg)) {
-      return {
-        ok: false,
-        error:
-          'Settings are too large for browser sync storage. Remove some custom formats or shorten their labels, then try again.',
-      };
-    }
+    if (/quota/i.test(msg)) return TOO_LARGE;
     return { ok: false, error: `Could not save settings: ${msg}` };
   }
 }
 
-/** Subscribe to external changes (other tabs/windows). Returns an unsubscribe fn. */
+/**
+ * Subscribe to changes made elsewhere (other tabs, windows, devices) and,
+ * on the website, in this tab. The callback gets the merged preferences
+ * whichever sync item changed. Returns an unsubscribe fn.
+ */
 export function onPreferencesChanged(cb: (prefs: Preferences) => void): () => void {
-  if (!hasChromeStorage() || typeof chrome.storage.onChanged === 'undefined') {
-    if (!web() || typeof window === 'undefined') return () => {};
+  const b = backend();
+  if (b.kind === 'none') return () => {};
+  if (b.kind === 'web') {
+    if (!b.storage || typeof window === 'undefined') return () => {};
     // Other tabs: the storage event. This tab: our own listener set.
     const onStorage = (e: StorageEvent): void => {
       if (e.key !== KEY) return;
@@ -223,13 +385,32 @@ export function onPreferencesChanged(cb: (prefs: Preferences) => void): () => vo
       webListeners.delete(cb);
     };
   }
-  const listener = (
-    changes: { [k: string]: chrome.storage.StorageChange },
-    _areaName: string,
-  ): void => {
-    if (KEY in changes) {
-      cb(sanitize(changes[KEY]?.newValue));
+  if (typeof chrome.storage.onChanged === 'undefined') return () => {};
+  const { area, name } = b;
+  let seq = 0;
+  const listener = (changes: { [k: string]: chrome.storage.StorageChange }, areaName: string): void => {
+    if (areaName && areaName !== name) return;
+    if (!(KEY in changes) && !(EXTRAS_KEY in changes)) return;
+    const apply = (base: Record<string, unknown> | undefined): void => {
+      const items: Record<string, unknown> = { [KEY]: base?.[KEY], [EXTRAS_KEY]: base?.[EXTRAS_KEY] };
+      for (const k of [KEY, EXTRAS_KEY]) if (k in changes) items[k] = changes[k]?.newValue;
+      remember(area, items);
+      cb(fromSyncItems(items));
+    };
+    if (known && known.area === area) {
+      apply(known.items);
+      return;
     }
+    // Nothing read yet in this context: fetch the other item first.
+    const mine = ++seq;
+    void Promise.resolve(area.get<Record<string, unknown>>([KEY, EXTRAS_KEY])).then(
+      (got) => {
+        if (mine === seq) apply(got);
+      },
+      () => {
+        if (mine === seq) apply(undefined);
+      },
+    );
   };
   chrome.storage.onChanged.addListener(listener);
   return () => chrome.storage.onChanged.removeListener(listener);

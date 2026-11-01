@@ -29,11 +29,33 @@ export interface ParsedTime {
   /**
    * Set when a numeric date could be day-first or month-first (03/04/2024).
    * `order` is the reading used for epochMs; `alternate` is the other one.
+   * `date` / `alternate.date` are the calendar fields as written in the source
+   * (wall clock of the source zone), so labels never need a zone round-trip.
    */
   readonly dateOrder?: {
     readonly order: NumericDateOrder;
-    readonly alternate: { readonly epochMs: number; readonly order: NumericDateOrder };
+    readonly date: CalendarDate;
+    readonly alternate: {
+      readonly epochMs: number;
+      readonly order: NumericDateOrder;
+      readonly date: CalendarDate;
+    };
   };
+}
+
+/** A calendar date as written in the source text. `mo` is 1-12. */
+export interface CalendarDate {
+  readonly y: number;
+  readonly mo: number;
+  readonly d: number;
+}
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "4 Mar 2024" for 'dmy', "Mar 4, 2024" for 'mdy'. Never touches a timezone. */
+export function formatCalendarDate(date: CalendarDate, order: NumericDateOrder): string {
+  const m = SHORT_MONTHS[date.mo - 1] ?? String(date.mo);
+  return order === 'dmy' ? `${date.d} ${m} ${date.y}` : `${m} ${date.d}, ${date.y}`;
 }
 
 export type ParseKind =

@@ -2,16 +2,31 @@
 // extension ships (parse.ts / tz.ts / storage.ts) and the same searchable zone
 // picker, so the demo is the real thing, not a reimplementation.
 //
-// Settings live in localStorage through storage.ts (it falls back to
-// localStorage when chrome.storage is absent), so zones, 12/24h and the
-// day/month order are shared with the website's world clock and survive reloads.
+// Settings live in localStorage through storage.ts (the website opts in with
+// enableWebStorageBackend below), so zones, 12/24h and the day/month order are
+// shared with the website's world clock, follow edits made in other tabs, and
+// survive reloads.
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { parseTimes, type ParseOptions } from '../src/lib/parse';
-import { isValidZone, sameZone, toIsoUtc, viewInZone, zoneLabel, resolveZone, epochMsToWallClock } from '../src/lib/tz';
-import { loadPreferences, onPreferencesChanged, savePreferences } from '../src/lib/storage';
+import { isValidZone, sameZone, toIsoUtc, viewInZone, zoneLabel, resolveZone } from '../src/lib/tz';
+import {
+  loadPreferences,
+  onPreferencesChanged,
+  savePreferences,
+  enableWebStorageBackend,
+} from '../src/lib/storage';
 import { ZonePicker } from '../src/popup/ZonePicker';
-import { DEFAULT_PREFERENCES, type NumericDateOrder, type ParsedTime, type Preferences } from '../src/types';
+import { readingLabel } from './reading';
+import {
+  DEFAULT_PREFERENCES,
+  type NumericDateOrder,
+  type ParsedTime,
+  type Preferences,
+} from '../src/types';
+
+// First: the website keeps settings in this site's localStorage.
+enableWebStorageBackend();
 
 const SUGGESTED = ['UTC', 'America/New_York', 'Europe/London', 'Asia/Kolkata', 'Asia/Tokyo', 'abbr:PT'];
 
@@ -34,12 +49,6 @@ function shownZones(prefs: Preferences): string[] {
   const out = [prefs.homeZone];
   for (const z of prefs.targetZones) if (!out.some((o) => sameZone(o, z))) out.push(z);
   return out;
-}
-
-/** "22 Mar" for day-first, "Mar 22" for month-first, from the wall clock in `zone`. */
-function dayMonth(epochMs: number, zone: string, order: NumericDateOrder): string {
-  const d = epochMsToWallClock(epochMs, zone);
-  return d.toLocaleDateString(order === 'dmy' ? 'en-GB' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 /** The reading of an ambiguous numeric date that matches the saved preference. */
@@ -136,14 +145,11 @@ function mountDemo(): void {
       return;
     }
     orderBox.hidden = false;
-    const zone = p.sourceZone ?? p.assumedZone;
-    const reading = (order: NumericDateOrder): number =>
-      order === p.dateOrder?.order ? p.epochMs : p.dateOrder?.alternate.epochMs ?? p.epochMs;
     orderBox.append(h('span', { class: 'demo-order-label' }, ['Read as']));
     for (const order of ['dmy', 'mdy'] as const) {
       const on = prefs.numericDateOrder === order;
       const b = h('button', { class: 'demo-chip' + (on ? ' is-on' : ''), type: 'button', 'aria-pressed': String(on) }, [
-        `${dayMonth(reading(order), zone, order)} (${order === 'dmy' ? 'day first' : 'month first'})`,
+        `${readingLabel(p, order) ?? ''} (${order === 'dmy' ? 'day first' : 'month first'})`,
       ]);
       b.addEventListener('click', () => {
         if (prefs.numericDateOrder !== order) save({ ...prefs, numericDateOrder: order });

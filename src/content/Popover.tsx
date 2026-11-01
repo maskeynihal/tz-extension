@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DateOnlyPolicy, NumericDateOrder, ParsedTime, Preferences } from '../types';
-import { resolveLocalZone } from '../types';
+import { formatCalendarDate, resolveLocalZone } from '../types';
 import { viewInZone, isValidZone, sameZone, zoneLabel, resolveZone } from '../lib/tz';
 import { SCAN_LIMIT } from '../lib/parse';
 import { ZonePicker, ZONE_PICKER_CSS } from '../popup/ZonePicker';
@@ -89,28 +89,34 @@ function Icon({ name }: { readonly name: 'pin' | 'float' | 'compact' | 'expand' 
   }
 }
 
-/** "22 Mar" for an instant in a zone (the day/month picker labels). */
-function dayMonth(epochMs: number, zone: string): string {
-  try {
-    const tz = resolveZone(zone)?.tz ?? zone;
-    if (/^[+-]\d{2}:\d{2}$/.test(tz)) {
-      const sign = tz.startsWith('-') ? -1 : 1;
-      const mins = sign * (Number(tz.slice(1, 3)) * 60 + Number(tz.slice(4, 6)));
-      return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(
-        new Date(epochMs + mins * 60_000),
-      );
-    }
-    return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: tz }).format(new Date(epochMs));
-  } catch {
-    return '';
-  }
+/**
+ * Controls that are not text. A mousedown on one of them must not start a
+ * selection inside the card, which would drop the page selection (and the
+ * user's chance to copy it). The card's own background counts too.
+ */
+const NON_TEXT_CONTROLS = 'button, [role="button"], .tzx-head, .tzx-order, .tzx-order-btn';
+
+/**
+ * Keep the page selection when the user clicks a card control (so copy still
+ * works), but let a mousedown on the card's text through, so the converted
+ * times can be selected and copied.
+ */
+export function keepPageSelection(e: React.MouseEvent): void {
+  const t = e.target;
+  if (!(t instanceof Element)) return;
+  if (t.closest('input, textarea, select, [contenteditable="true"]')) return;
+  if (t === e.currentTarget || t.closest(NON_TEXT_CONTROLS)) e.preventDefault();
 }
 
-/** Keep the page selection when the user clicks inside a card (so copy still works). */
-function keepPageSelection(e: React.MouseEvent): void {
-  const t = e.target;
-  if (t instanceof Element && t.closest('input, textarea, select, [contenteditable="true"]')) return;
-  e.preventDefault();
+/** "day first" / "month first", for labels and titles. */
+function orderName(order: NumericDateOrder): string {
+  return order === 'dmy' ? 'day first' : 'month first';
+}
+
+/** True when nothing on the page holds focus (so focusing the card takes it from no one). */
+function pageFocusIsFree(): boolean {
+  const a = document.activeElement;
+  return !a || a === document.body || a === document.documentElement;
 }
 
 const LOCAL_ZONE = resolveLocalZone();
@@ -239,34 +245,34 @@ ${ZONE_PICKER_CSS}
 .tzx-card.floating { border-style: dashed; border-color: #1313ba; }
 .tzx-floattag { font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #1313ba; background: #ebebfa; border-radius: 4px; padding: 1px 5px; }
 .tzx-order { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 6px; font-size: 11px; }
-.tzx-card.compact .tzx-order { margin: 0 0 4px; }
 .tzx-order-label { color: #5b5e68; margin-right: 2px; }
 .tzx-order-btn { font: inherit; font-size: 11px; font-weight: 600; display: inline-flex; align-items: baseline; gap: 4px; padding: 2px 8px; border-radius: 999px; border: 1px solid #dcdee4; background: #fff; color: #24262e; cursor: pointer; }
 .tzx-order-btn:hover { border-color: #1313ba; }
-.tzx-order-btn.on { background: #1313ba; border-color: #1313ba; color: #fff; cursor: default; }
-.tzx-order-hint { font-size: 9px; font-weight: 700; color: #898c96; }
-.tzx-order-btn.on .tzx-order-hint { color: #dcdcf7; }
+.tzx-order-btn { font-weight: 500; color: #5b5e68; }
+.tzx-order-btn.on { background: #1313ba; border-color: #1313ba; color: #fff; font-weight: 700; cursor: default; }
+.tzx-order-check { font-weight: 800; }
+.tzx-order.mini { gap: 3px; margin: 0 0 4px; }
+.tzx-order.mini .tzx-order-btn { font-size: 10px; padding: 1px 6px; gap: 3px; }
 .tzx-btn:focus-visible, .tzx-order-btn:focus-visible, .tzx-del:focus-visible { outline: 2px solid #1313ba; outline-offset: 1px; }
+.tzx-card:focus { outline: none; }
+.tzx-card:focus-visible { outline: 2px solid #1313ba; outline-offset: 2px; }
+/* Never wider than a phone screen; long zone names give way, the time and offset never clip. */
+.tzx-card { max-width: min(360px, calc(100vw - 16px)); }
+.tzx-card.compact .tzx-zonewrap { min-width: 0; }
+.tzx-card.compact .tzx-zone { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tzx-card.compact .tzx-val { flex-shrink: 0; }
 @media (prefers-color-scheme: dark) {
-:host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-picker input, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-listbox { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
-  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-opt { color: #e7e8ec; }
-  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-opt-active { background: #8989dd; color: #0f1115; }
-  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-opt-active .tzx-opt-detail { color: #1b1d24; }
-  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-optgroup-label, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-opt-detail { color: #8b8e98; }
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-btn { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-btn.on { background: #8989dd; border-color: #8989dd; color: #0f1115; }
-  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-label, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-hint { color: #a0a3ac; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-label { color: #a0a3ac; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-btn:focus-visible, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-btn:focus-visible, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-del:focus-visible, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-card:focus-visible { outline-color: #9d9dea; }
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-card.floating { border-color: #8989dd; }
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-floattag { background: #2a2a5a; color: #c7c7f5; }
   }
-:host([data-tz-theme='dark']) .tzx-picker input, :host([data-tz-theme='dark']) .tzx-listbox { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
-:host([data-tz-theme='dark']) .tzx-opt { color: #e7e8ec; }
-:host([data-tz-theme='dark']) .tzx-opt-active { background: #8989dd; color: #0f1115; }
-:host([data-tz-theme='dark']) .tzx-opt-active .tzx-opt-detail { color: #1b1d24; }
-:host([data-tz-theme='dark']) .tzx-optgroup-label, :host([data-tz-theme='dark']) .tzx-opt-detail { color: #8b8e98; }
 :host([data-tz-theme='dark']) .tzx-order-btn { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
 :host([data-tz-theme='dark']) .tzx-order-btn.on { background: #8989dd; border-color: #8989dd; color: #0f1115; }
-:host([data-tz-theme='dark']) .tzx-order-label, :host([data-tz-theme='dark']) .tzx-order-hint { color: #a0a3ac; }
+:host([data-tz-theme='dark']) .tzx-order-label { color: #a0a3ac; }
+:host([data-tz-theme='dark']) .tzx-btn:focus-visible, :host([data-tz-theme='dark']) .tzx-order-btn:focus-visible, :host([data-tz-theme='dark']) .tzx-del:focus-visible, :host([data-tz-theme='dark']) .tzx-card:focus-visible { outline-color: #9d9dea; }
 :host([data-tz-theme='dark']) .tzx-card.floating { border-color: #8989dd; }
 :host([data-tz-theme='dark']) .tzx-floattag { background: #2a2a5a; color: #c7c7f5; }
 `;
@@ -289,6 +295,17 @@ export function Popover({
   onDateOrder,
 }: PopoverProps): JSX.Element {
   const where: CardPlacement = placement ?? (pinned ? 'pinned' : 'transient');
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Keyboard users reach the new card (Tab moves through its buttons, Escape
+  // closes it). Focusing a non-editable element keeps the page selection; a
+  // selection in a text field keeps its focus instead, so it stays copyable.
+  useEffect(() => {
+    if (pinned) return;
+    if (!pageFocusIsFree()) return;
+    cardRef.current?.focus({ preventScroll: true });
+    // Only on open: re-renders (size, order, zones) must not move focus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [zones, setZones] = useState<string[]>(() => {
     // Drop aliases of zones already listed (e.g. Asia/Katmandu vs Asia/Kathmandu).
     const base: string[] = [];
@@ -313,28 +330,42 @@ export function Popover({
     setZones((prev) => prev.filter((z) => z !== zone));
   }
 
+  // Day/month labels come from the calendar fields as written in the text, so
+  // no zone math can shift them (03/04/2024 22:00 PDT is 3 Apr or Mar 4).
   const ambiguous = parsed.dateOrder;
+  const readings =
+    ambiguous && onDateOrder && ambiguous.date && ambiguous.alternate?.date
+      ? (['dmy', 'mdy'] as const).map((order) => {
+          const date = order === ambiguous.order ? ambiguous.date : ambiguous.alternate.date;
+          const label = formatCalendarDate(date, order);
+          // Compact cards show the date without its year ("3 Apr" / "Mar 4").
+          return { order, on: order === ambiguous.order, label, short: label.replace(/,?\s+\d+$/, '') };
+        })
+      : null;
+  // Full cards: a labelled pair of pills. Compact cards: the same pair, smaller
+  // and without the question. The reading in use is filled and ticked.
   const orderPicker =
-    ambiguous && onDateOrder ? (
-      <div className="tzx-order" role="group" aria-label={`Read ${parsed.matchedText} as`}>
-        <span className="tzx-order-label">{compact ? 'Read as' : 'Day or month first?'}</span>
-        {(['dmy', 'mdy'] as const).map((order) => {
-          const ms = order === ambiguous.order ? parsed.epochMs : ambiguous.alternate.epochMs;
-          const on = order === ambiguous.order;
-          return (
-            <button
-              key={order}
-              type="button"
-              className={`tzx-order-btn${on ? ' on' : ''}`}
-              aria-pressed={on}
-              title={order === 'dmy' ? 'Day first (22/03/1999)' : 'Month first (03/22/1999)'}
-              onClick={() => !on && onDateOrder(order)}
-            >
-              {dayMonth(ms, parsed.sourceZone ? 'UTC' : parsed.assumedZone)}
-              <span className="tzx-order-hint">{order === 'dmy' ? 'D/M' : 'M/D'}</span>
-            </button>
-          );
-        })}
+    readings && onDateOrder ? (
+      <div className={`tzx-order${compact ? ' mini' : ''}`} role="group" aria-label={`Read ${parsed.matchedText} as`}>
+        {!compact && <span className="tzx-order-label">Day or month first?</span>}
+        {readings.map(({ order, on, label, short }) => (
+          <button
+            key={order}
+            type="button"
+            className={`tzx-order-btn${on ? ' on' : ''}`}
+            aria-pressed={on}
+            aria-label={`${label}, ${orderName(order)}`}
+            title={on ? `Read ${orderName(order)}: ${label}` : `Read ${orderName(order)} instead: ${label}`}
+            onClick={() => !on && onDateOrder(order)}
+          >
+            {on && (
+              <span className="tzx-order-check" aria-hidden="true">
+                ✓
+              </span>
+            )}
+            {compact ? short : label}
+          </button>
+        ))}
       </div>
     ) : null;
 
@@ -346,6 +377,7 @@ export function Popover({
       role="dialog"
       aria-label="Timezone conversion"
       tabIndex={-1}
+      ref={cardRef}
       onMouseDown={keepPageSelection}
     >
       <style>{STYLE}</style>
@@ -470,7 +502,7 @@ export function Popover({
         <div className="tzx-add">
           <ZonePicker
             label="Add a timezone"
-            placeholder="+ Add timezone… (city, UTC+5:30, PDT)"
+            placeholder="+ Add zone: city, PDT, UTC+3"
             exclude={zones}
             suggested={suggested}
             onSelect={addZone}

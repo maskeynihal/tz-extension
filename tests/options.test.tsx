@@ -471,6 +471,22 @@ describe('settings layout', () => {
     await waitFor(() => expect(lastSaved()?.cardSize).toBe('last'));
   });
 
+  it('chooses the clock format with a labelled two-option control', async () => {
+    render(<Options />);
+    const group = await screen.findByRole('group', { name: 'Clock format' });
+    const h12 = within(group).getByRole('button', { name: /^12-hour/ });
+    const h24 = within(group).getByRole('button', { name: /^24-hour/ });
+    // Nothing stored yet: the default is 12-hour.
+    expect(h12).toHaveAttribute('aria-pressed', 'true');
+    expect(h24).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(h24);
+    expect(h24).toHaveAttribute('aria-pressed', 'true');
+    expect(h12).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() => expect(lastSaved()?.hour12).toBe(false));
+    fireEvent.click(h12);
+    await waitFor(() => expect(lastSaved()?.hour12).toBe(true));
+  });
+
   it('saves the numeric date order', async () => {
     render(<Options />);
     const group = await screen.findByRole('group', { name: 'Numeric date order' });
@@ -576,6 +592,56 @@ describe('target timezone reordering', () => {
     expect(rowKeys(list)).toEqual(ZONES);
     expect(syncSet().mock.calls.length).toBe(savesBefore);
     expect(document.documentElement).not.toHaveClass('tzx-sort-grabbing');
+  });
+
+  it('losing pointer capture mid-drag cancels it, and the next drag still works', async () => {
+    mockRowRects();
+    const list = await renderOptions();
+    const handle = screen.getByRole('button', { name: 'Drag to reorder UTC' });
+    const dragged = handle.closest('li') as HTMLElement;
+    const savesBefore = syncSet().mock.calls.length;
+    fireEvent.pointerDown(handle, { pointerId: 4, clientY: 120, button: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 4, clientY: 230 });
+    expect(dragged.style.transform).toContain('translateY(110px)');
+
+    fireEvent.lostPointerCapture(handle, { pointerId: 4 });
+    expect(dragged.style.transform).toBe('');
+    expect(dragged).not.toHaveAttribute('data-sort-dragging');
+    expect(screen.getByText(/Reorder cancelled\. UTC stays at position 1 of 4/)).toBeInTheDocument();
+    expect(document.documentElement).not.toHaveClass('tzx-sort-grabbing');
+    fireEvent.pointerUp(handle, { pointerId: 4, clientY: 230 });
+    expect(rowKeys(list)).toEqual(ZONES);
+    expect(syncSet().mock.calls.length).toBe(savesBefore);
+
+    fireEvent.pointerDown(handle, { pointerId: 5, clientY: 120, button: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 5, clientY: 230 });
+    fireEvent.pointerUp(handle, { pointerId: 5, clientY: 230 });
+    expect(rowKeys(list)).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']);
+    await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']));
+  });
+
+  it('a drag whose pointerup never arrived does not block the next drag', async () => {
+    mockRowRects();
+    const list = await renderOptions();
+    const utc = screen.getByRole('button', { name: 'Drag to reorder UTC' });
+    const utcRow = utc.closest('li') as HTMLElement;
+    // Stuck: pressed and moved, but the release was lost (no capture held).
+    fireEvent.pointerDown(utc, { pointerId: 8, clientY: 120, button: 0 });
+    fireEvent.pointerMove(utc, { pointerId: 8, clientY: 180 });
+
+    const kathmandu = screen.getByRole('button', { name: 'Drag to reorder Asia/Kathmandu' });
+    const kathRow = kathmandu.closest('li') as HTMLElement;
+    fireEvent.pointerDown(kathmandu, { pointerId: 9, clientY: 270, button: 0 });
+    // The stuck drag was dropped and its row put back.
+    expect(utcRow).not.toHaveAttribute('data-sort-dragging');
+    expect(utcRow.style.transform).toBe('');
+    expect(kathRow).toHaveAttribute('data-sort-dragging');
+    fireEvent.pointerMove(kathmandu, { pointerId: 9, clientY: 120 });
+    fireEvent.pointerUp(kathmandu, { pointerId: 9, clientY: 120 });
+    expect(rowKeys(list)).toEqual(['Asia/Kathmandu', 'UTC', 'America/New_York', 'Europe/London']);
+    await waitFor(() =>
+      expect(lastSaved()?.targetZones).toEqual(['Asia/Kathmandu', 'UTC', 'America/New_York', 'Europe/London']),
+    );
   });
 
   it('the remove button removes the zone and moves focus to the next row', async () => {

@@ -187,6 +187,39 @@ export function expandYear(yy: string): number {
   return n >= 70 ? 1900 + n : 2000 + n;
 }
 
+/** Japanese eras since 1868: name, Gregorian year of year 1, and the first day [y, m, d]. */
+const JAPANESE_ERAS: Readonly<Record<string, { readonly first: number; readonly start: readonly [number, number, number] }>> = {
+  明治: { first: 1868, start: [1868, 1, 1] },
+  大正: { first: 1912, start: [1912, 7, 30] },
+  昭和: { first: 1926, start: [1926, 12, 25] },
+  平成: { first: 1989, start: [1989, 1, 8] },
+  令和: { first: 2019, start: [2019, 5, 1] },
+};
+const ERA_ORDER = ['明治', '大正', '昭和', '平成', '令和'];
+
+/**
+ * Gregorian year of a Japanese era date ("平成11年3月22日" -> 1999; 元年 is
+ * year 1), or null when the date falls outside that era (昭和64年1月8日 is
+ * already 平成). Meiji dates before the 1873 calendar reform are taken as
+ * Gregorian.
+ */
+export function japaneseEraYear(era: string, eraYear: string, mo: number, d: number): number | null {
+  const e = JAPANESE_ERAS[era];
+  if (!e) return null;
+  const n = eraYear === '元' ? 1 : Number(eraYear);
+  if (!Number.isInteger(n) || n < 1) return null;
+  const y = e.first + n - 1;
+  const key = y * 10_000 + mo * 100 + d;
+  const [sy, sm, sd] = e.start;
+  if (key < sy * 10_000 + sm * 100 + sd) return null;
+  const next = JAPANESE_ERAS[ERA_ORDER[ERA_ORDER.indexOf(era) + 1] ?? ''];
+  if (next) {
+    const [ny, nm, nd] = next.start;
+    if (key >= ny * 10_000 + nm * 100 + nd) return null;
+  }
+  return y;
+}
+
 /** Calendar date of an ISO 8601 ordinal date (1999-081), or null when out of range. */
 export function ordinalDate(year: number, dayOfYear: number): { y: number; mo: number; d: number } | null {
   const days = isRealDate(year, 2, 29) ? 366 : 365;
@@ -246,9 +279,21 @@ export function offsetMinutesToIso(mins: number): string {
   return `${sign}${pad(h)}:${pad(m)}`;
 }
 
+/**
+ * Replace the typographic minus signs an offset may be written with by an
+ * ASCII hyphen-minus: U+2212 ("UTC−05:00", "10:00 −0500") anywhere, and an
+ * en dash only straight after GMT/UTC ("GMT–5"), since an en dash elsewhere
+ * is a range ("10:00–11:00"). Each replaced character is one UTF-16 unit, as
+ * is "-", so indexes and lengths in the result match the original text.
+ */
+export function normalizeSigns(text: string): string {
+  if (!/[\u2212\u2013]/.test(text)) return text;
+  return text.replace(/\u2212/g, '-').replace(/(?<=(?:GMT|UTC))\u2013(?=\d)/gi, '-');
+}
+
 /** "+0545" / "+05:45" -> "+05:45"; anything else -> null. */
 export function normalizeOffsetToken(tok: string): string | null {
-  const m = /^([+-])(\d{2}):?(\d{2})$/.exec(tok);
+  const m = /^([+-])(\d{2}):?(\d{2})$/.exec(normalizeSigns(tok));
   if (!m) return null;
   const h = Number(m[2]);
   const mi = Number(m[3]);
@@ -270,8 +315,10 @@ function offsetIsoToMinutes(iso: string): number {
  * Letter abbreviations must be written in capitals (UTC and GMT in any case):
  * text is full of short words, and "3pm Art class" is not Argentina time.
  */
-export function resolveZoneToken(tok: string | undefined): ResolvedZone | null {
-  if (!tok) return null;
+export function resolveZoneToken(raw: string | undefined): ResolvedZone | null {
+  if (!raw) return null;
+  // "UTC−5" (U+2212) and "GMT–5" (en dash) read like "UTC-5".
+  const tok = normalizeSigns(raw);
   if (tok === 'Z' || tok === 'z') return { offsetIso: '+00:00', label: 'UTC', today: 0 };
   const off = normalizeOffsetToken(tok);
   if (off) return { offsetIso: off, label: off, today: offsetIsoToMinutes(off) };

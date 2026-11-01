@@ -39,8 +39,9 @@ export function App(): JSX.Element {
     return watchSystemTheme(() => applyThemeToDocument('system'));
   }, [prefs.theme]);
 
-  function toggleHour12(): void {
-    const next: Preferences = { ...prefs, hour12: !prefs.hour12 };
+  function setHour12(hour12: boolean): void {
+    if (prefs.hour12 === hour12) return;
+    const next: Preferences = { ...prefs, hour12 };
     setPrefs(next);
     void savePreferences(next);
   }
@@ -117,14 +118,21 @@ export function App(): JSX.Element {
           >
             {prefs.theme === 'system' ? '◐' : prefs.theme === 'light' ? '☀' : '☾'}
           </button>
-          <button
-            type="button"
-            className="tzx-chip"
-            aria-label="Toggle 12 or 24 hour clock"
-            onClick={toggleHour12}
-          >
-            {prefs.hour12 ? '12h' : '24h'}
-          </button>
+          <div className="tzx-segment tzx-segment-sm" role="group" aria-label="Clock format">
+            {([true, false] as const).map((h12) => (
+              <button
+                key={String(h12)}
+                type="button"
+                className={`tzx-seg-btn${prefs.hour12 === h12 ? ' active' : ''}`}
+                aria-pressed={prefs.hour12 === h12}
+                aria-label={h12 ? '12-hour clock' : '24-hour clock'}
+                title={h12 ? '12-hour clock' : '24-hour clock'}
+                onClick={() => setHour12(h12)}
+              >
+                {h12 ? '12h' : '24h'}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="tzx-icon-btn"

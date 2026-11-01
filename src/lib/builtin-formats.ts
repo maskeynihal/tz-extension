@@ -9,6 +9,7 @@ import {
   isoWeekDate,
   isRealDate,
   isWeekdayName,
+  japaneseEraYear,
   monthFromLocalName,
   monthFromName,
   ordinalDate,
@@ -158,14 +159,38 @@ const RE_ISO = new RegExp(
     String.raw`|(?<dz>Z|[+-]\d{2}:\d{2})(?![\w:])|[ \t]+(?<era>AD|BC|CE|BCE)(?!\w))?(?!\d)`,
 );
 
-// ISO 8601 ordinal date: year and day of the year, "1999-081", "1999-081+01:00".
-const RE_ORDINAL = /(?<![\w.+:/-])(?<y>(?:19|20)\d{2})-(?<doy>\d{3})(?<off>Z|[+-]\d{2}:?\d{2})?(?![\w/-]|[.,:+]\d)/;
+// ISO 8601 ordinal date: year and day of the year, "1999-081", "1999-081+01:00",
+// optionally with a time after a "T": "2024-123T10:00Z".
+const RE_ORDINAL =
+  /(?<![\w.+:/-])(?<y>(?:19|20)\d{2})-(?<doy>\d{3})(?:T(?<h>\d{2}):(?<mi>\d{2})(?::(?<s>\d{2})(?:[.,](?<f>\d{1,9}))?)?)?(?<off>Z|[+-]\d{2}:?\d{2})?(?![\w/-]|[.,:+]\d)/;
 
 // ISO 8601 week date: "1999-W13-2", "1999W132", "2024-W01".
 const RE_WEEK = /(?<![\w.+:/-])(?<y>\d{4})(?:-W(?<w>\d{2})(?:-(?<dw>[1-7]))?|W(?<w2>\d{2})(?<dw2>[1-7])?)(?![\w/-]|[.,:]\d)/;
 
 // Compact year-month-day: "19990322", "19990322+0100". The whole token only.
 const RE_COMPACT = /(?<![\w.+:/-])(?<y>(?:19|20)\d{2})(?<mo>\d{2})(?<d>\d{2})(?<off>Z|[+-]\d{2}:?\d{2})?(?![\w]|[.,:]\d|[+-]\d)/;
+
+/**
+ * A label that makes the number after it an identifier, at the end of the
+ * text before a match, on the same line: "PR 2024-123", "Invoice No. 2024-001",
+ * "ID: 2024-001", "#2024-123", "Order #20240115".
+ */
+function idLabel(words: string): RegExp {
+  return new RegExp(String.raw`(?:(?<![${L}\d_])(?:${words})\.?|#)[ \t:#]*$`, 'i');
+}
+/** Labels that make "2024-123" an id rather than an ordinal date. */
+const ORDINAL_ID_BEFORE = idLabel(
+  'pr|id|ticket|invoice|inv|ref|order|issue|bug|case|req|no|number|sku|build|job|run|release',
+);
+/** Labels that make "20240115" or "2024W012" a product code or id rather than a date. */
+const CODE_ID_BEFORE = idLabel('order|sku|id|model|part|item|ref|no|build|lot|serial|product');
+
+/** True when `re` matches the text just before `index` (same line only). */
+function labelledBefore(src: string, index: number, re: RegExp): boolean {
+  const before = src.slice(Math.max(0, index - 40), index);
+  const line = before.slice(before.lastIndexOf('\n') + 1);
+  return re.test(line);
+}
 
 const RE_DATE_SLASH = new RegExp(
   String.raw`\b(\d{4})\/(\d{2})\/(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\b(?:[ \t]+((?:[Gg][Mm][Tt]|[Uu][Tt][Cc])[+-]\d{1,2}(?::?\d{2})?|[+-]\d{2}:?\d{2}|[A-Za-z]{2,5})(?![\w+-]))?`,
@@ -208,8 +233,9 @@ const RE_UNIX = new RegExp(
 
 // Chinese / Japanese: "1999年3月22日", "1999年3月22日 星期一 上午05时06分07秒 CET",
 // "1999年3月22日 5時06分07秒". (\b does not work next to CJK characters.)
+// A Japanese era year ("平成11年", "令和元年") is converted, not read as 2011.
 const RE_CJK = new RegExp(
-  String.raw`(?<!\d)(?<year>\d{4}|\d{2})年(?<mo>\d{1,2})月(?<day>\d{1,2})日` +
+  String.raw`(?:(?<era>明治|大正|昭和|平成|令和)[ \t]?(?<eraYear>\d{1,2}|元)|(?<!\d)(?<year>\d{4}|\d{2}))年(?<mo>\d{1,2})月(?<day>\d{1,2})日` +
     String.raw`(?:[ \t]*(?:(?:星期|週|周)[一二三四五六日天]|[月火水木金土日]曜日|[(（][月火水木金土日][)）]))?` +
     String.raw`(?:[ \t]*(?<ap>上午|下午|午前|午後)?[ \t]*(?<h>\d{1,2})(?:[时時点](?:(?<mi>\d{1,2})分(?:(?<s>\d{1,2})秒)?)?|:(?<mi2>\d{2})(?::(?<s2>\d{2}))?)` +
     String.raw`(?:[ \t]+\(?(?<zone>${ZONE})\)?(?![\w+-]))?)?`,
@@ -264,7 +290,7 @@ function isMonthWord(w: string | undefined): boolean {
 
 /** An offset-looking zone ("+15:00", "UTC+15", "GMT+5:99") that is not a real offset. */
 function badOffset(tok: string | undefined): boolean {
-  return Boolean(tok && /^(?:[+-]|GMT[+-]|UTC[+-])/i.test(tok) && resolveZoneToken(tok) === null);
+  return Boolean(tok && /^(?:[+\-\u2212]|(?:GMT|UTC)[+\-\u2212\u2013])/i.test(tok) && resolveZoneToken(tok) === null);
 }
 
 /** "AM", " p.m.", ".PD" -> an am/pm marker to24h understands (Albanian PD = am, MD = pm). */
@@ -313,16 +339,30 @@ function timeFromGroups(g: Record<string, string | undefined>): Clock | null | u
 /**
  * Read the three numbers of a numeric date. null: not a date (let other
  * formats try); 'bad': clearly a date (four-digit year) but impossible.
+ * `timed`: a time of day is attached ("22.03.99 10:00", "05:06 22-03-99"),
+ * which settles that the numbers are a date.
  */
 function numericDate(
   g: Record<string, string | undefined>,
   order: NumericDateOrder,
+  timed: boolean,
 ): { y: number; mo: number; d: number; ambiguous: boolean; order: NumericDateOrder } | 'bad' | null {
   const [a, b, c, sep] = [g.a ?? '', g.b ?? '', g.c ?? '', g.sep ?? ''];
   const [A, B, C] = [Number(a), Number(b), Number(c)];
   // "1.2.30", "1-2-30": two one-digit parts and a short year are more often a
   // version or a code than a date. Slashes ("1/2/30") stay dates.
   const dotOrDash = sep !== '/';
+  if (!timed) {
+    // "10.30.15", "01.02.03": with a two-digit year, dotted numbers that make
+    // a valid H.MM.SS are as likely a time as a date.
+    if (sep.startsWith('.') && a.length <= 2 && b.length === 2 && c.length === 2 && A <= 23 && B <= 59 && C <= 59) {
+      return null;
+    }
+    // "01-23-45", "ext 01-23-45", "lot 11-12-13": three two-digit groups
+    // joined by dashes are usually a phone extension or a code. Only a
+    // 19xx year ("22-03-99", "99-03-22") is read as a date on its own.
+    if (sep === '-' && a.length === 2 && b.length === 2 && c.length === 2 && (A > 31 ? A : C) < 70) return null;
+  }
 
   // Year first: yyyy-M-d, yy/MM/dd (when the first part cannot be a day).
   if ((a.length === 4 || (a.length === 2 && A > 31)) && c.length <= 2) {
@@ -388,8 +428,11 @@ function writtenMatcher(
   return (src, ctx) =>
     scan(regex, src, (m) => {
       const g = (m.groups ?? {}) as Record<string, string | undefined>;
-      // "on 22 March 1999": the leading word is not part of the date.
-      const start = g.wd !== undefined && !isWeekdayName(g.wd) ? (/^\S+[ \t]+/.exec(m[0])?.[0].length ?? 0) : 0;
+      // "on 22 March 1999": the leading word is not part of the date. Nor is
+      // a weekday abbreviation that is also a month ("Mar", Spanish martes):
+      // in "Mar 3 Mar 2024" it is the month of a date written twice.
+      const weekday = g.wd !== undefined && isWeekdayName(g.wd) && monthFromLocalName(g.wd) === undefined;
+      const start = g.wd !== undefined && !weekday ? (/^\S+[ \t]+/.exec(m[0])?.[0].length ?? 0) : 0;
       const month = monthOf(g.mon);
       const year = g.year ? Number(g.year) : g.yy ? expandYear(g.yy) : undefined;
       if (month === undefined || year === undefined || !g.day) return null;
@@ -421,7 +464,8 @@ function numericMatcher(src: string, ctx: BuiltinMatchContext): MatchResult[] {
   const order = ctx.numericDateOrder ?? 'dmy';
   const convert = (m: RegExpExecArray): Converted | typeof VETO | null => {
     const g = (m.groups ?? {}) as Record<string, string | undefined>;
-    const date = numericDate(g, order);
+    const timed = g.h !== undefined || g.h2 !== undefined || g.h3 !== undefined;
+    const date = numericDate(g, order, timed);
     if (date === null) return null;
     if (date === 'bad') return VETO;
     if (badOffset(g.zone)) return VETO;
@@ -447,7 +491,15 @@ function numericMatcher(src: string, ctx: BuiltinMatchContext): MatchResult[] {
     if (!alt) return { parsed, length: text.length };
     const other: NumericDateOrder = date.order === 'dmy' ? 'mdy' : 'dmy';
     return {
-      parsed: { ...parsed, dateOrder: { order: date.order, alternate: { epochMs: alt.epochMs, order: other } } },
+      parsed: {
+        ...parsed,
+        dateOrder: {
+          order: date.order,
+          // As written, in the source's wall clock: never converted to a zone.
+          date: { y: date.y, mo: date.mo, d: date.d },
+          alternate: { epochMs: alt.epochMs, order: other, date: { y: date.y, mo: date.d, d: date.mo } },
+        },
+      },
       length: text.length,
     };
   };
@@ -556,18 +608,39 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
       scan(RE_ORDINAL, src, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         const ymd = ordinalDate(Number(g.y), Number(g.doy));
-        return ymd ? dateWithOffset(ymd, g.off, m[0], ctx, 'iso-ordinal', 'ISO 8601 ordinal date') : null;
+        if (!ymd) return null;
+        if (g.h === undefined) {
+          // "PR 2024-123", "Invoice No. 2024-001": an id, not day 123 of 2024.
+          if (labelledBefore(src, m.index, ORDINAL_ID_BEFORE)) return null;
+          return dateWithOffset(ymd, g.off, m[0], ctx, 'iso-ordinal', 'ISO 8601 ordinal date');
+        }
+        // "2024-123T10:00Z": with a time it is a full ISO timestamp.
+        if (badOffset(g.off)) return VETO;
+        const zone = resolveZoneToken(g.off);
+        const parsed = buildParsed(
+          { ...ymd, h: Number(g.h), mi: Number(g.mi), s: Number(g.s ?? 0), ms: fractionMs(g.f) },
+          zone,
+          ctx.assumedZone,
+          { matchedText: m[0], kind: zone ? 'iso' : 'iso-no-tz', formatId: 'iso-ordinal', formatLabel: 'ISO 8601 ordinal date' },
+        );
+        return parsed ? { parsed } : VETO;
       }),
   },
   {
     id: 'iso-week',
     label: 'ISO 8601 week date',
-    description: 'Year, ISO week and weekday (1 = Monday): 1999-W13-2 or 1999W132 is Tuesday 30 March 1999. Without a weekday, the Monday.',
+    description:
+      'Year, ISO week and weekday (1 = Monday): 1999-W13-2 or 1999W132 is Tuesday 30 March 1999. Without a weekday (2024-W01, hyphenated form only), the Monday.',
     examples: ['1999-W13-2', '1999W132', '2024-W01'],
     regex: RE_WEEK,
     match: (src, ctx) =>
       scan(RE_WEEK, src, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
+        // "SKU 2024W012", "Order #2024-W01": a product code or an id.
+        if (labelledBefore(src, m.index, CODE_ID_BEFORE)) return null;
+        // "2020W10", "2024W01": without the hyphen, only a full week date
+        // with its weekday ("1999W132") is clearly a date.
+        if (g.w2 !== undefined && g.dw2 === undefined) return null;
         const ymd = isoWeekDate(Number(g.y), Number(g.w ?? g.w2), Number(g.dw ?? g.dw2 ?? 1));
         return ymd ? dateWithOffset(ymd, undefined, m[0], ctx, 'iso-week', 'ISO 8601 week date') : null;
       }),
@@ -583,6 +656,8 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
         const ymd = { y: Number(g.y), mo: Number(g.mo), d: Number(g.d) };
         if (!isRealDate(ymd.y, ymd.mo, ymd.d)) return null;
+        // "Order #20240115", "SKU 20240115": an id that happens to look like a date.
+        if (labelledBefore(src, m.index, CODE_ID_BEFORE)) return null;
         return dateWithOffset(ymd, g.off, m[0], ctx, 'compact-date', 'Compact date');
       }),
   },
@@ -673,13 +748,20 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
   {
     id: 'cjk-date',
     label: 'Chinese/Japanese date',
-    description: 'Year 年 month 月 day 日, with an optional weekday (星期一, 月曜日), time (上午05时06分07秒, 5時06分) and zone.',
-    examples: ['1999年3月22日', '1999年3月22日 星期一 上午05时06分07秒 CET', '1999年3月22日 5時06分07秒'],
+    description:
+      'Year 年 month 月 day 日, with an optional weekday (星期一, 月曜日), time (上午05时06分07秒, 5時06分) and zone. A Japanese era year (平成11年, 令和元年) is converted.',
+    examples: ['1999年3月22日', '1999年3月22日 星期一 上午05时06分07秒 CET', '1999年3月22日 5時06分07秒', '平成11年3月22日'],
     regex: RE_CJK,
     match: (src, ctx) =>
       scan(RE_CJK, src, (m) => {
         const g = (m.groups ?? {}) as Record<string, string | undefined>;
-        const y = g.year!.length === 2 ? expandYear(g.year!) : Number(g.year);
+        let y: number;
+        if (g.era !== undefined) {
+          // 昭和64年1月8日 does not exist (it is 平成元年): refuse the whole span.
+          const era = japaneseEraYear(g.era, g.eraYear ?? '', Number(g.mo), Number(g.day));
+          if (era === null) return VETO;
+          y = era;
+        } else y = g.year!.length === 2 ? expandYear(g.year!) : Number(g.year);
         if (badOffset(g.zone)) return VETO;
         const zone = resolveZoneToken(g.zone);
         const text = trimUnresolvedZone(m[0], g.zone, zone !== null);

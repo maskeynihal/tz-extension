@@ -14,6 +14,13 @@
   --assumed: var(--tz-warning);
 }
 
+/* Text on a brand fill. Dark mode's brand is a light indigo (#8989dd), where
+   white text is only ~3:1; near-black text is ~6:1 (WCAG AA needs 4.5:1). */
+:root[data-theme='dark'] { --accent-fg: #0b0b16; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not([data-theme='dark']) { --accent-fg: #0b0b16; }
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
@@ -45,7 +52,7 @@ body {
 }
 .tzx-tab:hover { color: var(--tz-body-subtle); }
 .tzx-tab-on { color: var(--tz-brand); background: transparent; border-bottom-color: var(--tz-brand); }
-.tzx-head-actions { display: flex; gap: 6px; align-items: center; }
+.tzx-head-actions { display: flex; gap: 6px; align-items: center; flex: none; }
 
 .tzx-field { margin-bottom: 18px; }
 .tzx-field > label, .tzx-field-label {
@@ -72,7 +79,7 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .tzx-btn:hover, .tzx-chip:hover, .tzx-icon-btn:hover { border-color: var(--tz-border-brand); background: var(--tz-surface-raised); }
-.tzx-chip-on, .tzx-chip.tzx-chip-on { background: var(--tz-brand); color: #fff; border-color: var(--tz-brand); }
+.tzx-chip-on, .tzx-chip.tzx-chip-on { background: var(--tz-brand); color: var(--accent-fg); border-color: var(--tz-brand); }
 .tzx-icon-btn { padding: 7px 9px; }
 
 /* Segmented control (e.g. theme chooser): flush buttons sharing one border. */
@@ -84,7 +91,9 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 }
 .tzx-seg-btn + .tzx-seg-btn { border-left: 1px solid var(--border); }
 .tzx-seg-btn:hover { background: var(--tz-surface-raised); }
-.tzx-seg-btn.active { background: var(--tz-brand); color: #fff; }
+.tzx-seg-btn.active, .tzx-seg-btn.active:hover { background: var(--tz-brand); color: var(--accent-fg); }
+/* Compact segmented control for the popup header (12h | 24h). */
+.tzx-segment-sm .tzx-seg-btn { padding: 5px 7px; font-size: var(--tz-fs-xs); font-weight: var(--tz-fw-semibold); }
 .tzx-unit-toggle { display: flex; gap: 4px; margin-top: 6px; }
 
 .tzx-picker { position: relative; }
@@ -96,7 +105,7 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
   border-radius: var(--tz-radius-lg); box-shadow: var(--tz-shadow-pop);
 }
 .tzx-opt { padding: 7px 9px; border-radius: var(--tz-radius-sm); cursor: pointer; }
-.tzx-opt-active { background: var(--tz-brand); color: #fff; }
+.tzx-opt-active { background: var(--tz-brand); color: var(--accent-fg); }
 .tzx-opt-empty { color: var(--muted); cursor: default; }
 
 .tzx-results { display: flex; flex-direction: column; gap: 8px; }
@@ -243,6 +252,8 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 .tzx-format-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tzx-format-main strong { color: var(--tz-heading); }
 .tzx-format-desc, .tzx-format-ex { font-size: var(--tz-fs-sm); color: var(--muted); }
+/* Each example wraps as a whole token; only one wider than the row breaks inside. */
+.tzx-format-ex code { display: inline-block; max-width: 100%; word-break: normal; overflow-wrap: anywhere; vertical-align: top; }
 .tzx-format-pattern { align-self: flex-start; }
 .tzx-format-actions { display: flex; align-items: center; gap: 6px; flex: none; }
 .tzx-regex { font-size: var(--tz-fs-sm); color: var(--muted); margin-top: 2px; }
@@ -270,7 +281,7 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 }
 .tzx-opt { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .tzx-opt-detail { color: var(--muted); font-size: var(--tz-fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tzx-opt-active .tzx-opt-detail { color: rgba(255, 255, 255, 0.8); }
+.tzx-opt-active .tzx-opt-detail { color: var(--accent-fg); opacity: 0.85; }
 
 /* ---- Settings page: sticky section tabs ---------------------------------- */
 .tzx-settings-sticky {
@@ -354,7 +365,9 @@ h3.tzx-field-label { margin: 0 0 6px; }
   .tzx-settings-section .tzx-segment { max-width: 100%; }
   .tzx-settings-section .tzx-seg-btn { white-space: normal; }
   .tzx-zone-item.tzx-sort-item { flex-wrap: wrap; }
-  .tzx-zone-clock { text-align: left; }
+  /* Let the offset drop under the time instead of running past the row edge. */
+  .tzx-zone-clock { text-align: left; white-space: normal; flex: 0 1 auto; min-width: 0; }
+  .tzx-zone-clock > span { white-space: nowrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {
