@@ -56,9 +56,10 @@ export function ZonePicker({
   );
   const flat = useMemo(() => groups.flatMap((g) => g.options), [groups]);
   const hasQuery = query.trim().length > 0;
-  // A query that names an added zone says so rather than "no match".
+  // A query that finds only added zones ("kathm", "nepal", "utc+5:45" with
+  // Asia/Kathmandu added) says so rather than "no match".
   const added = useMemo(
-    () => (hasQuery && flat.length === 0 ? excludedMatch(query, exclude) : null),
+    () => (hasQuery && flat.length === 0 ? excludedMatch(query, exclude, { partial: true }) : null),
     [hasQuery, flat.length, query, exclude],
   );
   const listShown = open && (flat.length > 0 || hasQuery);

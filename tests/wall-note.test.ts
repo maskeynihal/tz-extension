@@ -57,7 +57,10 @@ describe('formatting does not depend on the host timezone', () => {
     expect(viewInZone(Date.UTC(2024, 6, 1, 12), 'Europe/Paris', false).abbrev).toBe('CEST');
     expect(viewInZone(Date.UTC(2024, 0, 1, 12), 'America/New_York', false).abbrev).toBe('EST');
     expect(viewInZone(Date.UTC(2024, 0, 1, 12), 'Australia/Sydney', false).abbrev).toBe('AEDT');
-    expect(viewInZone(Date.UTC(2024, 0, 1, 12), 'Asia/Kathmandu', false).abbrev).toBe('GMT+5:45');
+    // Round 4: Intl's "GMT+5:45" gives way to the project's own NPT; a zone
+    // with no entry (Kabul) keeps Intl's offset form.
+    expect(viewInZone(Date.UTC(2024, 0, 1, 12), 'Asia/Kathmandu', false).abbrev).toBe('NPT');
+    expect(viewInZone(Date.UTC(2024, 0, 1, 12), 'Asia/Kabul', false).abbrev).toBe('GMT+4:30');
     expect(viewInZone(Date.UTC(2024, 0, 1, 0), 'UTC-08:00', true).time).toBe('4:00:00 PM');
     expect(viewInZone(Date.UTC(2024, 0, 1, 12), 'UTC', true).time).toBe('12:00:00 PM');
     expect(viewInZone(Date.UTC(2024, 0, 1, 0), 'UTC', true).time).toBe('12:00:00 AM');

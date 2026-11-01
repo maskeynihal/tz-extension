@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Preferences } from '../types';
 import { parseEpoch, toEpochSeconds, toEpochMillis, type EpochUnit } from '../lib/epoch';
 import { viewInZone, toIsoUtc, isValidZone, zoneLabel } from '../lib/tz';
@@ -22,9 +22,32 @@ export function epochErrorText(mode: UnitMode): string {
   return `Enter a valid epoch: a whole number ${range}. Auto reads up to 11 digits as seconds and 12 or more as milliseconds; pick a unit to change that.`;
 }
 
-function toLocalInputValue(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+/**
+ * The datetime-local value (with seconds) for an instant written as the wall
+ * clock of `zone`. Formatted in the zone itself, never in the browser's own
+ * timezone, so it reads back as the same instant in that zone. Empty for an
+ * invalid zone.
+ */
+export function wallInputSeconds(epochMs: number, zone: string): string {
+  if (!isValidZone(zone)) return '';
+  const v = viewInZone(epochMs, zone, false);
+  return `${v.date}T${v.time}`;
+}
+
+/**
+ * The reverse field's state: the text, the zone it is written in, and the
+ * exact instant when the text came from "Now" (so a second-half-of-overlap
+ * "now" isn't read back as the earlier instant).
+ */
+interface ReverseInput {
+  readonly value: string;
+  readonly zone: string;
+  readonly exactMs: number | null;
+}
+
+function nowInput(zone: string): ReverseInput {
+  const ms = Math.floor(Date.now() / 1000) * 1000;
+  return { value: wallInputSeconds(ms, zone), zone, exactMs: ms };
 }
 
 export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
@@ -41,15 +64,37 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
   }, [raw, mode]);
 
   // --- Reverse: datetime -> epoch ---
-  const [revLocal, setRevLocal] = useState<string>(() => toLocalInputValue(new Date()));
+  // The field is a wall clock in the home zone: pre-filled with now as the
+  // home zone shows it, and read back in the same zone.
+  const homeZone = prefs.homeZone;
+  const [rev, setRev] = useState<ReverseInput>(() => nowInput(homeZone));
+
+  // Home zone changed (stored prefs load after the first render, or the user
+  // changed it): keep the same instant, rewritten as the new zone's wall clock.
+  useEffect(() => {
+    setRev((cur) => {
+      if (cur.zone === homeZone) return cur;
+      const ms = cur.exactMs ?? readWallInput(cur.value, cur.zone)?.epochMs ?? null;
+      if (ms === null || !isValidZone(homeZone)) return { ...cur, zone: homeZone, exactMs: null };
+      return { value: wallInputSeconds(ms, homeZone), zone: homeZone, exactMs: ms };
+    });
+  }, [homeZone]);
+
   const reverse = useMemo(() => {
     const none = { s: null as number | null, ms: null as number | null, note: null as string | null };
-    if (!revLocal) return { ...none, error: 'Pick a date and time.' as string | null };
-    if (!isValidZone(prefs.homeZone)) return { ...none, error: 'Invalid home timezone.' };
-    const r = readWallInput(revLocal, prefs.homeZone, prefs.hour12);
+    if (!rev.value) return { ...none, error: 'Pick a date and time.' as string | null };
+    if (!isValidZone(rev.zone)) return { ...none, error: 'Invalid home timezone.' };
+    if (rev.exactMs !== null) return { error: null, s: toEpochSeconds(rev.exactMs), ms: toEpochMillis(rev.exactMs), note: null };
+    // A datetime-local value may carry milliseconds ("…T01:30:01.500", the
+    // input's normalised form with step < 1); the wall reader takes seconds.
+    const frac = /\.(\d{1,3})$/.exec(rev.value);
+    const wall = frac ? rev.value.slice(0, frac.index) : rev.value;
+    const extraMs = frac ? Number((frac[1] as string).padEnd(3, '0')) : 0;
+    const r = readWallInput(wall, rev.zone, prefs.hour12);
     if (!r) return { ...none, error: 'Could not parse that time.' };
-    return { error: null, s: toEpochSeconds(r.epochMs), ms: toEpochMillis(r.epochMs), note: r.note };
-  }, [revLocal, prefs.homeZone, prefs.hour12]);
+    const epochMs = r.epochMs + extraMs;
+    return { error: null, s: toEpochSeconds(epochMs), ms: toEpochMillis(epochMs), note: r.note };
+  }, [rev, prefs.hour12]);
 
   return (
     <section className="tzx-pane">
@@ -109,14 +154,19 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
 
       <div className="tzx-field">
         <label htmlFor="tzx-rev">Reverse: date &amp; time → epoch ({zoneLabel(prefs.homeZone)})</label>
-        <input
-          id="tzx-rev"
-          type="datetime-local"
-          step={1}
-          value={revLocal}
-          onChange={(e) => setRevLocal(e.target.value)}
-          aria-describedby={reverse.note ? 'tzx-rev-note' : undefined}
-        />
+        <div className="tzx-row-inline">
+          <input
+            id="tzx-rev"
+            type="datetime-local"
+            step={1}
+            value={rev.value}
+            onChange={(e) => setRev({ value: e.target.value, zone: homeZone, exactMs: null })}
+            aria-describedby={reverse.note ? 'tzx-rev-note' : undefined}
+          />
+          <button type="button" className="tzx-btn" onClick={() => setRev(nowInput(homeZone))}>
+            Now
+          </button>
+        </div>
         {reverse.note && (
           <p className="tzx-wall-note" id="tzx-rev-note">
             {reverse.note}

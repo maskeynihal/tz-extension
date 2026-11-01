@@ -62,8 +62,9 @@ function formatter(tz: string): Intl.DateTimeFormat | null {
 /**
  * Offset of `tz` from UTC at an instant, in ms (seconds precision, so local
  * mean time offsets such as +05:41:16 stay exact). NaN when the zone is
- * unknown. Read from Intl: date-fns-tz's getTimezoneOffset misreports the
- * hour after a fall-back transition.
+ * unknown. Read from Intl.DateTimeFormat's wall-clock parts at the instant
+ * (whole seconds), so the hour after a fall-back transition gets the new
+ * offset.
  */
 function offsetAt(tz: string, ms: number): number {
   if (tz === 'UTC' || tz === 'Etc/UTC' || tz === 'Z') return 0;
@@ -162,7 +163,10 @@ function abbrIn(locale: string, tz: string, ms: number): string {
 /**
  * The short name of `tz` at an instant: a letter abbreviation when any of
  * ABBR_LOCALES has one ("EDT", "BST", "AEDT"), else the GMT-offset form
- * ("GMT+5:45"). Empty when the zone is unknown.
+ * ("GMT+5:45"). Empty when the zone is unknown. Intl has no letters for
+ * some zones (St John's NST/NDT, Chatham CHAST/CHADT); tz.ts's viewInZone
+ * fills those in from its own abbreviation table, so this module stays free
+ * of a tz.ts import.
  */
 export function zoneAbbreviation(ms: number, tz: string): string {
   let fallback = '';

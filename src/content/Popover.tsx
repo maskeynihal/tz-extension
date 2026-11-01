@@ -13,6 +13,8 @@ export type CardPlacement = 'transient' | 'pinned' | 'floating';
 export interface PopoverProps {
   readonly parsed: ParsedTime;
   readonly matchCount: number;
+  /** Which of the `matchCount` matches this card shows (0-based, default 0). */
+  readonly matchIndex?: number;
   readonly prefs: Preferences;
   /** True for pinned and floating cards (they stay until closed). */
   readonly pinned: boolean;
@@ -26,6 +28,11 @@ export interface PopoverProps {
   readonly pinDot?: string;
   /** Pin a transient card. Absent on an already-pinned card. */
   readonly onPin?: () => void;
+  /**
+   * Show the previous (-1) or next (+1) match of the selection. When given
+   * and there are several matches, the card offers "‹ 1 of 2 ›".
+   */
+  readonly onStep?: (delta: number) => void;
   /** Pinned card: float it on screen; floating card: pin it back to the page. */
   readonly onTogglePlacement?: () => void;
   readonly onClose: () => void;
@@ -123,6 +130,14 @@ function pageFocusIsFree(): boolean {
 
 export { wallClockNote };
 
+/** Keys that move focus into an open card and back (see the content script). */
+export const FOCUS_SHORTCUT = 'Alt+Shift+T';
+
+/** "+1 more time in selection", "+2 more times in selection". */
+export function moreTimesText(others: number): string {
+  return `+${others} more ${others === 1 ? 'time' : 'times'} in selection`;
+}
+
 const LOCAL_ZONE = resolveLocalZone();
 
 
@@ -154,7 +169,10 @@ const STYLE = `
 .tzx-title { font-weight: 600; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: #898c96; display: flex; align-items: center; gap: 6px; }
 .tzx-grip { color: #b4b6be; font-size: 12px; }
 .tzx-pindot { color: #1313ba; font-size: 11px; }
-.tzx-pinbadge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; color: #fff; font-size: 12px; font-weight: 800; line-height: 1; }
+.tzx-pinbadge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; color: #fff; font-size: 12px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+/* Room for two digits whatever the number, so pin 10 is as wide as pin 9
+   (the badge is in the header, which sets a full card's width). */
+.tzx-pinbadge { min-width: calc(2ch + 12px); box-sizing: border-box; }
 .tzx-actions { display: flex; align-items: center; gap: 2px; }
 .tzx-btn {
   border: none; background: transparent; cursor: pointer;
@@ -195,6 +213,18 @@ const STYLE = `
 .tzx-card.compact .tzx-date, .tzx-card.compact .tzx-del, .tzx-card.compact .tzx-localtag { display: none; }
 .tzx-card.compact .tzx-val { margin-top: 0; flex-wrap: nowrap; }
 .tzx-more { font-size: 11px; color: #898c96; margin-top: 6px; }
+.tzx-step { display: flex; align-items: center; gap: 4px; }
+.tzx-stepbtn { font: inherit; font-size: 13px; line-height: 1; min-width: 22px; padding: 1px 6px; border-radius: 6px; border: 1px solid #dcdee4; background: #fff; color: #24262e; cursor: pointer; }
+.tzx-stepbtn:hover { border-color: #1313ba; }
+.tzx-stepbtn:focus-visible { outline: 2px solid #1313ba; outline-offset: 1px; }
+.tzx-stepcount { font-variant-numeric: tabular-nums; font-weight: 600; color: #5b5e68; }
+.tzx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+:host([data-tz-theme='dark']) .tzx-stepbtn { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
+:host([data-tz-theme='dark']) .tzx-stepcount { color: #a0a3ac; }
+@media (prefers-color-scheme: dark) {
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-stepbtn { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-stepcount { color: #a0a3ac; }
+}
 .tzx-add { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e6e7ec; }
 .tzx-select {
   width: 100%; font: inherit; font-size: 12px; padding: 6px 7px;
@@ -297,6 +327,7 @@ ${ZONE_PICKER_CSS}
 export function Popover({
   parsed,
   matchCount,
+  matchIndex = 0,
   prefs,
   pinned,
   placement,
@@ -304,6 +335,7 @@ export function Popover({
   pinNumber,
   pinDot,
   onPin,
+  onStep,
   onTogglePlacement,
   onClose,
   onToggleCompact,
@@ -394,12 +426,18 @@ export function Popover({
       className={`tzx-card${pinned ? ' pinned' : ''}${where === 'floating' ? ' floating' : ''}${compact ? ' compact' : ''}`}
       role="dialog"
       aria-label="Timezone conversion"
+      aria-description={where === 'transient' ? `${FOCUS_SHORTCUT} to focus` : undefined}
+      aria-keyshortcuts={where === 'transient' ? FOCUS_SHORTCUT : undefined}
       tabIndex={-1}
       ref={cardRef}
       onMouseDown={keepPageSelection}
     >
       <style>{STYLE}</style>
-      <div className="tzx-head" onPointerDown={onDragStart} title="Drag to move">
+      <div
+        className="tzx-head"
+        onPointerDown={onDragStart}
+        title={where === 'transient' ? `Drag to move · ${FOCUS_SHORTCUT} to focus` : 'Drag to move'}
+      >
         <span className="tzx-title">
           <span className="tzx-grip" aria-hidden>⋮⋮</span>
           {/* Floating cards say "TZ" too, so the "floating" tag fits on the
@@ -525,9 +563,22 @@ export function Popover({
         );
       })}
 
-      {!compact && matchCount > 1 && (
-        <div className="tzx-more">+{matchCount - 1} more time(s) in selection</div>
+      {!compact && matchCount > 1 && onStep && (
+        <div className="tzx-more tzx-step" role="group" aria-label="Times in selection">
+          <button type="button" className="tzx-stepbtn" aria-label="Previous time" title="Previous time" onClick={() => onStep(-1)}>
+            ‹
+          </button>
+          <span className="tzx-stepcount" aria-live="polite" aria-atomic="true">
+            <span className="tzx-sr">Time </span>
+            {Math.min(matchIndex, matchCount - 1) + 1} of {matchCount}
+          </span>
+          <button type="button" className="tzx-stepbtn" aria-label="Next time" title="Next time" onClick={() => onStep(1)}>
+            ›
+          </button>
+          <span className="tzx-stepnote">times in selection</span>
+        </div>
       )}
+      {!compact && matchCount > 1 && !onStep && <div className="tzx-more">{moreTimesText(matchCount - 1)}</div>}
 
       {!compact && (
         <div className="tzx-add">

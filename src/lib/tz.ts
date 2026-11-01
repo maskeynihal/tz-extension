@@ -27,6 +27,12 @@ export interface ZoneAbbreviation {
   readonly minutes?: number;
   /** IANA zone a DST-aware generic follows. */
   readonly iana?: string;
+  /**
+   * IANA zones whose clocks this fixed abbreviation names while they are on
+   * its offset, for zones Intl only names "GMT-2:30". Year-round places in
+   * ABBR_PLACES count too. See viewInZone.
+   */
+  readonly zones?: readonly string[];
 }
 
 export const ZONE_ABBREVIATIONS: readonly ZoneAbbreviation[] = [
@@ -50,8 +56,8 @@ export const ZONE_ABBREVIATIONS: readonly ZoneAbbreviation[] = [
   { code: 'HST', name: 'Hawaii Standard Time', minutes: -600 },
   { code: 'AST', name: 'Atlantic Standard Time', minutes: -240 },
   { code: 'ADT', name: 'Atlantic Daylight Time', minutes: -180 },
-  { code: 'NST', name: 'Newfoundland Standard Time', minutes: -210 },
-  { code: 'NDT', name: 'Newfoundland Daylight Time', minutes: -150 },
+  { code: 'NST', name: 'Newfoundland Standard Time', minutes: -210, zones: ['America/St_Johns'] },
+  { code: 'NDT', name: 'Newfoundland Daylight Time', minutes: -150, zones: ['America/St_Johns'] },
   // South America
   { code: 'BRT', name: 'Brasília Time', minutes: -180 },
   { code: 'ART', name: 'Argentina Time', minutes: -180 },
@@ -59,7 +65,7 @@ export const ZONE_ABBREVIATIONS: readonly ZoneAbbreviation[] = [
   { code: 'GMT', name: 'Greenwich Mean Time', minutes: 0 },
   { code: 'WET', name: 'Western European Time', minutes: 0 },
   { code: 'WEST', name: 'Western European Summer Time', minutes: 60 },
-  { code: 'BST', name: 'British Summer Time', minutes: 60 },
+  { code: 'BST', name: 'British Summer Time', minutes: 60, zones: ['Europe/Guernsey', 'Europe/Isle_of_Man', 'Europe/Jersey'] },
   { code: 'IST-IE', name: 'Irish Standard Time', minutes: 60 },
   { code: 'CET', name: 'Central European Time', minutes: 60 },
   { code: 'CEST', name: 'Central European Summer Time', minutes: 120 },
@@ -91,6 +97,8 @@ export const ZONE_ABBREVIATIONS: readonly ZoneAbbreviation[] = [
   { code: 'AEDT', name: 'Australian Eastern Daylight Time', minutes: 660 },
   { code: 'NZST', name: 'New Zealand Standard Time', minutes: 720 },
   { code: 'NZDT', name: 'New Zealand Daylight Time', minutes: 780 },
+  { code: 'CHAST', name: 'Chatham Standard Time', minutes: 765, zones: ['Pacific/Chatham'] },
+  { code: 'CHADT', name: 'Chatham Daylight Time', minutes: 825, zones: ['Pacific/Chatham'] },
 ];
 
 const ABBR_BY_CODE = new Map(ZONE_ABBREVIATIONS.map((a) => [a.code, a]));
@@ -132,7 +140,10 @@ export interface ResolvedZone {
   readonly kind: 'iana' | 'offset' | 'abbr';
   /** The time zone argument Intl understands (via wallclock.ts): an IANA id or "+05:45". */
   readonly tz: string;
-  /** Short display name: "Asia/Kathmandu", "UTC+05:45", "PDT". */
+  /**
+   * Short display name: "Asia/Kathmandu", "UTC+05:45", "PDT". POSIX-style
+   * "Etc/GMT+12" shows its real offset, "UTC-12:00" (`long` keeps the id).
+   */
   readonly short: string;
   /** Longer description for lists: "Pacific Daylight Time · UTC-07:00". */
   readonly long: string;
@@ -223,6 +234,20 @@ function canonicalIana(id: string): string {
   return name;
 }
 
+const ETC_RE = /^Etc\/GMT([+-])(\d{1,2})$/;
+
+/**
+ * The real offset of a POSIX-style "Etc/GMT±N" name, whose sign is reversed:
+ * "Etc/GMT+12" is "UTC-12:00", "Etc/GMT-14" is "UTC+14:00", "Etc/GMT+0" is
+ * "UTC". Null for any other name.
+ */
+function etcOffsetLabel(name: string): string | null {
+  const m = ETC_RE.exec(name);
+  if (!m) return null;
+  const minutes = (m[1] === '+' ? -1 : 1) * Number(m[2]) * 60;
+  return minutes === 0 ? 'UTC' : offsetLabel(minutes);
+}
+
 const resolvedCache = new Map<string, ResolvedZone | null>();
 
 /** Resolve any zone id, or null when it is not valid. */
@@ -260,7 +285,10 @@ export function resolveZone(id: string): ResolvedZone | null {
     // A legacy alias ("Asia/Calcutta") stays a valid id but displays under
     // its current name ("Asia/Kolkata").
     const name = canonicalIana(id);
-    out = { id, kind: 'iana', tz: id, short: name, long: name };
+    const etc = etcOffsetLabel(name);
+    out = etc
+      ? { id, kind: 'iana', tz: id, short: etc, long: name }
+      : { id, kind: 'iana', tz: id, short: name, long: name };
   }
   if (resolvedCache.size > CACHE_CAP) resolvedCache.clear();
   resolvedCache.set(id, out);
@@ -1103,16 +1131,26 @@ export function searchZones(
  * The zone in `exclude` that `query` names exactly (its abbreviation, label,
  * city, alias or offset), or null. Lets a picker say "Already added" rather
  * than show an empty list.
+ *
+ * With `partial`, any search hit on an excluded zone counts too, best first:
+ * a word prefix ("kathm"), a substring, or an offset ("utc+5:45"). Use it
+ * when the query matches nothing else, so the picker never says "No
+ * matching timezone" for a zone it hid because it is already added.
  */
-export function excludedMatch(query: string, exclude: readonly string[]): string | null {
+export function excludedMatch(
+  query: string,
+  exclude: readonly string[],
+  opts: { readonly partial?: boolean } = {},
+): string | null {
   const q = normalizeSearch(query);
   if (!q || exclude.length === 0) return null;
   const excluded = zoneSet(exclude);
-  for (const r of rankGroups(q, excluded)) {
-    const hit = r.hits.find((h) => h.score <= 1);
-    if (hit) return exclude.find((z) => sameZone(z, hit.option.id)) ?? hit.option.id;
-  }
-  return null;
+  const ranked = rankGroups(q, excluded);
+  const best = opts.partial
+    ? ranked[0]?.hits[0]
+    : ranked.map((r) => r.hits.find((h) => h.score <= 1)).find((h) => h !== undefined);
+  if (!best) return null;
+  return exclude.find((z) => sameZone(z, best.option.id)) ?? best.option.id;
 }
 
 /** True when `zone` shows offset `minutes` all year (checked in January and July). */
@@ -1221,8 +1259,9 @@ export function ianaEquivalent(zone: string, at: number = Date.now()): string {
 /**
  * Friendly place name for any zone id: the city of the zone's current
  * canonical IANA name ("Asia/Katmandu" → "Kathmandu", "America/Argentina/
- * ComodRivadavia" → "Catamarca"), "UTC" for UTC, else the zone's short label
- * ("UTC+05:45", "PT", "IST (IE)"). Falls back to the id itself.
+ * ComodRivadavia" → "Catamarca", "America/St_Johns" → "St. John's"), "UTC"
+ * for UTC, the real offset for "Etc/GMT+12" ("UTC-12:00"), else the zone's
+ * short label ("UTC+05:45", "PT", "IST (IE)"). Falls back to the id itself.
  */
 export function displayZoneName(zone: string): string {
   const r = resolveZone(zone);
@@ -1230,8 +1269,22 @@ export function displayZoneName(zone: string): string {
   if (r.kind !== 'iana') return r.short;
   const name = r.short;
   if (name === 'UTC' || name === 'Etc/UTC' || name === 'Etc/GMT' || name === 'GMT' || name === 'Etc/Universal') return 'UTC';
-  return name.slice(name.lastIndexOf('/') + 1).replace(/_/g, ' ');
+  if (!name.includes('/') && FIXED_RE.test(name)) return name; // Etc/GMT±N, already "UTC-12:00"
+  const city = name.slice(name.lastIndexOf('/') + 1);
+  return CITY_NAMES.get(city) ?? city.replace(/^St_/, 'St. ').replace(/_/g, ' ');
 }
+
+/**
+ * City names the tz database spells without their punctuation. Other
+ * "St_" names read "St. Kitts", "St. Helena"; "Port-au-Prince" and
+ * "Ho_Chi_Minh" need nothing.
+ */
+const CITY_NAMES: ReadonlyMap<string, string> = new Map([
+  ['St_Johns', "St. John's"],
+  ['DumontDUrville', "Dumont d'Urville"],
+  ['Dumont_DUrville', "Dumont d'Urville"],
+  ['Lower_Princes', "Lower Prince's Quarter"],
+]);
 
 /**
  * The current canonical id for a zone, so aliases compare equal
@@ -1262,7 +1315,7 @@ export interface ZoneView {
   readonly date: string;
   /** The UTC offset label, e.g. "+05:45" or "-07:00". */
   readonly offset: string;
-  /** The zone's short abbreviation at that instant, e.g. "PDT", "+0545". */
+  /** The zone's short abbreviation at that instant, e.g. "PDT", "NDT", else "GMT-3:30" (see ianaAbbreviation). */
   readonly abbrev: string;
   /** Day-of-week short label. */
   readonly weekday: string;
@@ -1294,9 +1347,47 @@ export function viewInZone(epochMs: number, zone: string, hour12: boolean): Zone
     time: clock,
     date,
     offset: offsetString(offsetMinutes(tz, epochMs)),
-    abbrev: r && r.kind !== 'iana' ? r.short : zoneAbbreviation(epochMs, tz),
+    abbrev: r && r.kind !== 'iana' ? r.short : ianaAbbreviation(epochMs, tz, w.s),
     weekday: WEEKDAYS[w.weekday] as string,
   };
+}
+
+const LETTER_ABBR = /^[A-Z]{2,5}$/;
+
+let abbrsByZone: Map<string, readonly ZoneAbbreviation[]> | null = null;
+
+/** Fixed abbreviations by the canonical IANA zones they name (`zones`, ABBR_PLACES). */
+function zoneAbbreviations(): Map<string, readonly ZoneAbbreviation[]> {
+  if (abbrsByZone) return abbrsByZone;
+  const map = new Map<string, ZoneAbbreviation[]>();
+  for (const a of ZONE_ABBREVIATIONS) {
+    // Region-suffixed codes ("IST-IE") would read as another zone's name.
+    if (a.minutes === undefined || !LETTER_ABBR.test(a.code)) continue;
+    const place = ABBR_PLACES.get(a.code);
+    for (const z of [...(a.zones ?? []), ...(place ? [place] : [])]) {
+      const key = modernIana(z);
+      map.set(key, [...(map.get(key) ?? []), a]);
+    }
+  }
+  abbrsByZone = map;
+  return map;
+}
+
+/**
+ * The short name of an IANA zone at an instant: Intl's letter abbreviation
+ * ("EDT"), else this project's own for the zone at that offset (St John's
+ * "NDT", Chatham "CHADT", Kathmandu "NPT"), else Intl's "GMT+5:45" form.
+ * `wallSeconds` is the zone's wall-clock seconds at the instant: an offset
+ * with seconds (local mean time) never takes an abbreviation.
+ */
+function ianaAbbreviation(epochMs: number, tz: string, wallSeconds: number): string {
+  const intl = zoneAbbreviation(epochMs, tz);
+  if (LETTER_ABBR.test(intl) || !isIana(tz)) return intl;
+  const whole = Math.floor(epochMs / 1000) * 1000;
+  if (wallSeconds !== new Date(whole).getUTCSeconds()) return intl;
+  const minutes = offsetMinutes(tz, epochMs);
+  const own = zoneAbbreviations().get(canonicalIana(tz))?.find((a) => a.minutes === minutes);
+  return own ? own.code : intl;
 }
 
 /** Minutes east of UTC for a zone at an instant. */

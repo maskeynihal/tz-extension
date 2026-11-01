@@ -255,3 +255,131 @@ describe('projection speed (review #8)', () => {
     expect(ianaEquivalent('UTC+05:15', Date.UTC(2026, 6, 15))).toBe('UTC');
   });
 });
+
+/*
+ * Round 4 (review #3): the legacy item carries `pw`, the write it followed.
+ * Separate module instances stand in for separate devices (each has its own
+ * last write id and write time), sharing the mocked chrome.storage.sync, as
+ * in the review's sync-sim4.mjs.
+ */
+describe('previous write id (round 4)', () => {
+  type Storage = typeof import('../src/lib/storage');
+  const device = async (): Promise<Storage> => {
+    vi.resetModules();
+    return import('../src/lib/storage');
+  };
+  afterEach(() => vi.useRealTimers());
+
+  it('the legacy item names the write it follows; the first write of a context has none', async () => {
+    const A = await device();
+    await A.savePreferences(START);
+    const first = await stored();
+    expect(first.legacy).not.toHaveProperty('pw');
+    expect(first.extras).not.toHaveProperty('pw');
+    await A.savePreferences({ ...START, targetZones: NO_TOKYO });
+    expect((await stored()).legacy.pw).toBe(first.extras?.w);
+    // Another device that loads before saving follows the extras it read.
+    const B = await device();
+    const read = (await stored()).extras?.w;
+    await B.loadPreferences();
+    await B.savePreferences(START);
+    expect((await stored()).legacy.pw).toBe(read);
+  });
+
+  it("sync-sim4 hybrid: two devices' halves (legacy A newer, extras B) read as B's list whole", async () => {
+    // A (clock an hour ahead) and B write without seeing each other; the
+    // final state holds A's legacy item and B's extras. Before round 4 the
+    // peer read ["UTC+05:45", "Europe/London"], A's IANA ids with B's new-style ids.
+    const A = await device();
+    const B = await device();
+    const P = await device();
+    vi.useFakeTimers({ now: Date.now() + 3_600_000, toFake: ['Date'] });
+    await A.savePreferences({ ...START, targetZones: ['Europe/London', 'abbr:IST-IE'] });
+    vi.useRealTimers();
+    const legacyA = (await stored()).legacy;
+    const bList = ['UTC+05:45', 'Asia/Tokyo', 'America/New_York'];
+    await B.savePreferences({ ...START, targetZones: bList });
+    await sync().set({ [PREFS_KEY]: legacyA });
+    const { legacy, extras } = await stored();
+    expect(legacy.t as number).toBeGreaterThan(extras?.t as number);
+    expect(legacy.pw).toBeUndefined();
+    expect((await P.loadPreferences()).targetZones).toEqual(bList);
+  });
+
+  it('the hybrid the other way round (legacy B, extras A newer) also reads one list whole', async () => {
+    const A = await device();
+    const B = await device();
+    const P = await device();
+    vi.useFakeTimers({ now: Date.now() + 3_600_000, toFake: ['Date'] });
+    const aList = ['Europe/London', 'abbr:IST-IE'];
+    await A.savePreferences({ ...START, targetZones: aList });
+    vi.useRealTimers();
+    const extrasA = (await stored()).extras;
+    await B.savePreferences({ ...START, targetZones: ['UTC+05:45', 'Asia/Tokyo', 'America/New_York'] });
+    await sync().set({ [PREFS_EXTRAS_KEY]: extrasA });
+    expect((await P.loadPreferences()).targetZones).toEqual(aList);
+  });
+
+  it('partial delivery across devices still merges: B read A, so its legacy item follows A', async () => {
+    const A = await device();
+    const B = await device();
+    const P = await device();
+    await A.savePreferences(START);
+    const extrasA = (await stored()).extras;
+    await B.loadPreferences();
+    await B.savePreferences({ ...START, targetZones: [...NO_TOKYO, 'America/New_York'] });
+    expect((await stored()).legacy.pw).toBe(extrasA?.w);
+    await sync().set({ [PREFS_EXTRAS_KEY]: extrasA });
+    // B's IANA edits (Tokyo gone, New York added) show; A's new-style ids come back from A's extras.
+    expect((await P.loadPreferences()).targetZones).toEqual([...NO_TOKYO, 'America/New_York']);
+  });
+
+  it('a peer that saves inside that window keeps the result', async () => {
+    const A = await device();
+    const B = await device();
+    const P = await device();
+    await A.savePreferences(START);
+    const extrasA = (await stored()).extras;
+    await B.loadPreferences();
+    await B.savePreferences({ ...START, targetZones: NO_TOKYO });
+    await sync().set({ [PREFS_EXTRAS_KEY]: extrasA });
+    const p = await P.loadPreferences();
+    expect(p.targetZones).toEqual(NO_TOKYO);
+    await P.savePreferences({ ...p, theme: 'dark' });
+    expect(await A.loadPreferences()).toMatchObject({ targetZones: NO_TOKYO, theme: 'dark', homeZone: 'abbr:PT' });
+  });
+
+  it('measuring and failed saves are not writes: the next legacy item follows the last stored extras', async () => {
+    const A = await device();
+    await A.savePreferences(START);
+    const w1 = (await stored()).extras?.w;
+    A.syncItemBytes({ ...START, theme: 'dark' });
+    // Too large for sync: nothing is written.
+    const huge = {
+      ...START,
+      customFormats: Array.from({ length: 30 }, (_, i) => ({
+        id: `f${i}`,
+        label: 'x'.repeat(60),
+        pattern: 'YYYY-MM-DD HH:mm '.repeat(20),
+        advanced: false,
+        enabled: true,
+      })),
+    };
+    expect((await A.savePreferences(huge)).ok).toBe(false);
+    // A set that throws.
+    vi.mocked(sync().set).mockRejectedValueOnce(new Error('network'));
+    expect((await A.savePreferences({ ...START, theme: 'light' })).ok).toBe(false);
+    await A.savePreferences({ ...START, targetZones: NO_TOKYO });
+    expect((await stored()).legacy.pw).toBe(w1);
+  });
+
+  it('a legacy item with a different pw (writes in a row, the middle extras lost) uses extras whole', () => {
+    // Device B wrote twice after A; the peer has B's second legacy item and A's extras.
+    const a = toSyncItems(START);
+    toSyncItems({ ...START, targetZones: NO_TOKYO });
+    const b2 = toSyncItems({ ...START, targetZones: [...NO_TOKYO, 'America/New_York'] });
+    const legacy = b2[PREFS_KEY] as Item;
+    expect(legacy.pw).not.toBe((a[PREFS_EXTRAS_KEY] as Item).w);
+    expect(fromSyncItems({ [PREFS_KEY]: legacy, [PREFS_EXTRAS_KEY]: a[PREFS_EXTRAS_KEY] }).targetZones).toEqual(START.targetZones);
+  });
+});

@@ -113,6 +113,36 @@ describe('ZonePicker results', () => {
     expect(screen.getByRole('option')).toHaveTextContent('Already added: Asia/Kathmandu');
   });
 
+  // Round 4 (QA #8): queries that find only the added zone, by prefix, alias or offset.
+  it.each(['kathm', 'kath', 'katmandu', 'nepal', 'utc+5:45', '+545'])(
+    'says "Already added" for "%s" when only the added zone matches',
+    (q) => {
+      // Every way of reaching Kathmandu's clock is added, so nothing else matches.
+      const { input } = setup({ exclude: ['Asia/Kathmandu', 'UTC+05:45', 'abbr:NPT'] });
+      fireEvent.change(input, { target: { value: q } });
+      expect(screen.getByRole('option')).toHaveTextContent(/^Already added: (Asia\/Kathmandu|UTC\+05:45)$/);
+    },
+  );
+
+  it('"kathm" with only Asia/Kathmandu added names it', () => {
+    const { input } = setup({ exclude: ['Asia/Kathmandu'] });
+    fireEvent.change(input, { target: { value: 'kathm' } });
+    expect(screen.getByRole('option')).toHaveTextContent('Already added: Asia/Kathmandu');
+  });
+
+  it('"NPT" with Kathmandu and abbr:NPT added names an added zone', () => {
+    const { input } = setup({ exclude: ['Asia/Kathmandu', 'abbr:NPT'] });
+    fireEvent.change(input, { target: { value: 'NPT' } });
+    expect(screen.getByRole('option')).toHaveTextContent(/^Already added: (NPT|Asia\/Kathmandu)$/);
+  });
+
+  it('a partial query that also finds a zone not added lists that zone, not "Already added"', () => {
+    const { input } = setup({ exclude: ['Asia/Kathmandu'] });
+    fireEvent.change(input, { target: { value: 'kol' } });
+    expect(options()[0]).toHaveTextContent('Asia/Kolkata');
+    expect(screen.queryByText(/Already added/)).toBeNull();
+  });
+
   it('still says "No matching timezone" for gibberish', () => {
     const { input } = setup({ exclude: ['Asia/Kathmandu'] });
     fireEvent.change(input, { target: { value: 'zzzqqq' } });

@@ -82,7 +82,9 @@ function itemBytes(key: string, value: unknown): number {
  * SYNC_ITEM_LIMIT.
  */
 export function syncItemBytes(prefs: Preferences): number {
-  return Math.max(...Object.entries(toSyncItems(prefs)).map(([k, v]) => itemBytes(k, v)));
+  // Placeholder ids and time of the real lengths, so measuring is not a write.
+  const ids = { w: '0'.repeat(12), t: Math.max(Date.now(), lastWriteTime + 1), pw: lastWriteId ?? '0'.repeat(12) };
+  return Math.max(...Object.entries(buildSyncItems(prefs, ids)).map(([k, v]) => itemBytes(k, v)));
 }
 
 /** Outcome of a save, so settings UIs can tell the user when it did not stick. */
@@ -209,18 +211,26 @@ export function sanitize(input: unknown): Preferences {
  *   strictly above every write time this context wrote or read). 0.6.x's
  *   sanitize drops unknown fields, so a legacy item written by 0.6.x has
  *   neither.
+ * - The legacy item also carries `pw`, the write id this context last wrote,
+ *   or last read in an extras item, before this write: the write it follows.
+ *   It is absent when the context has seen no write id.
  *
  * Reading (fromSyncItems):
  * - No extras: the legacy item as is.
  * - Legacy carries a `w` (written by this build): if it equals extras' `w`,
  *   both come from one write, so use extras' full zone values. If it differs,
- *   the two items come from two different writes of this build and one of
- *   them has not arrived yet (sync can deliver them separately); `t` says
- *   which is newer:
- *   - extras newer, equal `t`, or `t` missing on either: use extras' full
- *     zone values (merging would bring back a zone just removed on another
- *     device).
- *   - legacy newer: legacy is the truth for IANA ids. targetZones is
+ *   the two items come from two different writes of this build: either one
+ *   of them has not arrived yet (sync can deliver them separately), or two
+ *   devices wrote without seeing each other and each device's half survived.
+ *   - extras newer, equal `t`, `t` missing on either, or legacy's `pw` is not
+ *     extras' `w` (legacy did not follow this extras: two devices' halves, or
+ *     two writes in a row whose first extras never reached this reader): use
+ *     extras' full zone values whole. Merging would bring back a zone just
+ *     removed on another device, or settle on one device's IANA ids with the
+ *     other's new-style ids, which nothing in flight would correct.
+ *   - legacy newer and legacy's `pw` is extras' `w` (the write that followed
+ *     this extras, its own extras still in flight): legacy is the truth for
+ *     IANA ids. targetZones is
  *     mergeTargets(legacy, extras) as below; homeZone is legacy's, unless it
  *     equals the fingerprint of extras' home (the newer write kept that home,
  *     so extras' full value, e.g. abbr:PT, still applies).
@@ -268,16 +278,32 @@ function fingerprint(value: unknown): string {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-/** The two sync items for these preferences. */
+/**
+ * The two sync items for a new write of these preferences. The write's id
+ * becomes this context's last write id (the next write's `pw`).
+ */
 export function toSyncItems(prefs: Preferences): Record<string, unknown> {
+  const pw = lastWriteId;
+  const w = writeId();
+  const items = buildSyncItems(prefs, { w, t: writeTime(), pw });
+  lastWriteId = w;
+  return items;
+}
+
+interface WriteIds {
+  readonly w: string;
+  readonly t: number;
+  /** The extras write this one follows; absent when this context has seen none. */
+  readonly pw: string | undefined;
+}
+
+function buildSyncItems(prefs: Preferences, { w, t, pw }: WriteIds): Record<string, unknown> {
   const clean = sanitize(prefs);
   const targetZones = clean.targetZones.filter(isLegacyZone);
   const homeZone = isLegacyZone(clean.homeZone) ? clean.homeZone : ianaEquivalent(clean.homeZone);
   // The legacy item keeps the new-only fields too: 0.6.x ignores them, and a
   // reader without extras still finds them.
   const legacy: Preferences = { ...clean, homeZone, targetZones };
-  const w = writeId();
-  const t = writeTime();
   const extras = {
     v: 1,
     w,
@@ -290,11 +316,17 @@ export function toSyncItems(prefs: Preferences): Record<string, unknown> {
     fpHome: fingerprint(homeZone),
     fpTargets: fingerprint(targetZones),
   };
-  return { [KEY]: { ...legacy, w, t }, [EXTRAS_KEY]: extras };
+  return { [KEY]: pw === undefined ? { ...legacy, w, t } : { ...legacy, w, t, pw }, [EXTRAS_KEY]: extras };
 }
 
 /** Largest write time written or seen in this context (see writeTime). */
 let lastWriteTime = 0;
+
+/**
+ * The write id `w` this context last wrote, or last read in the extras item.
+ * The next write stores it as `pw` in its legacy item.
+ */
+let lastWriteId: string | undefined;
 
 /**
  * Write time for a new write: Date.now(), but always above every write time
@@ -352,16 +384,26 @@ export function fromSyncItems(items: Record<string, unknown> | undefined | null)
   const out: Record<string, unknown> = { ...(legacy ?? {}) };
   // A write id on the legacy item means this build wrote it, not 0.6.x.
   const newWriter = typeof legacy?.w === 'string' && typeof extras.w === 'string';
-  if (newWriter && legacy && legacy.w !== extras.w && isWriteTime(legacy.t) && isWriteTime(extras.t) && legacy.t > extras.t) {
-    // The legacy item of a newer write arrived before its extras: legacy is
-    // the truth for IANA values, extras only adds the new-style ids back.
+  if (
+    newWriter &&
+    legacy &&
+    legacy.w !== extras.w &&
+    legacy.pw === extras.w &&
+    isWriteTime(legacy.t) &&
+    isWriteTime(extras.t) &&
+    legacy.t > extras.t
+  ) {
+    // The legacy item of the write that followed this extras arrived before
+    // its own extras: legacy is the truth for IANA values, extras only adds
+    // the new-style ids back.
     if (typeof legacy.homeZone !== 'string' || !isLegacyZone(legacy.homeZone) || fingerprint(legacy.homeZone) === extras.fpHome) {
       out.homeZone = extras.homeZone;
     }
     if (!Array.isArray(legacy.targetZones)) out.targetZones = extras.targetZones;
     else if (Array.isArray(extras.targetZones)) out.targetZones = mergeTargets(legacy.targetZones, extras.targetZones);
   } else {
-    // Same write, extras newer, write times missing, or an old device's legacy item.
+    // Same write, extras newer, write times missing, a legacy item that did
+    // not follow this extras (two devices' halves), or an old device's legacy item.
     readZones(out, legacy, extras, newWriter);
   }
   for (const f of EXTRA_FIELDS) if (extras[f] !== undefined) out[f] = extras[f];
@@ -404,6 +446,8 @@ let known: { readonly area: chrome.storage.StorageArea; readonly items: Record<s
 function remember(area: chrome.storage.StorageArea, items: Record<string, unknown> | undefined): void {
   known = { area, items: { [KEY]: items?.[KEY], [EXTRAS_KEY]: items?.[EXTRAS_KEY] } };
   noteWriteTimes(items);
+  const w = record(items?.[EXTRAS_KEY])?.w;
+  if (typeof w === 'string') lastWriteId = w;
 }
 
 export async function loadPreferences(): Promise<Preferences> {
@@ -446,8 +490,10 @@ export async function savePreferences(prefs: Preferences): Promise<SaveResult> {
       return { ok: false, error: `Could not save settings: ${e instanceof Error ? e.message : String(e)}` };
     }
   }
+  const prevWriteId = lastWriteId;
   const items = toSyncItems(prefs);
   if (b.name === 'sync' && Object.entries(items).some(([k, v]) => itemBytes(k, v) > SYNC_ITEM_LIMIT)) {
+    lastWriteId = prevWriteId; // nothing was written
     return TOO_LARGE;
   }
   try {
@@ -455,6 +501,9 @@ export async function savePreferences(prefs: Preferences): Promise<SaveResult> {
     remember(b.area, items);
     return { ok: true };
   } catch (e) {
+    // A failed set may have stored nothing; the next write follows the last
+    // extras this context knows of.
+    if (lastWriteId === (items[EXTRAS_KEY] as { w: string }).w) lastWriteId = prevWriteId;
     const msg = e instanceof Error ? e.message : String(e);
     if (/quota/i.test(msg)) return TOO_LARGE;
     return { ok: false, error: `Could not save settings: ${msg}` };

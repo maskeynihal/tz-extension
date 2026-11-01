@@ -263,40 +263,80 @@ const RE_TIME = new RegExp(
 
 /**
  * Scripture references look like times: "Romans 8:28", "Surah 2:255",
- * "verse 3:16". Book names (and "verse", "chapter", "ch.", "v.") just before
+ * "verse 3:16". Book names (and "verse", "chapter", "ch.") just before
  * a bare H:MM make it chapter:verse. A list rather than "any capitalized
  * word": "Standup 9:00" and "Lunch 12:30" are times. Book names that are
  * common schedule words (Job, Acts, Numbers, Song) are left out, and books
- * that are also given names are in NAME_BOOK below.
+ * that are also given names are in NAME_BOOK below. "v." is handled by
+ * VERSE_ABBR_BEFORE.
  */
 const SCRIPTURE_BEFORE = new RegExp(
-  String.raw`(?:^|[^${L}])(?:(?:Genesis|Exodus|Leviticus|Deuteronomy|Judges|Kings|Chronicles|Nehemiah|Psalms?|Proverbs|Ecclesiastes|Lamentations|Ezekiel|Hosea|Obadiah|Nahum|Habakkuk|Zephaniah|Haggai|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians|Hebrews|Revelation|Gen|Exod|Deut|Rom|Cor|Gal|Eph|Heb|Rev|Ps|Prov|Jer|Ezek|Surah|Sura|Quran|Qur['’]an)\.?|[Vv]erses?|[Cc]hapter|[Cc]h\.|[Vv]v?\.)[ \t]+$`,
+  String.raw`(?:^|[^${L}])(?:(?:Genesis|Exodus|Leviticus|Deuteronomy|Judges|Kings|Chronicles|Nehemiah|Psalms?|Proverbs|Ecclesiastes|Lamentations|Ezekiel|Hosea|Obadiah|Nahum|Habakkuk|Zephaniah|Haggai|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians|Hebrews|Revelation|Gen|Exod|Deut|Rom|Cor|Gal|Eph|Heb|Rev|Ps|Prov|Jer|Ezek|Surah|Sura|Quran|Qur['’]an)\.?|[Vv]erses?|[Cc]hapter|[Cc]h\.)[ \t]+$`,
+);
+
+/** Verbs that introduce a citation: "See John 3:16", "Read Mark 4:39", "cf. Luke 2:11". */
+const CITE_VERB = String.raw`(?:[Ss]ee|[Rr]ead|[Cc]f\.|[Cc]ompare|[Qq]uot(?:e|ed|es|ing))`;
+
+/**
+ * "v. 3:16" and "vv. 3:16" mean verse when the abbreviation sits directly
+ * before the number. After a capitalised word it means versus: "Liverpool
+ * v. 3:00" is a time, unless that word is a citation verb ("See v. 3:16").
+ * Group: word (the word before "v.", if any).
+ */
+const VERSE_ABBR_BEFORE = new RegExp(
+  String.raw`(?:^|[^${L}])(?:(?<word>[${L}]+\.?)[ \t]+)?[Vv]v?\.[ \t]+$`,
 );
 
 /**
  * Books that are also given names: "Call John 3:30" and "Lunch with Peter
  * 12:30" are times. They mean chapter:verse only with scripture context: a
- * book number ("1 John 3:16", "2 Peter 1:5"), "verse"/"chapter"/"ch."/"v."
- * before the name, or a verse range or list right after (verseAfter). A
- * name opening the line before minutes that are not a multiple of five
- * ("John 3:16") is also a verse; "Ruth 9:00" and "Daniel 9:15 standup" are
- * times. Groups: lead (text before), num, ctx.
+ * book number ("1 John 3:16", "2 Peter 1:5"), "verse"/"chapter"/"ch."
+ * before the name, or a verse range or list right after (VERSE_AFTER).
+ * Weaker context, the name opening the line or following a citation verb
+ * ("John 3:16", "See John 3:16"), is a verse only when nothing says time:
+ * see weakVerse. Groups: lead (text before), num, ctx, cite.
  */
 const NAME_BOOK = 'Joshua|Samuel|Ruth|Ezra|Esther|Isaiah|Isa|Jeremiah|Daniel|Joel|Amos|Jonah|Micah|Zechariah|Malachi|Matthew|Matt|Mark|Luke|John|Timothy|Titus|Philemon|Phil|James|Peter|Jude';
 const NAME_BOOK_BEFORE = new RegExp(
-  String.raw`(?<lead>^|[^${L}\d])(?<num>(?:[1-3]|I{1,3}|First|Second|Third)[ \t]+)?(?<ctx>(?:[Vv]erses?|[Cc]hapter|[Cc]h\.|[Vv]v?\.)[ \t]+)?(?:${NAME_BOOK})\.?[ \t]+$`,
+  String.raw`(?<lead>^|[^${L}\d])(?<cite>${CITE_VERB}[ \t]+)?(?<num>(?:[1-3]|I{1,3}|First|Second|Third)[ \t]+)?(?<ctx>(?:[Vv]erses?|[Cc]hapter|[Cc]h\.)[ \t]+)?(?:${NAME_BOOK})\.?[ \t]+$`,
 );
 /** "3:16-18", "3:16–18", "3:16,18": a verse range or list, not a time range. */
 const VERSE_AFTER = /^(?:[-–—]|,(?=\d))\d{1,3}(?![\d:])/;
+/** "9:17-9:45", "9:17 – 9:45": a time range. */
+const TIME_RANGE_AFTER = /^[ \t]*[-–—][ \t]*\d{1,2}:\d{2}/;
+/** "Mark 3:47 meeting", "Peter 4:12 joined": a schedule or chat word after the time. */
+const TIME_WORD_AFTER =
+  /^[ \t]+(?:meeting|meet|call|calls|standup|stand-up|sync|joined|joins|left|leaves|said|wrote|replied|lunch|dinner|breakfast|demo|review|today|tonight|tomorrow|yesterday|am|pm|a\.m\.|p\.m\.|start|starts|end|ends|deadline|dentist|appointment|interview|online|offline|here)(?![\p{L}\p{N}])/u;
 
-function scriptureBefore(line: string, minutes: string, after: string): boolean {
+/**
+ * A given-name book with only weak scripture context. A zero-padded hour
+ * ("John 09:41"), an hour of 13 or more ("Peter 14:07"), a time range
+ * ("Daniel 9:17-9:45"), a schedule word after ("Mark 3:47 meeting") or
+ * whole five minutes ("Ruth 9:00") say time.
+ */
+function weakVerse(hour: string, minutes: string, after: string, cited: boolean): boolean {
+  if (/^0\d/.test(hour) || Number(hour) >= 13) return false;
+  if (TIME_RANGE_AFTER.test(after)) return false;
+  // A citation verb outweighs the word after: "Read John 3:16 today".
+  if (!cited && TIME_WORD_AFTER.test(after)) return false;
+  return Number(minutes) % 5 !== 0;
+}
+
+function scriptureBefore(line: string, hour: string, minutes: string, after: string): boolean {
   if (SCRIPTURE_BEFORE.test(line)) return true;
+  const v = VERSE_ABBR_BEFORE.exec(line);
+  if (v) {
+    const word = v.groups?.word;
+    if (!word || !/^[A-Z]/.test(word) || new RegExp(String.raw`^${CITE_VERB}$`).test(word)) return true;
+  }
   const m = NAME_BOOK_BEFORE.exec(line);
   if (!m) return false;
   const g = m.groups ?? {};
+  // A zero-padded hour or a time range after the time is never a verse.
+  if (/^0\d/.test(hour) || TIME_RANGE_AFTER.test(after)) return false;
   if (g.num || g.ctx || VERSE_AFTER.test(after)) return true;
   const opensLine = /^[\s"'“‘«([*>•–—-]*$/.test(line.slice(0, m.index + (g.lead ?? '').length));
-  return opensLine && Number(minutes) % 5 !== 0;
+  return (opensLine || !!g.cite) && weakVerse(hour, minutes, after, !!g.cite);
 }
 
 /** "odds of 1:30", "1:30 odds", "aspect ratio 4:30": a ratio, not a time. */
@@ -895,7 +935,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
           const line = before.slice(before.lastIndexOf('\n') + 1);
           // "Romans 8:28", "1 John 3:16", "odds of 1:30", "1:30 odds".
           const after = src.slice(end, end + 20);
-          if (scriptureBefore(line, miTok, after) || RATIO_BEFORE.test(line) || RATIO_AFTER.test(after)) {
+          if (scriptureBefore(line, hTok ?? '', miTok, after) || RATIO_BEFORE.test(line) || RATIO_AFTER.test(after)) {
             return null;
           }
         }

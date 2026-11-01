@@ -702,14 +702,26 @@ function Scrubber({ steps, exact, nowMs, home, hour12, scrubbed, onChange, idBas
           value={steps}
           aria-valuetext={valueText}
           aria-describedby={`${idBase}-scrub-hint`}
-          onChange={(e) => onChange(Number(e.currentTarget.value))}
+          onChange={(e) => {
+            // The two ends are the −12h / +36h presets: exact from the
+            // current minute, not snapped to a quarter hour (Home/End, or a
+            // drag to the end).
+            const v = Number(e.currentTarget.value);
+            onChange(v, v === SCRUB_MIN_STEPS || v === SCRUB_MAX_STEPS);
+          }}
           onKeyDown={(e) => {
+            if (e.key === 'Home' || e.key === 'End') {
+              e.preventDefault();
+              onChange(e.key === 'Home' ? SCRUB_MIN_STEPS : SCRUB_MAX_STEPS, true);
+              return;
+            }
             let next: number | null = null;
             if (e.key === 'PageUp') next = steps + 4;
             else if (e.key === 'PageDown') next = steps - 4;
             if (next === null) return;
             e.preventDefault();
-            onChange(Math.max(SCRUB_MIN_STEPS, Math.min(SCRUB_MAX_STEPS, next)));
+            const clamped = Math.max(SCRUB_MIN_STEPS, Math.min(SCRUB_MAX_STEPS, next));
+            onChange(clamped, clamped === SCRUB_MIN_STEPS || clamped === SCRUB_MAX_STEPS);
           }}
         />
         <span className="tzc-range-now" aria-hidden="true" />

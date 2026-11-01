@@ -284,6 +284,138 @@ test.describe('v2 features', () => {
     await page.close();
   });
 
+  /** Count every transient card added to the page from now on (a flicker or a duplicate adds one). */
+  async function watchTransient(page: Page): Promise<() => Promise<number>> {
+    await page.evaluate(() => {
+      const w = window as unknown as { __tzxAdded: number };
+      w.__tzxAdded = 0;
+      new MutationObserver((list) => {
+        for (const m of list) {
+          for (const n of Array.from(m.addedNodes)) if ((n as Element).id === 'tz-extension-popover-host') w.__tzxAdded++;
+        }
+      }).observe(document.body, { childList: true });
+    });
+    return () => page.evaluate(() => (window as unknown as { __tzxAdded: number }).__tzxAdded);
+  }
+
+  test('clicking card buttons with the mouse never re-opens or duplicates the card, and a mouse pin leaves none behind', async () => {
+    await setPrefs({ targetZones: ['UTC', 'Asia/Tokyo'], cardSize: 'full', keepSelection: true });
+    const page = await openPage('<p id="t" style="margin-top:200px">Standup 1700000000 today</p>');
+    await page.locator('#t').click({ clickCount: 3 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const added = await watchTransient(page);
+
+    await card(page).getByLabel('Make compact').click();
+    await page.waitForTimeout(600);
+    await expect(card(page)).toHaveClass(/compact/);
+    await card(page).getByLabel('Expand card').click();
+    await card(page).locator('button.tzx-del[aria-label*="Tokyo"]').click();
+    await page.waitForTimeout(600);
+    await expect(card(page)).toHaveCount(1);
+    await expect(card(page).locator('button.tzx-del[aria-label*="Tokyo"]')).toHaveCount(0);
+    expect(await added()).toBe(0);
+
+    await card(page).getByLabel('Pin to page').click();
+    await expect(page.locator('.tz-extension-pin-host')).toHaveCount(1);
+    await page.waitForTimeout(600);
+    await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
+    expect(await added()).toBe(0);
+    // The selection is kept (copy works), and buttons on the pin do not bring the card back either.
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain('1700000000');
+    await page.locator('.tz-extension-pin-host .tzx-card').getByLabel('Make compact').click();
+    await page.waitForTimeout(600);
+    await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
+    await page.close();
+  });
+
+  test('a selection with two dates steps between them, marks the shown one and pins it', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const page = await openPage('<p id="t">2024-03-22-2024-03-25</p>');
+    await page.locator('#t').click({ clickCount: 3 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const src = card(page).locator('.tzx-src > span').first();
+    const status = card(page).locator('[aria-live="polite"]');
+    const marked = (): Promise<string> =>
+      page.evaluate(() => {
+        const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get('tz-extension-match');
+        return hl ? Array.from(hl).map(String).join('|') : '';
+      });
+    await expect(src).toHaveText('“2024-03-22”');
+    await expect(status).toHaveText('Time 1 of 2');
+    await expect(card(page).locator('.tzx-step')).toContainText('1 of 2');
+    await expect.poll(marked).toBe('2024-03-22');
+
+    await card(page).getByRole('button', { name: 'Next time' }).click();
+    await expect(src).toHaveText('“2024-03-25”');
+    await expect(status).toHaveText('Time 2 of 2');
+    await expect.poll(marked).toBe('2024-03-25');
+    // From the keyboard too: Previous wraps around.
+    await card(page).getByRole('button', { name: 'Previous time' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(status).toHaveText('Time 1 of 2');
+    await page.keyboard.press('Enter');
+    await expect(status).toHaveText('Time 2 of 2');
+
+    await card(page).getByLabel('Pin to page').click();
+    const pin = page.locator('.tz-extension-pin-host .tzx-card');
+    await expect(pin.locator('.tzx-src > span').first()).toHaveText('“2024-03-25”');
+    await expect(pin.locator('.tzx-more')).toHaveText('+1 more time in selection');
+    await page.waitForTimeout(600);
+    await expect(page.locator('#tz-extension-popover-host')).toHaveCount(0);
+    await page.close();
+  });
+
+  test('Alt+Shift+T moves focus from a keyboard selection in a textarea into the card and back', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full' });
+    const links = Array.from({ length: 30 }, (_, i) => `<a href="#l${i}">link ${i}</a>`).join(' ');
+    const page = await openPage(`<textarea id="ta" cols="60">Deploy at 1700000000 sharp</textarea><p>${links}</p>`);
+    await page.locator('#ta').focus();
+    await page.evaluate(() => (document.getElementById('ta') as HTMLTextAreaElement).setSelectionRange(10, 19));
+    // Extend the selection by one character with the keyboard: "1700000000".
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(100);
+    const active = (): Promise<string> =>
+      page.evaluate(() => {
+        const host = document.getElementById('tz-extension-popover-host');
+        if (document.activeElement === host) return `card:${host?.shadowRoot?.activeElement?.className ?? ''}`;
+        return document.activeElement?.id ?? '';
+      });
+    // Opening did not take the focus.
+    expect(await active()).toBe('ta');
+    await expect(card(page)).toHaveAttribute('aria-description', 'Alt+Shift+T to focus');
+
+    await page.keyboard.press('Alt+Shift+T');
+    await expect.poll(active).toMatch(/^card:tzx-card/);
+    // One Tab reaches the card's first button.
+    await page.keyboard.press('Tab');
+    expect(
+      await page.evaluate(
+        () => document.getElementById('tz-extension-popover-host')?.shadowRoot?.activeElement?.getAttribute('aria-label'),
+      ),
+    ).toBe('Pin to page');
+    await page.keyboard.press('Alt+Shift+T');
+    await expect.poll(active).toBe('ta');
+    // Nothing was typed into the field, and its selection is intact.
+    expect(
+      await page.evaluate(() => {
+        const ta = document.getElementById('ta') as HTMLTextAreaElement;
+        return [ta.value, ta.selectionStart, ta.selectionEnd];
+      }),
+    ).toEqual(['Deploy at 1700000000 sharp', 10, 20]);
+    await expect(card(page)).toBeVisible();
+
+    await page.keyboard.press('Alt+Shift+T');
+    await expect.poll(active).toMatch(/^card:/);
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toHaveCount(0);
+    expect(await active()).toBe('ta');
+    // With no card open the keys do nothing of ours.
+    await page.keyboard.press('Alt+Shift+T');
+    expect(await active()).toBe('ta');
+    await page.close();
+  });
+
   test('Escape closes the card even when the page stops Escape on body', async () => {
     await setPrefs({ targetZones: ['UTC'], cardSize: 'full' });
     const page = await openPage(
@@ -449,6 +581,17 @@ test.describe('v2 features', () => {
   test('at 1280 px, "Unpin all" with 15 pins leaves every header button clickable and every card on screen', async () => {
     test.setTimeout(90_000);
     const page = await pinMany(15, 1280, 800);
+    // Every pinned card has the same width (pins 10 to 15 have two-digit
+    // numbers), and each sits at its own date's left edge.
+    const placed = await page.evaluate(() => {
+      const spans = Array.from(document.querySelectorAll('p span'));
+      return Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((h, i) => ({
+        w: Math.round(h.getBoundingClientRect().width),
+        dx: Math.round(h.getBoundingClientRect().left - spans[i]!.getBoundingClientRect().left),
+      }));
+    });
+    expect(new Set(placed.map((p) => p.w)).size, JSON.stringify(placed)).toBe(1);
+    expect(placed.map((p) => p.dx)).toEqual(placed.map(() => 0));
     await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
     await expect(page.locator('.tz-extension-pin-host .tzx-card.floating')).toHaveCount(15);
     const reach = await headerReach(page);

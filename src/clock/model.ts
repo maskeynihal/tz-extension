@@ -1,6 +1,7 @@
 // Pure helpers for the world clock: no React, no DOM. Unit-tested through
 // the Clock component and directly where the maths is fiddly.
-import { displayZoneName, offsetMinutesAt, resolveZone, sameZone } from '../lib/tz';
+import { displayZoneName, offsetMinutesAt, resolveZone, sameZone, zoneLabel } from '../lib/tz';
+import { wallFieldsAt } from '../lib/wallclock';
 import type { Preferences } from '../types';
 
 /** Scrubber range, in 15-minute steps: −12 h … +36 h. */
@@ -71,11 +72,20 @@ export type RelativeDay = 'Yesterday' | 'Today' | 'Tomorrow';
 
 /**
  * A zone's wall clock at an instant, as a Date whose UTC fields are the local
- * fields. Built from the offset (not a local-time Date), so the browser's own
- * DST gaps can never shift it.
+ * fields. Built from the zone's own wall fields (as viewInZone reads them),
+ * not a local-time Date, so the browser's own DST gaps can never shift it and
+ * second-precise offsets (local mean time before 1900-ish: Kathmandu
+ * +05:41:16) aren't rounded to the minute.
  */
 export function wallDate(epochMs: number, zone: string): Date {
-  return new Date(epochMs + offsetMinutesAt(epochMs, zone) * 60_000);
+  const tz = resolveZone(zone)?.tz;
+  const w = tz ? wallFieldsAt(epochMs, tz) : null;
+  if (!w) return new Date(epochMs + offsetMinutesAt(epochMs, zone) * 60_000);
+  const d = new Date(0);
+  // setUTCFullYear, not Date.UTC, so years 0–99 aren't read as 19xx.
+  d.setUTCFullYear(w.y, w.mo - 1, w.d);
+  d.setUTCHours(w.h, w.mi, w.s, ((epochMs % 1000) + 1000) % 1000);
+  return d;
 }
 
 function dayNumber(d: Date): number {
@@ -170,13 +180,17 @@ export function zonePlace(zone: string): string {
   return displayZoneName(zone);
 }
 
-/** The secondary line under a card's title. */
+/**
+ * The secondary line under a card's title: the zone's label as the card and
+ * popup write it (zoneLabel, the IANA id with its underscores:
+ * "America/St_Johns"), so the same zone reads the same everywhere.
+ */
 export function zoneDescription(zone: string): string {
   const r = resolveZone(zone);
   if (!r) return '';
   if (r.kind === 'iana') {
     if (r.short === 'UTC' || r.short === 'Etc/UTC') return 'Coordinated Universal Time';
-    return r.short.replace(/_/g, ' ');
+    return zoneLabel(zone);
   }
   if (r.kind === 'offset') return 'Fixed offset, no daylight saving';
   return r.long;
