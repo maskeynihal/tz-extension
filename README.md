@@ -112,7 +112,7 @@ npm run e2e          # playwright smoke test
 
 - **Build:** Vite 5 + `@crxjs/vite-plugin` 2
 - **UI:** React 18 + TypeScript (strict)
-- **Time:** `date-fns` + `date-fns-tz` (DST-correct, fractional offsets)
+- **Time:** the browser's `Intl` time zone data, no time library (DST-correct, fractional offsets)
 - **Tests:** Vitest + Testing Library (unit), Playwright (e2e)
 
 ## Permissions

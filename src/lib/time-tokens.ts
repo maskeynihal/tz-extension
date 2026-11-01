@@ -2,7 +2,7 @@ import type { DateOnlyPolicy, ParsedTime, ParseKind } from '../types';
 import { resolveZone } from './tz';
 import { wallFieldsToInstant } from './wallclock';
 
-/** The date-fns-tz / Intl argument for any zone id (IANA, UTC±hh:mm, abbr:XXX). */
+/** The Intl time zone argument for any zone id (IANA, UTC±hh:mm, abbr:XXX). */
 function tzArg(zone: string): string {
   return resolveZone(zone)?.tz ?? zone;
 }

@@ -88,7 +88,7 @@ No host permissions declared beyond the content script needed for
 select-to-convert, which reads the user's text selection to parse a time and
 renders a popover. No network requests are made anywhere in the add-on.
 
-Build: Vite + @crxjs/vite-plugin, React 18, date-fns-tz. The Firefox manifest is
+Build: Vite + @crxjs/vite-plugin, React 18 (time zone maths uses the browser's Intl API; no time library). The Firefox manifest is
 produced by scripts/firefox-manifest.mjs, which converts the background to an
 event-page script list, adds the gecko id and strict_min_version, declares
 data_collection_permissions (none), and strips the Chrome-only use_dynamic_url
