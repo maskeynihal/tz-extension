@@ -442,8 +442,10 @@ describe('Popover, round 5', () => {
       <Popover parsed={m[0] as ParsedTime} matchCount={25} matchesCapped prefs={PREFS} pinned={false} onClose={() => {}} onStep={() => {}} />,
     );
     const step = container.querySelector('.tzx-step') as HTMLElement;
-    expect(step.getAttribute('title')).toBe('Only the first 25 times are listed');
-    expect(step.querySelector('[aria-live="polite"]')?.textContent).toBe('Time 1 of 25+. Only the first 25 times are listed');
+    // Round 7 (QA G7): up to 500 times are listed now, so 25 listed with
+    // more in the selection means the text ran past what is read.
+    expect(step.getAttribute('title')).toBe('Text past the first 50,000 characters is not read');
+    expect(step.querySelector('[aria-live="polite"]')?.textContent).toBe('Time 1 of 25+. Text past the first 50,000 characters is not read');
     expect(stepCountText(0, 25, true)).toBe('1 of 25+');
     expect(stepCountText(4, 7)).toBe('5 of 7');
     expect(moreTimesText(24, true)).toBe('+24 or more times in selection');

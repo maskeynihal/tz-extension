@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { excludedMatch, normalizeSearch, resolveZone, searchZones } from '../src/lib/tz';
+import {
+  excludedMatch,
+  listTimeZones,
+  normalizeSearch,
+  offsetMinutesAt,
+  resolveZone,
+  searchZones,
+  UTC_OFFSET_MINUTES,
+} from '../src/lib/tz';
 
 /* Round 6: dotted and decimal-hour offsets (review nit #7 / QA F8), Etc/GMT±N in search (QA F9). */
 
@@ -71,9 +79,16 @@ describe('Etc/GMT±N in search (QA F9)', () => {
   it.each(['Etc/GMT+12', 'etc/gmt+12', 'ETC/GMT+12'])('"%s" finds Etc/GMT+12 and gives its real offset', (q) => {
     const o = searchZones(q).flatMap((g) => g.options)[0];
     expect(o?.id).toBe('Etc/GMT+12');
-    expect(o?.detail).toContain('UTC-12:00');
-    expect(o?.detail).toMatch(/reversed/);
+    // Round 7 (review nit #7): the offset once, then the note.
+    expect(o?.detail).toBe('UTC-12:00 · POSIX sign is reversed');
     expect(resolveZone('Etc/GMT+12')?.short).toBe('UTC-12:00');
+  });
+
+  it('every Etc detail names its real offset once', () => {
+    const etc = searchZones('etc/').flatMap((g) => g.options);
+    expect(etc.find((o) => o.id === 'Etc/GMT+9')?.detail).toBe('UTC-09:00 · POSIX sign is reversed');
+    expect(etc.find((o) => o.id === 'Etc/GMT-14')?.detail).toBe('UTC+14:00 · POSIX sign is reversed');
+    for (const o of etc) expect(o.detail?.match(/UTC[+-]\d\d:\d\d/g)).toHaveLength(1);
   });
 
   it('"etc/" lists every Etc/GMT±N zone, -14 to +12', () => {
@@ -103,5 +118,27 @@ describe('Etc/GMT±N in search (QA F9)', () => {
   it('an added Etc zone is excluded and reported as already added', () => {
     expect(ids('etc/gmt+12', { exclude: ['Etc/GMT+12'] })).not.toContain('Etc/GMT+12');
     expect(excludedMatch('etc/gmt+12', ['Etc/GMT+12'])).toBe('Etc/GMT+12');
+  });
+});
+
+describe('UTC offsets (round 7, QA G11)', () => {
+  it('+13:45 is a fixed offset, found by "utc+13:45" and "+13.75"', () => {
+    expect(UTC_OFFSET_MINUTES).toContain(825);
+    expect(first('utc+13:45')).toBe('UTC+13:45');
+    expect(ids('+13.75')).toContain('UTC+13:45');
+    expect(ids('+13.75')).toContain('abbr:CHADT');
+    expect(resolveZone('UTC+13:45')?.short).toBe('UTC+13:45');
+  });
+
+  it('lists every offset a zone has at any time of the year, in order', () => {
+    const used = new Set<number>();
+    const start = Date.UTC(2025, 0, 1);
+    for (let day = 0; day < 366; day += 3) {
+      for (const z of listTimeZones()) used.add(offsetMinutesAt(start + day * 86_400_000, z));
+    }
+    const missing = [...used].filter((m) => !UTC_OFFSET_MINUTES.includes(m));
+    expect(missing).toEqual([]);
+    expect([...UTC_OFFSET_MINUTES].sort((a, b) => a - b)).toEqual(UTC_OFFSET_MINUTES);
+    expect(UTC_OFFSET_MINUTES).toHaveLength(40);
   });
 });

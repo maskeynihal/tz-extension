@@ -63,6 +63,20 @@ interface DragState {
   scrollRaf: number;
 }
 
+/**
+ * A keyboard pick-up (Space or Enter on a handle): the row moves with the
+ * arrow keys in a local order that is only reported on drop.
+ */
+interface GrabState {
+  readonly key: string;
+  /** Position when picked up. */
+  readonly from: number;
+  /** The order shown while the row is held. */
+  readonly order: readonly string[];
+  /** `items` when picked up; a different list from the parent ends the grab. */
+  readonly base: string;
+}
+
 type PendingFocus = { readonly kind: 'element'; readonly el: HTMLElement; readonly key: string } | { readonly kind: 'index'; readonly index: number };
 
 /** Distance from a viewport edge where dragging starts to scroll the page. */
@@ -128,6 +142,17 @@ export function SortableList(props: SortableListProps): JSX.Element {
   const drag = useRef<DragState | null>(null);
   const prevKeys = useRef<string | null>(null);
   const dragSeq = useRef(0);
+  const [grab, setGrabState] = useState<GrabState | null>(null);
+  const grabRef = useRef<GrabState | null>(null);
+  const itemsString = items.join('\n');
+  // A grab made on another list (the parent changed it meanwhile) is over.
+  const activeGrab = grab && grab.base === itemsString ? grab : null;
+  const shownItems = activeGrab ? activeGrab.order : items;
+
+  function setGrab(g: GrabState | null): void {
+    grabRef.current = g;
+    setGrabState(g);
+  }
 
   function announce(text: string): void {
     // Repeat announcements must still change the text to be read again.
@@ -214,7 +239,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
     const current = latest.current.items;
     const key = current[index];
     const to = index + dir;
-    if (!list || key === undefined || to < 0 || to >= current.length || drag.current) return;
+    if (!list || key === undefined || to < 0 || to >= current.length || drag.current || grabRef.current) return;
     if (exiting.current.has(key)) return;
     const active = document.activeElement;
     pendingFocus.current =
@@ -227,7 +252,7 @@ export function SortableList(props: SortableListProps): JSX.Element {
   function removeItem(key: string): void {
     const { onRemove, items: current, itemLabel: nameOf } = latest.current;
     const list = listRef.current;
-    if (!onRemove || !list || exiting.current.has(key) || drag.current) return;
+    if (!onRemove || !list || exiting.current.has(key) || drag.current || grabRef.current) return;
     const index = current.indexOf(key);
     const row = rowFor(key);
     const active = document.activeElement;
@@ -382,7 +407,8 @@ export function SortableList(props: SortableListProps): JSX.Element {
 
   function onPointerDown(e: ReactPointerEvent<HTMLButtonElement>, key: string): void {
     const list = listRef.current;
-    if (!list || !e.isPrimary || exiting.current.size > 0) return;
+    // A row held from the keyboard stays held until Space, Enter or Escape.
+    if (!list || !e.isPrimary || exiting.current.size > 0 || grabRef.current) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const stale = drag.current;
     if (stale) {
@@ -472,9 +498,145 @@ export function SortableList(props: SortableListProps): JSX.Element {
     moveBy(index, e.key === 'ArrowUp' ? -1 : 1);
   }
 
+  // ---- Keyboard pick-up: Space/Enter, arrows, Space/Enter or Escape -------
+
+  /** Keep focus on the held row's handle across the re-render that moves it. */
+  function keepFocus(key: string): void {
+    const list = listRef.current;
+    const active = document.activeElement;
+    pendingFocus.current =
+      list && active instanceof HTMLElement && list.contains(active) ? { kind: 'element', el: active, key } : null;
+  }
+
+  function pickUp(key: string): void {
+    const current = latest.current.items;
+    const from = current.indexOf(key);
+    if (from < 0 || drag.current || exiting.current.size > 0) return;
+    setGrab({ key, from, order: [...current], base: current.join('\n') });
+    announce(
+      `Picked up ${latest.current.itemLabel(key)}, position ${from + 1} of ${current.length}. ` +
+        'Press Up or Down Arrow to move it, Space or Enter to drop it, Escape to cancel.',
+    );
+  }
+
+  function grabMove(dir: -1 | 1): void {
+    const g = grabRef.current;
+    const list = listRef.current;
+    if (!g || !list) return;
+    const name = latest.current.itemLabel(g.key);
+    const n = g.order.length;
+    const at = g.order.indexOf(g.key);
+    const to = at + dir;
+    if (to < 0 || to >= n) {
+      announce(`${name} is already ${to < 0 ? 'first' : 'last'}, position ${at + 1} of ${n}`);
+      return;
+    }
+    const order = [...g.order];
+    order.splice(at, 1);
+    order.splice(to, 0, g.key);
+    pendingFrom.current = centersOf(list);
+    pendingDrop.current = null;
+    keepFocus(g.key);
+    setGrab({ ...g, order });
+    announce(`${name}, position ${to + 1} of ${n}`);
+  }
+
+  function dropGrab(): void {
+    const g = grabRef.current;
+    const list = listRef.current;
+    if (!g) return;
+    const name = latest.current.itemLabel(g.key);
+    const at = g.order.indexOf(g.key);
+    setGrab(null);
+    if (at === g.from || !list) {
+      announce(`Dropped ${name}. It stays at position ${g.from + 1} of ${g.order.length}`);
+      return;
+    }
+    // If the parent keeps the old order, the rows slide back from here.
+    const from = centersOf(list);
+    pendingFrom.current = from;
+    pendingDrop.current = null;
+    keepFocus(g.key);
+    announce(`Dropped ${name} at position ${at + 1} of ${g.order.length}`);
+    latest.current.onReorder([...g.order], { item: g.key, from: g.from, to: at });
+    // The parent took the order in the same render (nothing moved): clear.
+    window.setTimeout(() => {
+      if (pendingFrom.current === from) {
+        pendingFrom.current = null;
+        pendingFocus.current = null;
+      }
+    }, 0);
+  }
+
+  function cancelGrab(refocus: boolean): void {
+    const g = grabRef.current;
+    const list = listRef.current;
+    if (!g) return;
+    setGrab(null);
+    if (g.order.indexOf(g.key) !== g.from && list) {
+      pendingFrom.current = centersOf(list);
+      pendingDrop.current = null;
+      if (refocus) keepFocus(g.key);
+      else pendingFocus.current = null;
+    }
+    announce(`Reorder cancelled. ${latest.current.itemLabel(g.key)} stays at position ${g.from + 1} of ${g.order.length}`);
+  }
+
+  function onHandleKeyDown(e: ReactKeyboardEvent<HTMLButtonElement>, key: string): void {
+    if (e.ctrlKey || e.metaKey) return;
+    const g = grabRef.current;
+    const pickKey = e.key === ' ' || e.key === 'Enter';
+    if (!g) {
+      if (!pickKey || e.altKey || e.shiftKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) pickUp(key);
+      return;
+    }
+    if (g.key !== key) return;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      // Alt+arrow moves the held row too, rather than committing a move.
+      grabMove(e.key === 'ArrowUp' ? -1 : 1);
+    } else if (pickKey) {
+      if (!e.repeat) dropGrab();
+    } else if (e.key === 'Escape') {
+      cancelGrab(true);
+    } else {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function onHandleBlur(key: string): void {
+    const g = grabRef.current;
+    if (!g || g.key !== key) return;
+    // Moving the row re-inserts its handle, which may blur it before focus is
+    // put back. Only a focus that stays elsewhere ends the grab.
+    window.setTimeout(() => {
+      if (grabRef.current !== g) return;
+      const handle = rowFor(g.key)?.querySelector('[data-sort-handle]');
+      if (handle && document.activeElement === handle) return;
+      cancelGrab(false);
+    }, 0);
+  }
+
   // ---- After every change of order or membership: FLIP, focus, cleanup ---
 
-  const keyString = items.join('\n');
+  // The parent changed the list under a keyboard grab (another tab, a sync):
+  // the list already shows the parent's order; end the grab and say so.
+  useLayoutEffect(() => {
+    const g = grabRef.current;
+    if (!g || g.base === itemsString) return;
+    grabRef.current = null;
+    setGrabState(null);
+    // The FLIP effect below runs next in this commit and puts focus back.
+    if (items.includes(g.key)) keepFocus(g.key);
+    announce('Reorder cancelled. The list changed');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsString]);
+
+  const keyString = shownItems.join('\n');
   useLayoutEffect(() => {
     const list = listRef.current;
     const before = prevKeys.current;
@@ -530,11 +692,12 @@ export function SortableList(props: SortableListProps): JSX.Element {
   return (
     <>
       <ul ref={listRef} className={`tzx-sort-list${className ? ` ${className}` : ''}`} aria-label={label}>
-        {items.map((item, index) => {
+        {shownItems.map((item, index) => {
           const name = itemLabel(item);
+          const held = activeGrab?.key === item;
           const ctx: SortableItemContext = {
             index,
-            count: items.length,
+            count: shownItems.length,
             move: (dir) => moveBy(index, dir),
             remove: () => removeItem(item),
           };
@@ -542,6 +705,8 @@ export function SortableList(props: SortableListProps): JSX.Element {
             <li
               key={item}
               data-sort-key={item}
+              // A row held from the keyboard looks lifted, like a pointer drag.
+              data-sort-dragging={held ? 'key' : undefined}
               className={`tzx-sort-item${itemClassName ? ` ${itemClassName}` : ''}`}
               tabIndex={-1}
               onKeyDown={(e) => onRowKeyDown(e, index)}
@@ -552,7 +717,10 @@ export function SortableList(props: SortableListProps): JSX.Element {
                 data-sort-handle=""
                 aria-label={`Drag to reorder ${name}`}
                 aria-describedby={hintId}
-                aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                aria-keyshortcuts="Space Enter Alt+ArrowUp Alt+ArrowDown"
+                aria-pressed={held}
+                onKeyDown={(e) => onHandleKeyDown(e, item)}
+                onBlur={() => onHandleBlur(item)}
                 onPointerDown={(e) => onPointerDown(e, item)}
                 onPointerMove={onPointerMove}
                 onPointerUp={(e) => onPointerEnd(e, 'drop')}
@@ -571,7 +739,8 @@ export function SortableList(props: SortableListProps): JSX.Element {
         })}
       </ul>
       <p id={hintId} className="tzx-sr-only">
-        Drag to reorder, or press Alt+Up Arrow or Alt+Down Arrow. Escape cancels a drag.
+        Drag to reorder, or press Space or Enter to pick up, the arrow keys to move, and Space or Enter to drop. Alt+Up
+        Arrow and Alt+Down Arrow move a row at once. Escape cancels.
       </p>
       <p className="tzx-sr-only" aria-live="polite" aria-atomic="true">
         {message}

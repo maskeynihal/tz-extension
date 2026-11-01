@@ -9,7 +9,7 @@
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ParseOptions } from '../src/lib/parse';
-import { readTimes, type TimeList } from '../src/lib/read-times';
+import { MAX_LISTED, MAX_READ_CHARS, readTimes, type TimeList } from '../src/lib/read-times';
 import { isValidZone, sameZone, toIsoUtc, viewInZone, zoneLabel, resolveZone } from '../src/lib/tz';
 import {
   loadPreferences,
@@ -131,8 +131,20 @@ function mountDemo(): void {
   }
   function renderStepper(): void {
     const n = shown.length;
-    stepper.hidden = n < 2;
+    // A capped list shows the stepper even for one listed match ("1 of 1+"),
+    // so the "+" says more times may be in the input (QA r7 G7).
+    stepper.hidden = n < 2 && !(shownCapped && n === 1);
+    prevBtn.disabled = n < 2;
+    nextBtn.disabled = n < 2;
     stepCount.replaceChildren(h('span', { class: 'demo-sr' }, ['Time ']), `${shownIndex + 1} of ${n}${shownCapped ? '+' : ''}`);
+    if (shownCapped && n > 0) {
+      stepCount.title =
+        n >= MAX_LISTED
+          ? `Only the first ${MAX_LISTED} times are listed`
+          : `Text past the first ${MAX_READ_CHARS.toLocaleString('en-US')} characters is not read`;
+    } else {
+      stepCount.removeAttribute('title');
+    }
   }
   prevBtn.addEventListener('click', () => step(-1));
   nextBtn.addEventListener('click', () => step(1));

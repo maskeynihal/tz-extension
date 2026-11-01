@@ -140,14 +140,17 @@ describe('custom formats saved before the Java spellings read as before (review 
     ["D MMM 'YY, h:mm A o'clock", "5 Jan '24, 9:30 PM o'clock", ["5 Jan '24, 9:30 PM o'clock"], true],
     ["HH:mm [o'clock]", "10:30 o'clock", ["10:30 o'clock"], false],
     ["HH:mm o'clock", "10:30 o'clock", ["10:30 o'clock"], true],
-    ['dddd D MMM YYYY', 'Monday 5 Jan 2024', [], true],
+    // Round 7 (QA G8): dddd is moment's weekday name. The base matched the
+    // letters "dddd" literally, so this pattern never read a real date.
+    ['dddd D MMM YYYY', 'Monday 5 Jan 2024', ['Monday 5 Jan 2024'], false],
     ['MM/DD/YYYY HH:mm daily', '01/05/2024 10:00 daily', ['01/05/2024 10:00 daily'], true],
     ['HH:mm [GMT]', '10:00 GMT', ['10:00 GMT'], false],
     ['YYYY-MM-DD HH:mm (yyyy)', '2024-01-02 10:00 (yyyy)', ['2024-01-02 10:00 (yyyy)'], true],
     // Quotes around no letters are matched as written.
     ["'(.*)+$' HH:mm", '(.*)+$ 10:00', [], false],
     ["'(.*)+$' HH:mm", "'(.*)+$' 10:00", ["'(.*)+$' 10:00"], false],
-    ["''HH:mm''", "'10:00'", [], false],
+    // Round 7 (QA G9): '' is Java's one quote, and two quotes still read.
+    ["''HH:mm''", "'10:00'", ["'10:00'"], false],
     ["''HH:mm''", "''10:00''", ["''10:00''"], false],
   ])('%s', (pattern, text, want, warns) => {
     const c = compileTokenFormat(pattern);

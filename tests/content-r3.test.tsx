@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { fireEvent } from '@testing-library/react';
 
 /**
@@ -89,6 +89,22 @@ function layOut(host: HTMLElement, natural: () => number, height = 313): void {
   };
 }
 
+/**
+ * Lay out every pin host as layOut does (245 px wide, 313 tall), also while
+ * it is being placed, before pinFrom gets it.
+ */
+function layOutAll(): void {
+  const real = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement): DOMRect {
+    if (!this.classList.contains('tz-extension-pin-host')) return real.call(this);
+    const fixed = parseFloat(this.style.getPropertyValue('width'));
+    return new DOMRect(px(this, 'left') || 0, px(this, 'top') || 0, Number.isFinite(fixed) ? fixed : 245, 313);
+  };
+  onTestFinished(() => {
+    HTMLElement.prototype.getBoundingClientRect = real;
+  });
+}
+
 async function pinFrom(listener: Listener, id: string, natural: () => number = () => 245): Promise<HTMLElement> {
   const before = pinHosts().length;
   await convert(listener, id);
@@ -131,15 +147,17 @@ describe('content script, round 3', () => {
 
   // QA #2
   // Round 6 (QA F6): at 1280 px there is room beside the cards, so they no
-  // longer stack over each other's dates; content-r6 checks that layout. At
-  // 390 px there is none, and the cards still go right below their dates.
-  it.each([390])('at %i px, "Pin all to page" puts each card back next to its own date', async (width) => {
+  // longer stack over each other's dates; content-r6 checks that layout.
+  // Round 7 (QA G4): at 390 px there is none, and the cards no longer go
+  // right below their dates over each other: each one that does not fit
+  // there stacks under the card in its way (313 px tall, + 8).
+  it.each([390])('at %i px, "Pin all to page" puts each card back where it was pinned', async (width) => {
     setViewport(width, 800);
+    layOutAll();
     const listener = await load({ cardSize: 'full' });
     const hosts: HTMLElement[] = [];
     for (let i = 0; i < 5; i++) hosts.push(await pinFrom(listener, `p${i}`));
-    // Below each date: its bottom (top + 20) + 8.
-    const anchors = [0, 1, 2, 3, 4].map((i) => 77 + i * 138 + 28);
+    const anchors = [105, 105 + 321, 105 + 2 * 321, 105 + 3 * 321, 105 + 4 * 321];
     expect(hosts.map((h) => px(h, 'top'))).toEqual(anchors);
 
     button(dock(), 'Unpin all').click();
@@ -171,8 +189,9 @@ describe('content script, round 3', () => {
     button(dock(), 'Pin all to page').click();
     await vi.waitFor(() => expect(b.style.getPropertyValue('position')).toBe('absolute'));
     expect([px(a, 'top'), px(a, 'left')]).toEqual([128, 100]);
-    // 36 px a step, until 48 px clear of it: two steps.
-    expect([px(b, 'top'), px(b, 'left')]).toEqual([128 + 72, 100 + 72]);
+    // Round 7 (QA G4): no longer 72 px down-right over it, but right under
+    // it (313 px tall, + 8).
+    expect([px(b, 'top'), px(b, 'left')]).toEqual([128 + 313 + 8, 100]);
   });
 
   // Review #4: the layout uses the height a card has once it floats.

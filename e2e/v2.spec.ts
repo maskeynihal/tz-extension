@@ -663,8 +663,10 @@ test.describe('v2 features', () => {
   }
 
   /**
-   * Pinned cards that overlap each other, and cards over another card's
-   * date (round 6, QA F6), as "i/j" and "i>date j".
+   * Pinned cards that overlap each other, and cards over their own date or
+   * the date of a card pinned before them (round 6, QA F6), as "i/j" and
+   * "i>date j". Round 7 (QA G1): pins never move for a new one, so an
+   * earlier card may cover a later card's date.
    */
   async function coverReport(page: Page): Promise<string[]> {
     return page.evaluate(() => {
@@ -678,7 +680,7 @@ test.describe('v2 features', () => {
           if (i < j && over(c, d)) out.push(`${i}/${j}`);
         });
         dates.forEach((d, j) => {
-          if (over(c, d)) out.push(`${i}>date ${j}`);
+          if (j <= i && over(c, d)) out.push(`${i}>date ${j}`);
         });
       });
       return out;
@@ -714,6 +716,9 @@ test.describe('v2 features', () => {
       const sources = await page.evaluate(() =>
         Array.from(document.querySelectorAll('p span')).map((s) => Math.round(s.getBoundingClientRect().bottom)),
       );
+      // Round 7 (QA G1, G4): pinned one by one, no card covers another, at
+      // 390 px too (they stack down the page there).
+      expect(await coverReport(page), `${pinnedTops}`).toEqual([]);
       await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
       await expect(pins.locator('.tzx-card.floating')).toHaveCount(5);
       const reach = await headerReach(page);
@@ -727,18 +732,14 @@ test.describe('v2 features', () => {
       await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Pin all to page' }).click();
       await expect(pins.locator('.tzx-card.floating')).toHaveCount(0);
       const tops = await pins.evaluateAll((hosts) => hosts.map((h) => Math.round(h.getBoundingClientRect().top)));
-      // Back where they were pinned.
-      expect(tops).toEqual(pinnedTops);
-      if (width < 400) {
-        // No room beside: 8 px below their own date.
-        tops.forEach((t, i) => expect(Math.abs(t - (sources[i]! + 8)), `card ${i}: ${tops} vs ${sources}`).toBeLessThanOrEqual(1));
-      } else {
-        // Round 6 (QA F6): room beside, so no card covers another or another's
-        // date; each stays within a card's height of just below its date.
-        expect(await coverReport(page)).toEqual([]);
-        const h = await pins.evaluateAll((hosts) => hosts.map((x) => x.getBoundingClientRect().height));
-        tops.forEach((t, i) => expect(Math.abs(t - (sources[i]! + 8)), `card ${i}: ${tops} vs ${sources}`).toBeLessThanOrEqual(h[i]! + 1));
-      }
+      // Put back one by one, in reading order, by the same rule. (Not
+      // always at the same spots: each pin was placed with its own date
+      // scrolled to the middle of the screen, and the rule prefers spots
+      // on screen.) The first goes right below its date.
+      expect(await coverReport(page), `${tops} vs ${pinnedTops}`).toEqual([]);
+      expect(Math.abs(tops[0]! - (sources[0]! + 8)), `${tops} vs ${sources}`).toBeLessThanOrEqual(1);
+      const across = await pins.evaluateAll((hosts) => hosts.map((h) => Math.round(h.getBoundingClientRect().right)));
+      for (const r of across) expect(r, `${across}`).toBeLessThanOrEqual(width);
       await page.close();
     });
   }
@@ -1090,7 +1091,10 @@ test.describe('v2 features', () => {
     const over = (a: { top: number; bottom: number; left: number; right: number }, b: typeof a): boolean =>
       a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
     expect(over(boxes.pins[0]!, boxes.pins[1]!)).toBe(false);
-    for (const p of boxes.pins) for (const m of boxes.marks) expect(over(p, m)).toBe(false);
+    // Round 7 (QA G1): the first pin stays where it was pinned, so it may
+    // cover the second line; the second covers neither line's mark.
+    expect(over(boxes.pins[0]!, boxes.marks[0]!)).toBe(false);
+    for (const m of boxes.marks) expect(over(boxes.pins[1]!, m)).toBe(false);
     console.log('pins', JSON.stringify(boxes));
     await page.close();
   });
@@ -1183,4 +1187,130 @@ test.describe('v2 features', () => {
     console.log(`chars=${chars} open=${open}ms longTasks=${JSON.stringify(lt)} browserOwn=${JSON.stringify(own)}`);
     await page.close();
   });
+
+  // --- Round 7 ---------------------------------------------------------------
+
+  test('round 7: a selection in an inner scroll pane lists every row, scrolled or not; a time past a <pre>’s edge opens a card', async () => {
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const rows = Array.from(
+      { length: 60 },
+      (_, i) => `<div style="line-height:32px">Row ${i} at 2024-06-01 ${String(i % 24).padStart(2, '0')}:${String(i).padStart(2, '0')} UTC</div>`,
+    ).join('');
+    // The usual web-app layout: the page itself does not scroll, a pane does.
+    const page = await openPage(
+      '<style>html, body { height: 100%; min-height: 0 !important; overflow: hidden; margin: 0; padding: 0 !important; }</style>' +
+        `<main id="pane" style="height:100%;overflow:auto">${rows}</main>` +
+        `<pre id="code" style="position:fixed;bottom:0;left:0;width:300px;overflow-x:auto;background:#fff">deploy ${'x'.repeat(200)} 2024-05-05T10:00:00Z</pre>`,
+    );
+    await page.setViewportSize({ width: 1280, height: 700 });
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(700);
+    const status = card(page).locator('[aria-live="polite"]');
+    await selectAll(page, 'pane', { x: 200, y: 100 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(status).toHaveText(/^Time \d+ of 60$/);
+    await page.keyboard.press('Escape');
+    // Scrolled to the middle: the rows above the pane's top count too.
+    await page.evaluate(() => {
+      window.getSelection()?.removeAllRanges();
+      (document.getElementById('pane') as HTMLElement).scrollTop = 900;
+    });
+    await selectAll(page, 'pane', { x: 200, y: 100 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(status).toHaveText(/^Time \d+ of 60$/);
+    await page.keyboard.press('Escape');
+    await selectAll(page, 'code');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(card(page).locator('.tzx-src span').first()).toHaveText('“2024-05-05T10:00:00Z”');
+    await page.close();
+  });
+
+  test('round 7: times in inline-block pieces read whole; opacity 0 and transparent text are left out', async () => {
+    await setPrefs({ homeZone: 'Asia/Tokyo', targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const ib = (t: string): string => `<span style="display:inline-block">${t}</span>`;
+    const page = await openPage(
+      `<p id="flip">Starts ${ib('10')}:${ib('30')} UTC</p>` +
+        `<p id="digits">Starts ${['1', '0', ':', '3', '0'].map(ib).join('')} UTC</p>` +
+        `<p id="chips">${ib('2024-08-13')}${ib('07:00 UTC')}</p>` +
+        '<p id="f5b">Visible 2024-08-01 10:00 UTC, <span style="opacity:0">2024-08-02 11:00 UTC</span>, <span style="color:transparent">2024-08-04 13:00 UTC</span> end</p>',
+    );
+    const quoted = card(page).locator('.tzx-src span').first();
+    for (const [id, text] of [
+      ['flip', '“10:30 UTC”'],
+      ['digits', '“10:30 UTC”'],
+      ['chips', '“2024-08-1307:00 UTC”'],
+      ['f5b', '“2024-08-01 10:00 UTC”'],
+    ] as const) {
+      await selectAll(page, id);
+      await expect(card(page), `#${id}`).toBeVisible({ timeout: 5000 });
+      await expect(quoted, `#${id}`).toHaveText(text);
+      if (id === 'f5b') await expect(card(page).locator('.tzx-step')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    }
+    await page.close();
+  });
+
+  for (const [width, height] of [
+    [390, 800],
+    [1280, 800],
+  ] as const) {
+    test(`round 7: at ${width} px, five lines 40 px apart pin without moving earlier pins or overlapping, and Pin all keeps that`, async () => {
+      await setPrefs({ homeZone: 'UTC', targetZones: ['UTC', 'Asia/Tokyo'], cardSize: 'full', keepSelection: true, numericDateOrder: 'mdy' });
+      const lines = [
+        'Standup 09:00 UTC, review 13:30 UTC, deploy 2024-04-02 18:00 UTC',
+        '03/04/2024 10:00 and 05/06/2024 11:00',
+        'Release 2024-05-10 08:00 PST',
+        'Window 2024-06-01 12:00 UTC to 2024-06-01 14:00 UTC',
+        'Cutover 2024-07-04T23:00:00Z',
+      ];
+      const page = await openPage(
+        lines.map((t, i) => `<p id="l${i}" style="margin:0 0 20px;line-height:20px"><span>${t}</span></p>`).join(''),
+      );
+      await page.setViewportSize({ width, height });
+      const spots = (): Promise<string[]> =>
+        page.locator('.tz-extension-pin-host').evaluateAll((hosts) =>
+          hosts.map((h) => `${h.style.getPropertyValue('left')},${h.style.getPropertyValue('top')}`),
+        );
+      let before: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await selectAll(page, `l${i}`);
+        await expect(card(page)).toBeVisible({ timeout: 5000 });
+        await card(page).getByRole('button', { name: 'Pin to page' }).click();
+        await expect(page.locator('.tz-extension-pin-host')).toHaveCount(i + 1);
+        await page.waitForTimeout(100);
+        const now = await spots();
+        expect(now.slice(0, i), `pin ${i}`).toEqual(before);
+        before = now;
+      }
+      await page.evaluate(() => {
+        window.getSelection()?.removeAllRanges();
+        window.scrollTo(0, 0);
+      });
+      expect(await coverReport(page), before.join(' ')).toEqual([]);
+      const right = await page.locator('.tz-extension-pin-host').evaluateAll((hosts) => hosts.map((h) => h.getBoundingClientRect().right));
+      for (const r of right) expect(r).toBeLessThanOrEqual(width);
+      if (width > 1000) {
+        // Room on screen for the first four, side by side.
+        const bottoms = await page.locator('.tz-extension-pin-host').evaluateAll((hosts) => hosts.map((h) => h.getBoundingClientRect().bottom));
+        for (const b of bottoms.slice(0, 4)) expect(b, bottoms.join(' ')).toBeLessThanOrEqual(height);
+      }
+      await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
+      await expect(page.locator('.tz-extension-pin-host .tzx-card.floating')).toHaveCount(5);
+      await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Pin all to page' }).click();
+      await expect(page.locator('.tz-extension-pin-host .tzx-card.floating')).toHaveCount(0);
+      await page.waitForTimeout(100);
+      // The same spots, but for sub-pixel widths (a card's width is fixed at
+      // a whole pixel when it floats).
+      const after = await spots();
+      after.forEach((spot, i) => {
+        const [x, y] = spot.split(',').map(parseFloat);
+        const [x0, y0] = before[i]!.split(',').map(parseFloat);
+        expect(Math.abs(x! - x0!) <= 1 && Math.abs(y! - y0!) <= 1, `${after} vs ${before}`).toBe(true);
+      });
+      expect(await coverReport(page)).toEqual([]);
+      console.log(`pins7 ${width}: ${before.join(' ')}`);
+      await page.close();
+    });
+  }
 });

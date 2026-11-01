@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DateOnlyPolicy, NumericDateOrder, ParsedTime, Preferences } from '../types';
 import { formatCalendarDate, resolveLocalZone } from '../types';
 import { viewInZone, isValidZone, sameZone, zoneLabel, resolveZone } from '../lib/tz';
-import { MAX_READ_CHARS } from '../lib/read-times';
+import { MAX_LISTED, MAX_READ_CHARS } from '../lib/read-times';
 // The DST note shares one wording with the popup and the website.
 import { wallClockNote } from '../lib/wall-note';
 import { ZonePicker, ZONE_PICKER_CSS } from '../popup/ZonePicker';
@@ -164,6 +164,16 @@ function cardZones(prefs: Preferences): string[] {
   return base;
 }
 
+/**
+ * Why a card lists fewer times than its selection may hold: the list is
+ * full, or (with fewer listed) the text ran past what is read.
+ */
+export function cappedNote(count: number): string {
+  return count >= MAX_LISTED
+    ? `Only the first ${count} times are listed`
+    : `Text past the first ${MAX_READ_CHARS.toLocaleString('en-US')} characters is not read`;
+}
+
 /** "+1 more time in selection", "+2 more times in selection"; "+24 or more times…" when not all are listed. */
 export function moreTimesText(others: number, capped = false): string {
   if (capped) return `+${others} or more times in selection`;
@@ -248,6 +258,7 @@ const STYLE = `
 .tzx-step { display: flex; align-items: center; gap: 4px; }
 .tzx-stepbtn { font: inherit; font-size: 13px; line-height: 1; min-width: 22px; padding: 1px 6px; border-radius: 6px; border: 1px solid #dcdee4; background: #fff; color: #24262e; cursor: pointer; }
 .tzx-stepbtn:hover { border-color: #1313ba; }
+.tzx-stepbtn:disabled { opacity: 0.45; cursor: default; border-color: #dcdee4; }
 .tzx-stepbtn:focus-visible { outline: 2px solid #1313ba; outline-offset: 1px; }
 .tzx-stepcount { font-variant-numeric: tabular-nums; font-weight: 600; color: #5b5e68; }
 .tzx-step.mini { margin-top: 3px; gap: 3px; font-size: 10px; }
@@ -464,16 +475,18 @@ export function Popover({
   const hint = where === 'transient' ? focusHint(focusShortcut) : undefined;
   const keys = where === 'transient' && focusShortcut ? focusShortcut.aria : undefined;
   const countText = stepCountText(matchIndex, matchCount, matchesCapped);
-  const cappedTitle = matchesCapped ? `Only the first ${matchCount} times are listed` : undefined;
+  const cappedTitle = matchesCapped ? cappedNote(matchCount) : undefined;
+  // A capped selection shows the stepper even with one time listed ("1 of 1+"),
+  // so the user is told that more text was there.
   const stepper =
-    matchCount > 1 && onStep ? (
+    (matchCount > 1 || matchesCapped) && onStep ? (
       <div
         className={`tzx-more tzx-step${compact ? ' mini' : ''}`}
         role="group"
         aria-label="Times in selection"
         title={cappedTitle}
       >
-        <button type="button" className="tzx-stepbtn" aria-label="Previous time" title="Previous time" onClick={() => onStep(-1)}>
+        <button type="button" className="tzx-stepbtn" aria-label="Previous time" title="Previous time" disabled={matchCount < 2} onClick={() => onStep(-1)}>
           ‹
         </button>
         <span className="tzx-stepcount" aria-live="polite" aria-atomic="true">
@@ -481,7 +494,7 @@ export function Popover({
           {compact ? countText.replace(' of ', '/') : countText}
           {cappedTitle && <span className="tzx-sr">. {cappedTitle}</span>}
         </span>
-        <button type="button" className="tzx-stepbtn" aria-label="Next time" title="Next time" onClick={() => onStep(1)}>
+        <button type="button" className="tzx-stepbtn" aria-label="Next time" title="Next time" disabled={matchCount < 2} onClick={() => onStep(1)}>
           ›
         </button>
         {!compact && <span className="tzx-stepnote">times in selection</span>}

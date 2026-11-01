@@ -15,8 +15,13 @@ export interface TimeList {
 /** At most this many times are listed. */
 export const MAX_LISTED = 500;
 
-/** How much of a selection is read at all. Past it, the list is `capped`. */
-export const MAX_READ_CHARS = 200_000;
+/**
+ * How much of a selection is read at all. Past it, the list is `capped`.
+ * Reading costs about linear time: 50k characters of a dense table or one
+ * date repeated take 7–30 ms in Node, where 200k took 30–160 ms and a
+ * select-all on a big table held the page for up to a second on a slow CPU.
+ */
+export const MAX_READ_CHARS = 50_000;
 
 /**
  * Text before a cut that each re-read starts with, so look-behinds (the verse

@@ -32,7 +32,22 @@ function lines(n: number): string {
 describe('readTimes', () => {
   it('limits are as documented', () => {
     expect(MAX_LISTED).toBe(500);
-    expect(MAX_READ_CHARS).toBe(200_000);
+    // Round 7 (review #4): 200k held the page for 150 ms to 1 s on big tables.
+    expect(MAX_READ_CHARS).toBe(50_000);
+  });
+
+  it('reads only the first 50k characters of a big table, and says so', () => {
+    const rows = Array.from({ length: 6_000 }, (_, i) => `Row ${i}\tdeploy\t2024-01-${pad((i % 28) + 1)} 10:00 UTC\tok`).join('\n');
+    expect(rows.length).toBeGreaterThan(150_000);
+    const r = read(rows);
+    expect(r.capped).toBe(true);
+    expect(r.matches.length).toBeGreaterThan(0);
+    const last = r.matches.at(-1)!;
+    expect((last.sourceIndex ?? 0) + last.matchedText.length).toBeLessThanOrEqual(MAX_READ_CHARS);
+    expectWellFormed(rows, r);
+    // A time that starts before the limit and ends past it is not listed.
+    const across = 'y'.repeat(MAX_READ_CHARS - 10) + ' 2024-05-05 10:00 UTC';
+    expect(read(across)).toMatchObject({ matches: [], capped: true });
   });
 
   it('empty and time-free text', () => {

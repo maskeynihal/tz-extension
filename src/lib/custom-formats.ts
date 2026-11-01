@@ -71,6 +71,18 @@ const TOKENS: readonly TokenDef[] = [
   { token: 'MONTH', group: 'moName', frag: '(?<moName>[A-Za-z]{3,9})', meaning: 'Month name', example: 'January', legacy: true },
   { token: 'MON', group: 'moName', frag: '(?<moName>[A-Za-z]{3,9}\\.?)', meaning: 'Month name', example: 'Jan', legacy: true },
   { token: 'MMM', group: 'moName', frag: '(?<moName>[A-Za-z]{3,4}\\.?)', meaning: 'Short month name', example: 'Jan' },
+  // Fractions with more digits (Java's micro- and nanoseconds): the first
+  // three are the milliseconds.
+  ...[9, 8, 7, 6, 5, 4].map(
+    (n): TokenDef => ({
+      token: 'S'.repeat(n),
+      group: 'ms',
+      frag: `(?<ms>\\d{${n}})`,
+      meaning: `Fraction of a second, ${n} digits`,
+      example: '123456789'.slice(0, n),
+      legacy: true,
+    }),
+  ),
   { token: 'SSS', group: 'ms', frag: '(?<ms>\\d{3})', meaning: 'Milliseconds', example: '045' },
   { token: 'MM', group: 'mo', frag: '(?<mo>\\d{2})', meaning: '2-digit month', example: '01' },
   { token: 'DD', group: 'd', frag: '(?<d>\\d{2})', meaning: '2-digit day', example: '05' },
@@ -89,6 +101,10 @@ const TOKENS: readonly TokenDef[] = [
   // Java / Talend spellings (yyyy-MM-dd HH:mm, EEE, dd MMM yyyy HH:mm:ss z).
   // Most mean the same as a capitalised token, so they are aliases rather
   // than errors.
+  // moment's weekday names (before Java's dd, the day). Like EEE they stand
+  // alone, so "odd" or "address" stays literal.
+  { token: 'dddd', group: 'wd', frag: '(?<wd>[A-Za-z]{3,9})', meaning: 'Weekday name', example: 'Monday', legacy: true, java: true },
+  { token: 'ddd', group: 'wd', frag: '(?<wd>[A-Za-z]{2,4}\\.?)', meaning: 'Short weekday name', example: 'Mon', legacy: true, java: true },
   { token: 'yyyy', group: 'y', frag: '(?<y>\\d{4})', meaning: '4-digit year', example: '2024', legacy: true, java: true },
   { token: 'yy', group: 'yy', frag: '(?<yy>\\d{2})', meaning: '2-digit year', example: '24', legacy: true, java: true },
   { token: 'dd', group: 'd', frag: '(?<d>\\d{2})', meaning: '2-digit day', example: '05', legacy: true, java: true },
@@ -99,6 +115,9 @@ const TOKENS: readonly TokenDef[] = [
   { token: 'XXX', group: 'zone', frag: '(?<zone>Z|[+-]\\d{2}:\\d{2})', meaning: 'Offset', example: '+05:45, Z', legacy: true, java: true },
   { token: 'XX', group: 'zone', frag: '(?<zone>Z|[+-]\\d{4})', meaning: 'Offset', example: '+0545, Z', legacy: true, java: true },
   { token: 'X', group: 'zone', frag: '(?<zone>Z|[+-]\\d{2}(?:\\d{2})?)', meaning: 'Offset', example: '+05, +0545, Z', legacy: true, java: true },
+  // Java's RFC 822 offset (+0100, -0530). Z for UTC and +05:45 are read too.
+  // A Z that touches other letters ("ZZ", "Zulu") stays literal.
+  { token: 'Z', group: 'zone', frag: '(?<zone>Z|[+-]\\d{2}:?\\d{2})', meaning: 'Offset', example: '+0545, -0800, Z', legacy: true, java: true },
   { token: 'zzz', group: 'zone', frag: ZONE_FRAG, meaning: 'Zone', example: 'UTC, PST', legacy: true, java: true },
   { token: 'zz', group: 'zone', frag: ZONE_FRAG, meaning: 'Zone', example: 'UTC, PST', legacy: true, java: true },
   { token: 'z', group: 'zone', frag: ZONE_FRAG, meaning: 'Zone', example: 'UTC, PST', legacy: true, java: true },
@@ -147,6 +166,28 @@ function javaTokenFits(pattern: string, i: number, def: TokenDef, tokenEndsAt: n
   return PLAIN_TOKENS.some((t) => pattern.startsWith(t.token, end));
 }
 
+/**
+ * Why the letters at `i` are a token this parser does not read, or null.
+ * Without this, "DDD" (day of the year) reads as DD then D and says "repeats
+ * the day", which hides the real problem.
+ */
+function unsupportedToken(pattern: string, i: number): string | null {
+  const run = (c: string): number => {
+    let j = i;
+    while (pattern[j] === c) j++;
+    return j - i;
+  };
+  const days = run('D');
+  if (days >= 3) {
+    return `"${'D'.repeat(days)}" (day of the year) is not supported. Use a month and a day (MM and DD, or MMM and D), or wrap literal letters in [ ].`;
+  }
+  const fraction = run('S');
+  if (fraction > 9) {
+    return `"${'S'.repeat(fraction)}" is not supported: fractions of a second can have at most 9 digits (SSSSSSSSS).`;
+  }
+  return null;
+}
+
 /** Token reference for the settings page. */
 export const TOKEN_REFERENCE: ReadonlyArray<{ token: string; meaning: string; example: string }> = [
   ...TOKENS.filter((t) => !t.legacy).map(({ token, meaning, example }) => ({ token, meaning, example })),
@@ -156,7 +197,11 @@ export const TOKEN_REFERENCE: ReadonlyArray<{ token: string; meaning: string; ex
   { token: 'a', meaning: 'Java/Talend AM/PM (like A)', example: 'hh:mm a' },
   { token: 'EEE EEEE', meaning: 'Java/Talend weekday name, short or long', example: 'EEE, dd MMM yyyy' },
   { token: 'X XX XXX', meaning: 'Java/Talend offset: +05, +0545, +05:45 or Z', example: "yyyy-MM-dd'T'HH:mm:ssXXX" },
+  { token: 'Z', meaning: 'Java/Talend offset: +0100, -0530 (or Z for UTC)', example: "yyyy-MM-dd'T'HH:mm:ssZ" },
   { token: 'z zzz', meaning: 'Java/Talend zone name (like TZ)', example: 'HH:mm z' },
+  { token: 'ddd dddd', meaning: 'Weekday name, short or long (like EEE and EEEE)', example: 'ddd D MMM YYYY' },
+  { token: 'SSSSSS', meaning: 'Fraction of a second, 4 to 9 digits (S repeated); the first 3 are the milliseconds', example: 'HH:mm:ss.SSSSSS' },
+  { token: "''", meaning: 'A quote, Java style', example: "dd MMM ''yy" },
 ];
 
 /** Which field a group fills. Two groups for the same field is an error. */
@@ -278,8 +323,10 @@ function compilePieces(pattern: string, java: boolean): CompileResult {
       // ("'YY ... o'clock") are matched as written, as they were before.
       const quoted = quotedLiteral(pattern, i);
       if (pattern[i + 1] === "'") {
-        // "''" on its own holds no letter: two quotes, as before.
-        pieces.push({ kind: 'literal', src: "''" });
+        // "''" on its own is Java's one quote ("dd MMM ''yy" reads
+        // "05 Mar '24"). Patterns saved before Java quotes meant two quotes,
+        // so either reads.
+        pieces.push({ kind: 'literal', src: "''?" });
         i += 2;
         continue;
       }
@@ -295,6 +342,8 @@ function compilePieces(pattern: string, java: boolean): CompileResult {
       }
       // No closing quote: a plain apostrophe ("o'clock").
     }
+    const unsupported = unsupportedToken(pattern, i);
+    if (unsupported) return { ok: false, error: unsupported };
     const def = TOKENS.find(
       (t) => pattern.startsWith(t.token, i) && (!t.java || (java && javaTokenFits(pattern, i, t, tokenEndsAt))),
     );

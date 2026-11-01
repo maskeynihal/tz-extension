@@ -493,15 +493,16 @@ describe('where pins go', () => {
     const b = await pin('l2');
     const boxes = [boxOf(a), boxOf(b)];
     expect(overlap(boxes[0] as R, boxes[1] as R)).toBe(false);
-    for (const box of boxes) {
-      expect(overlap(box, textBox('l1'))).toBe(false);
-      expect(overlap(box, textBox('l2'))).toBe(false);
-    }
-    // Pin 2 is right below its own text; pin 1 stepped aside off it.
-    expect([px(b, 'top'), px(b, 'left')]).toEqual([231 + 20 + 8, 300]);
+    expect(overlap(boxes[1] as R, textBox('l1'))).toBe(false);
+    expect(overlap(boxes[1] as R, textBox('l2'))).toBe(false);
+    // Round 7 (QA G1, review nit #5): pin 1 no longer steps aside off the
+    // new pin's text; it stays where it was pinned (and may cover that
+    // text). Pin 2 goes beside its own text, since right below it is pin 1.
+    expect([px(a, 'top'), px(a, 'left')]).toEqual([91 + 20 + 8, 100]);
+    expect([px(b, 'top'), px(b, 'left')]).toEqual([231, 300 + 80 + 8]);
   });
 
-  it('at 1280 px, five dates 138 px apart: no pin covers another or another’s date, before and after "Pin all to page"', async () => {
+  it('at 1280 px, five dates 138 px apart: no pin moves or covers another, before and after "Pin all to page"', async () => {
     setViewport(1280, 800);
     layOutPins();
     document.body.innerHTML = [0, 1, 2, 3, 4]
@@ -509,16 +510,23 @@ describe('where pins go', () => {
       .join('');
     await load({ homeZone: 'UTC' });
     const hosts: HTMLElement[] = [];
-    for (let i = 0; i < 5; i++) hosts.push(await pin(`p${i}`));
+    const spots: string[] = [];
+    const where = (h: HTMLElement): string => `${px(h, 'left')},${px(h, 'top')}`;
+    for (let i = 0; i < 5; i++) {
+      hosts.push(await pin(`p${i}`));
+      // Round 7 (QA G1): pins already on the page never move.
+      expect(hosts.slice(0, i).map(where)).toEqual(spots);
+      spots.push(where(hosts[i] as HTMLElement));
+    }
+    // Round 7: a pin covers no other pin, and no date already pinned when it
+    // was placed (nor its own). An earlier pin may cover a later date.
     const check = (): void => {
       const boxes = hosts.map(boxOf);
       boxes.forEach((box, i) => {
         boxes.forEach((other, j) => {
           if (i !== j) expect(overlap(box, other), `pins ${i} and ${j}`).toBe(false);
         });
-        for (let k = 0; k < 5; k++) expect(overlap(box, textBox(`p${k}`)), `pin ${i} over date ${k}`).toBe(false);
-        // Each stays near its own date: at most a card away.
-        expect(Math.abs(box.top - (textBox(`p${i}`).bottom + 8))).toBeLessThanOrEqual(313);
+        for (let k = 0; k <= i; k++) expect(overlap(box, textBox(`p${k}`)), `pin ${i} over date ${k}`).toBe(false);
       });
     };
     check();
@@ -526,6 +534,8 @@ describe('where pins go', () => {
     await vi.waitFor(() => expect(hosts.every((h) => h.style.getPropertyValue('position') === 'fixed')).toBe(true));
     button(dock(), 'Pin all to page').click();
     await vi.waitFor(() => expect(hosts.every((h) => h.style.getPropertyValue('position') === 'absolute')).toBe(true));
+    // One by one in reading order, by the same rule: the same spots.
+    expect(hosts.map(where)).toEqual(spots);
     check();
   });
 

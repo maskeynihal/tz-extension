@@ -696,4 +696,126 @@ describe('target timezone reordering', () => {
     expect(calls).not.toHaveBeenCalled();
     await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['Europe/London', 'America/New_York', 'UTC']));
   });
+
+  // QA r7 G13: Space or Enter on a handle picks the row up, arrows move it,
+  // Space or Enter drops it, Escape puts it back. One save, on drop.
+  describe('keyboard pick-up (QA r7 G13)', () => {
+    const live = (list: HTMLElement): string =>
+      (list.parentElement?.querySelector('.tzx-sr-only[aria-live="polite"]')?.textContent ?? '').trim();
+    const handleOf = (zone: string): HTMLElement => screen.getByRole('button', { name: `Drag to reorder ${zone}` });
+
+    it('Space picks up, arrows move, Enter drops, saving once and keeping focus', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      const row = handle.closest('li') as HTMLElement;
+      handle.focus();
+      const savesBefore = syncSet().mock.calls.length;
+
+      const down = fireEvent.keyDown(handle, { key: ' ' });
+      expect(down).toBe(false); // default (a click) prevented
+      expect(handle).toHaveAttribute('aria-pressed', 'true');
+      expect(row).toHaveAttribute('data-sort-dragging');
+      expect(live(list)).toBe(
+        'Picked up UTC, position 1 of 4. Press Up or Down Arrow to move it, Space or Enter to drop it, Escape to cancel.',
+      );
+
+      fireEvent.keyDown(handle, { key: 'ArrowDown' });
+      expect(rowKeys(list)).toEqual(['America/New_York', 'UTC', 'Europe/London', 'Asia/Kathmandu']);
+      expect(live(list)).toBe('UTC, position 2 of 4');
+      expect(document.activeElement).toBe(handle);
+      fireEvent.keyDown(handle, { key: 'ArrowDown' });
+      expect(rowKeys(list)).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']);
+      expect(live(list)).toBe('UTC, position 3 of 4');
+      // Nothing is saved while the row is held.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(syncSet().mock.calls.length).toBe(savesBefore);
+
+      fireEvent.keyDown(handle, { key: 'Enter' });
+      expect(handle).toHaveAttribute('aria-pressed', 'false');
+      expect(row).not.toHaveAttribute('data-sort-dragging');
+      expect(live(list)).toBe('Dropped UTC at position 3 of 4');
+      expect(rowKeys(list)).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']);
+      await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']));
+      expect(syncSet().mock.calls.length).toBe(savesBefore + 1);
+      expect(document.activeElement).toBe(handle);
+
+      // Arrows without a pick-up and without Alt do nothing.
+      fireEvent.keyDown(handle, { key: 'ArrowUp' });
+      expect(rowKeys(list)[2]).toBe('UTC');
+    });
+
+    it('Escape cancels and restores the order without saving', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('Asia/Kathmandu');
+      handle.focus();
+      const savesBefore = syncSet().mock.calls.length;
+      fireEvent.keyDown(handle, { key: 'Enter' });
+      fireEvent.keyDown(handle, { key: 'ArrowUp' });
+      fireEvent.keyDown(handle, { key: 'ArrowUp', altKey: true }); // Alt+arrow moves the held row too
+      expect(rowKeys(list)).toEqual(['UTC', 'Asia/Kathmandu', 'America/New_York', 'Europe/London']);
+      const esc = fireEvent.keyDown(handle, { key: 'Escape' });
+      expect(esc).toBe(false);
+      expect(rowKeys(list)).toEqual(ZONES);
+      expect(live(list)).toBe('Reorder cancelled. Asia/Kathmandu stays at position 4 of 4');
+      expect(handle).toHaveAttribute('aria-pressed', 'false');
+      expect(document.activeElement).toBe(handle);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(syncSet().mock.calls.length).toBe(savesBefore);
+    });
+
+    it('says when the held row is at an end, and dropping in place saves nothing', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      handle.focus();
+      const savesBefore = syncSet().mock.calls.length;
+      fireEvent.keyDown(handle, { key: ' ' });
+      fireEvent.keyDown(handle, { key: 'ArrowUp' });
+      expect(live(list)).toBe('UTC is already first, position 1 of 4');
+      // A held key repeating does not drop the row.
+      fireEvent.keyDown(handle, { key: ' ', repeat: true });
+      expect(handle).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.keyDown(handle, { key: ' ' });
+      expect(live(list)).toBe('Dropped UTC. It stays at position 1 of 4');
+      expect(rowKeys(list)).toEqual(ZONES);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(syncSet().mock.calls.length).toBe(savesBefore);
+    });
+
+    it('moving focus away cancels the pick-up', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      handle.focus();
+      fireEvent.keyDown(handle, { key: ' ' });
+      fireEvent.keyDown(handle, { key: 'ArrowDown' });
+      expect(rowKeys(list)[1]).toBe('UTC');
+      const other = screen.getByRole('button', { name: 'Remove Asia/Kathmandu' });
+      act(() => other.focus());
+      await waitFor(() => expect(rowKeys(list)).toEqual(ZONES));
+      expect(live(list)).toBe('Reorder cancelled. UTC stays at position 1 of 4');
+      expect(document.activeElement).toBe(other);
+      // The ↑ ↓ buttons and Alt+arrows work again afterwards.
+      fireEvent.keyDown(handleOf('Europe/London'), { key: 'ArrowUp', altKey: true });
+      expect(rowKeys(list)).toEqual(['UTC', 'Europe/London', 'America/New_York', 'Asia/Kathmandu']);
+    });
+
+    it('a pointer drag does not start while a row is held', async () => {
+      mockRowRects();
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      handle.focus();
+      fireEvent.keyDown(handle, { key: 'Enter' });
+      const other = handleOf('Europe/London');
+      fireEvent.pointerDown(other, { pointerId: 11, clientY: 220, button: 0 });
+      expect(other.closest('li')).not.toHaveAttribute('data-sort-dragging');
+      fireEvent.pointerUp(other, { pointerId: 11, clientY: 120 });
+      expect(rowKeys(list)).toEqual(ZONES);
+      fireEvent.keyDown(handle, { key: 'Escape' });
+    });
+  });
 });

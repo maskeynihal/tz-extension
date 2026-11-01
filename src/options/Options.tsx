@@ -374,7 +374,8 @@ export function Options(): JSX.Element {
         <div className="tzx-field">
           <h3 className="tzx-field-label">Target timezones ({prefs.targetZones.length})</h3>
           <p className="tzx-hint">
-            Shown on every card, in this order. Drag the grip, or press Alt+↑ / Alt+↓ on a row, to reorder.
+            Shown on every card, in this order. Drag the grip to reorder, or press Space on it, move with ↑ / ↓ and press
+            Space again. Alt+↑ / Alt+↓ on a row moves it at once.
           </p>
           <SortableList
             items={prefs.targetZones}

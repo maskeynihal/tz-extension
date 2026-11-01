@@ -322,8 +322,12 @@ describe('content script fixes', () => {
     document.getElementById('b')?.setAttribute('data-top', '640');
     button(shadowOf(pin), 'Pin to page').click();
     await vi.waitFor(() => expect(pin.style.getPropertyValue('position')).toBe('absolute'));
-    expect(px(pin, 'top')).toBe(640 + 20 + 8 + window.scrollY);
-    expect(px(pin, 'left')).toBe(100);
+    // Round 7 (QA G2): right below it (668) the 200 px card would run past
+    // the 768 px screen, so it takes the nearest spot wholly on screen that
+    // does not cover its text: beside it (180 + 8), as low as fits.
+    expect(window.innerHeight).toBe(768);
+    expect(px(pin, 'top')).toBe(768 - 200 - 8 + window.scrollY);
+    expect(px(pin, 'left')).toBe(100 + 80 + 8);
 
     // Without its text, the card pins where it is on screen.
     button(shadowOf(pin), 'Float on screen').click();
@@ -372,12 +376,13 @@ describe('content script fixes', () => {
     const b = await pinFrom(env, 'a2');
     expect(px(b, 'top')).toBe(128);
     // Now a card does sit there. Round 6 (QA F6): the next one goes where
-    // it covers no card and no card's text, here beside that card (360 px
-    // wide while it cannot be measured, + 8), instead of 72 px down-right
-    // over it.
+    // it covers no card and no card's text, instead of 72 px down-right
+    // over it. Round 7: the nearest such spot to below its text, which is
+    // right under that card (200 px tall while it cannot be measured, + 8:
+    // 208 px away), not beside it (360 + 8 = 368 px away).
     const c = await pinFrom(env, 'a3');
-    expect(px(c, 'top')).toBe(128);
-    expect(px(c, 'left')).toBe(100 + 360 + 8);
+    expect(px(c, 'top')).toBe(128 + 200 + 8);
+    expect(px(c, 'left')).toBe(100);
   });
 
   // Fix 1 (keyboard reachability)

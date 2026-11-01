@@ -608,21 +608,59 @@ function rangeBoxes(r: Range): Box[] | null {
   return null;
 }
 
+/** What visibleBoxes learned about elements, so each is styled once per read. */
+interface SeenCache {
+  /** Per element: it hides what is in it (clipped to nothing, or opacity 0). */
+  readonly hides: Map<Element, boolean>;
+  /** Per element: its own text is drawn in a fully transparent colour. */
+  readonly clear: Map<Element, boolean>;
+  /** Per element: how far it and the boxes it is in are scrolled (not the window). */
+  readonly scrolled: Map<Element, { readonly x: number; readonly y: number }>;
+}
+
+function seenCache(): SeenCache {
+  return { hides: new Map(), clear: new Map(), scrolled: new Map() };
+}
+
 /**
- * True when `el` or an element it is in hides its content by clipping it to
- * nothing: the screen-reader-only patterns (`clip: rect(0 0 0 0)`,
- * `clip-path: inset(50%)`, a 1×1 box with overflow hidden).
+ * How far the content of `el` is scrolled by `el` and the elements it is
+ * in (scroll panes, code blocks), leaving out the window's own scroll.
  */
-function clippedAway(el: Element | null, cache: Map<Element, boolean>): boolean {
+function paneScroll(el: Element | null, cache: SeenCache): { x: number; y: number } {
+  if (!el || el === document.body || el === document.documentElement) return { x: 0, y: 0 };
+  const known = cache.scrolled.get(el);
+  if (known) return known;
+  const up = paneScroll(el.parentElement, cache);
+  const at = { x: up.x + (el.scrollLeft || 0), y: up.y + (el.scrollTop || 0) };
+  cache.scrolled.set(el, at);
+  return at;
+}
+
+/**
+ * A computed colour with nothing to show: `transparent`, or an alpha of 0
+ * (`rgba(r, g, b, 0)`, `rgb(r g b / 0)`), never a colour channel of 0.
+ * Exported for tests.
+ */
+export const NO_INK = /^(transparent|rgba?\(\s*[^,/()]+,[^,/()]+,[^,/()]+,\s*0(\.0+)?%?\s*\)|[a-z-]+\([^/()]*\/\s*0(\.0+)?%?\s*\))$/i;
+
+/**
+ * True when `el` or an element it is in hides its content: clipped to
+ * nothing (the screen-reader-only patterns `clip: rect(0 0 0 0)`,
+ * `clip-path: inset(50%)`, a 1×1 box with overflow hidden), or with
+ * `opacity: 0`.
+ */
+function clippedAway(el: Element | null, cache: SeenCache): boolean {
   for (let e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
-    let hides = cache.get(e);
+    let hides = cache.hides.get(e);
     if (hides === undefined) {
       hides = false;
       try {
         const cs = getComputedStyle(e);
         const clip = cs.clip || '';
         const clipPath = cs.getPropertyValue('clip-path') || '';
-        if (/^rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)$/.test(clip.trim())) hides = true;
+        const opacity = parseFloat(cs.opacity);
+        if (Number.isFinite(opacity) && opacity <= 0) hides = true;
+        else if (/^rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)$/.test(clip.trim())) hides = true;
         else if (/^inset\(\s*(50|[5-9]\d|100)(\.\d+)?%/.test(clipPath.trim())) hides = true;
         else if (cs.overflow !== '' && cs.overflow !== 'visible') {
           const b = e.getBoundingClientRect();
@@ -631,7 +669,7 @@ function clippedAway(el: Element | null, cache: Map<Element, boolean>): boolean 
       } catch {
         hides = false;
       }
-      cache.set(e, hides);
+      cache.hides.set(e, hides);
     }
     if (hides) return true;
   }
@@ -639,32 +677,55 @@ function clippedAway(el: Element | null, cache: Map<Element, boolean>): boolean 
 }
 
 /**
- * The line boxes of a match the user can see, or null when the browser
- * cannot tell. Empty for text with no visible box: every box empty or
- * outside the document's scrollable area (off-screen text), or clipped to
- * nothing (screen-reader-only text).
+ * True when the text directly in `el` is drawn in a fully transparent
+ * colour (`color` or `-webkit-text-fill-color`). Not when a background
+ * shows through it (`background-clip: text`, the gradient-text pattern),
+ * on it or an element it is in.
  */
-function visibleBoxes(r: Range, cache: Map<Element, boolean>): Box[] | null {
+function inkless(el: Element | null, cache: SeenCache): boolean {
+  if (!el) return false;
+  const known = cache.clear.get(el);
+  if (known !== undefined) return known;
+  let clear = false;
+  try {
+    const cs = getComputedStyle(el);
+    const fill = cs.getPropertyValue('-webkit-text-fill-color').trim();
+    const ink = fill && fill !== 'currentcolor' && fill !== 'currentColor' ? fill : cs.color.trim();
+    if (NO_INK.test(ink)) {
+      clear = true;
+      for (let e: Element | null = el; e && clear; e = e.parentElement) {
+        const s = e === el ? cs : getComputedStyle(e);
+        const bc = `${s.getPropertyValue('background-clip')} ${s.getPropertyValue('-webkit-background-clip')}`;
+        if (/\btext\b/.test(bc)) clear = false;
+      }
+    }
+  } catch {
+    clear = false;
+  }
+  cache.clear.set(el, clear);
+  return clear;
+}
+
+/**
+ * The line boxes of a match the user can see, or null when the browser
+ * cannot tell. Empty for text with no visible box: every box empty or at
+ * negative page coordinates (moved off the page, as `left: -9999px` does;
+ * measured as if the panes it is in were not scrolled), clipped to nothing
+ * (screen-reader-only text), with `opacity: 0`, or in a transparent
+ * colour. A box past the page's far edges is kept: it can be text
+ * scrolled away inside a pane or a code block.
+ */
+function visibleBoxes(r: Range, cache: SeenCache): Box[] | null {
   const boxes = rangeBoxes(r);
   if (!boxes) return null;
-  const doc = document.documentElement;
-  const sx = window.scrollX;
-  const sy = window.scrollY;
-  const w = doc.scrollWidth;
-  const h = doc.scrollHeight;
-  const shown = boxes.filter(
-    (b) =>
-      b.width > 0 &&
-      b.height > 0 &&
-      b.right + sx > 0 &&
-      b.bottom + sy > 0 &&
-      (w <= 0 || b.left + sx < w) &&
-      (h <= 0 || b.top + sy < h),
-  );
-  if (shown.length === 0) return [];
   const node = r.startContainer;
   const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
-  return clippedAway(el, cache) ? [] : shown;
+  const pane = paneScroll(el, cache);
+  const sx = window.scrollX + pane.x;
+  const sy = window.scrollY + pane.y;
+  const shown = boxes.filter((b) => b.width > 0 && b.height > 0 && b.right + sx > 0 && b.bottom + sy > 0);
+  if (shown.length === 0) return [];
+  return clippedAway(el, cache) || inkless(el, cache) ? [] : shown;
 }
 
 /** True when a box is at least partly in the viewport. */
@@ -682,11 +743,54 @@ function distance(b: Box, x: number, y: number): number {
 /** How far back a cut match is read again, so look-behinds see real context. */
 const CUT_CONTEXT = 40;
 
+const LETTER = /\p{L}/u;
+const DIGIT = /\p{Nd}/u;
+
+/**
+ * Whether the parser reads a space where the selection's string runs the
+ * text of two inline-blocks (or other boxes in the line) together, by the
+ * characters on either side: 'space' where a letter meets a letter or a
+ * digit ("UTCend", "UTC3 days"); 'maybe' between two digits (a date box
+ * then a time box, but also one box per digit); null next to punctuation
+ * ("10" | ":" | "30").
+ */
+function boxEdgeSpace(a: string, b: string): 'space' | 'maybe' | null {
+  const la = LETTER.test(a);
+  const lb = LETTER.test(b);
+  const da = DIGIT.test(a);
+  const db = DIGIT.test(b);
+  if ((la && (lb || db)) || (da && lb)) return 'space';
+  return da && db ? 'maybe' : null;
+}
+
+/**
+ * `text` with a space put in before each break's index (ascending), where
+ * each space then is in the result (`at`), and which breaks are between
+ * text that is apart on the page.
+ */
+function spaced(
+  text: string,
+  breaks: ReadonlyArray<{ readonly t: number; readonly apart: boolean }>,
+): { apart: boolean[]; at: number[]; parsedText: string } {
+  const at = breaks.map((b, k) => b.t + k);
+  const apart = breaks.map((b) => b.apart);
+  if (breaks.length === 0) return { apart, at, parsedText: text };
+  const parts: string[] = [];
+  let from = 0;
+  for (const b of breaks) {
+    parts.push(text.slice(from, b.t));
+    from = b.t;
+  }
+  parts.push(text.slice(from));
+  return { apart, at, parsedText: parts.join(' ') };
+}
+
 /**
  * Every time in a card's text, in reading order (see readTimes), as the page
  * shows it:
  * - Where the selection's string runs together text the page keeps apart
- *   (SelectionMap.breaks), the parser reads a space there. A time that
+ *   (SelectionMap.breaks), the parser reads a space there; at an
+ *   inline-block's edge only as boxEdgeSpace says. A time that
  *   still runs across a place where the two sides are not next to each
  *   other on the page is cut there when the part before is a time by
  *   itself, else dropped. One across the edge of an inline-block (a date
@@ -704,29 +808,35 @@ function readCard(src: CardText): Reading {
     const r = readTimes(src.text, opts);
     return { matches: [...r.matches], open: r.best, capped: r.capped };
   }
-  // Breaks in the trimmed text, and where each space goes in the parsed text.
-  const gaps: number[] = [];
-  const apart: boolean[] = [];
+  // Breaks in the trimmed text that get a space: every one where the two
+  // sides are apart; at an inline-block's edge, only where a letter meets
+  // a letter or digit ("UTC" | "3 days"). Two digits there ("2024-08-13" |
+  // "07:00", or one box per digit of "10:30") get one only when that
+  // reading finds more times; punctuation never does.
+  const hard: Array<{ t: number; apart: boolean }> = [];
+  const soft: number[] = [];
   for (const b of sm.breaks) {
     const t = b.at - src.selLead;
-    if (t > 0 && t < src.text.length) {
-      gaps.push(t);
-      apart.push(b.apart);
+    if (t <= 0 || t >= src.text.length) continue;
+    if (b.apart) {
+      hard.push({ t, apart: true });
+      continue;
+    }
+    const kind = boxEdgeSpace(src.text[t - 1] as string, src.text[t] as string);
+    if (kind === 'space') hard.push({ t, apart: false });
+    else if (kind === 'maybe') soft.push(t);
+  }
+  let { apart, at, parsedText } = spaced(src.text, hard);
+  let got = readTimes(parsedText, opts);
+  if (soft.length > 0) {
+    const all = [...hard, ...soft.map((t) => ({ t, apart: false }))].sort((a, b) => a.t - b.t);
+    const alt = spaced(src.text, all);
+    const altGot = readTimes(alt.parsedText, opts);
+    if (altGot.matches.length > got.matches.length) {
+      ({ apart, at, parsedText } = alt);
+      got = altGot;
     }
   }
-  let parsedText = src.text;
-  const at: number[] = gaps.map((g, k) => g + k);
-  if (gaps.length > 0) {
-    const parts: string[] = [];
-    let from = 0;
-    for (const g of gaps) {
-      parts.push(src.text.slice(from, g));
-      from = g;
-    }
-    parts.push(src.text.slice(from));
-    parsedText = parts.join(' ');
-  }
-  const got = readTimes(parsedText, opts);
   const best = got.matches[got.best];
   /** How many spaces went in before index `q` of the parsed text. */
   const before = (q: number): number => {
@@ -740,7 +850,7 @@ function readCard(src: CardText): Reading {
     return lo;
   };
   const kept: Array<{ p: ParsedTime; best: boolean; boxes: Box[] | null }> = [];
-  const clips = new Map<Element, boolean>();
+  const clips = seenCache();
   for (const found of got.matches) {
     const q = found.sourceIndex ?? 0;
     const end = q + found.matchedText.length;
@@ -1605,7 +1715,7 @@ function paintTransient(): void {
           capped: st.capped,
           index: st.index,
           matches: st.matches,
-          src: cardTextOf(st),
+          src: pinTextOf(st),
           pageX: st.pageX,
           pageY: st.pageY,
           compact: st.compact,
@@ -1649,9 +1759,23 @@ interface CardSource extends CardText {
   readonly rect: DOMRect;
 }
 
-/** Just the selection of a card (what a pin made from it keeps). */
+/** Just the selection of a card, with its map (see selectionMap). */
 function cardTextOf(c: CardText): CardText {
   return { text: c.text, selRange: c.selRange, selText: c.selText, selLead: c.selLead, selMap: c.selMap };
+}
+
+/**
+ * What a pin keeps of its card's selection: the text and its range, not
+ * the map, which can hold an entry for each of tens of thousands of
+ * characters for the pin's whole life (see pinMatchRange).
+ */
+function pinTextOf(c: CardText): CardText {
+  return { text: c.text, selRange: c.selRange, selText: c.selText, selLead: c.selLead };
+}
+
+/** For tests: whether each pinned card holds a selection map. */
+export function pinsHoldMaps(): boolean[] {
+  return Array.from(pins, (p) => p.src.selMap !== undefined);
 }
 
 /** True when a box is wholly in the viewport. */
@@ -1786,69 +1910,28 @@ function overlapsPage(a: PageRect, b: PageRect): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
-/**
- * Step a page point down-right until none of `others` sits within 48 px of
- * it, so a card never lands exactly on top of another one. Compares against
- * where those cards are now, not where they were first placed.
- */
-function cascadeFrom(pageX: number, pageY: number, others: Iterable<Pin>): { x: number; y: number } {
-  let px = pageX;
-  let py = pageY;
-  const tooClose = (): boolean => {
-    const left = clampPageLeft(px);
-    for (const p of others) {
-      if (p.placement !== 'pinned') continue;
-      const at = currentPagePos(p);
-      if (Math.abs(at.x - left) < 48 && Math.abs(at.y - py) < 48) return true;
-    }
-    return false;
-  };
-  for (let guard = 0; tooClose() && guard < 12; guard++) {
-    px += 36;
-    py += 36;
-  }
-  return { x: px, y: py };
-}
+/** A card's top-left corner on the page. */
+type PagePoint = { x: number; y: number };
 
 /**
- * Where to pin a card on the page so that it covers neither its own text
- * nor another pinned card or that card's text (nor any of `extra`):
- * below its text when that is free; else to its right, when the screen has
- * room there; else the free spot nearest to "below its text" among the
- * spots beside, above and below what is in the way, on screen across and
- * at most half its own height further up or down. When there is none (a
- * narrow screen full of cards), it cascades: down-right in steps off the
- * other cards, which may then overlap. `fallback` stands in for "below its text" when the
- * text is gone. Floating cards are left out: they stay on screen wherever
- * the page is.
+ * Where to pin `pin` on the page. No other card moves for it. A spot is
+ * free when the card there covers no pinned card among `others`, none of
+ * their text, and not its own text. The first free spot of:
+ * 1. right below its text;
+ * 2. to the right of its text, when the screen has room for it there;
+ * 3. the free spot nearest to "below its text", on screen across, among
+ *    the spots lined up with the edges of what is in the way and of the
+ *    screen (so the search grows outward from below its text);
+ * 4. directly below the lowest card in the way of "below its text",
+ *    stacking down the page as far as it takes.
+ * Steps 1 to 3 look for a spot wholly on screen first, then for any spot.
+ * `fallback` stands in for "below its text" when the text is gone.
+ * Floating cards are left out: they stay on screen wherever the page is.
  */
-function pinSpot(
-  pin: Pin,
-  others: Iterable<Pin>,
-  fallback: { x: number; y: number },
-  extra: readonly PageRect[] = [],
-): { x: number; y: number } {
-  const own = rangeBox(pin.range);
-  const below = own ? { x: own.left, y: own.bottom + MARGIN } : fallback;
-  const reach = cardSize(pin.host).h / 2;
-  const rest = Array.from(others).filter((o) => o !== pin);
-  return freeSpot(pin, rest, fallback, extra, reach) ?? cascadeFrom(below.x, below.y, rest);
-}
-
-/**
- * The free spot of pinSpot, at most `reach` px above or below "below its
- * text"; null when there is none.
- */
-function freeSpot(
-  pin: Pin,
-  others: Iterable<Pin>,
-  fallback: { x: number; y: number },
-  extra: readonly PageRect[],
-  reach: number,
-): { x: number; y: number } | null {
+function pinSpot(pin: Pin, others: Iterable<Pin>, fallback: PagePoint): PagePoint {
   const { w, h } = cardSize(pin.host);
   const own = rangeBox(pin.range);
-  const blocked: PageRect[] = [...extra];
+  const blocked: PageRect[] = [];
   if (own) blocked.push(own);
   for (const o of others) {
     if (o === pin || o.placement !== 'pinned') continue;
@@ -1856,24 +1939,28 @@ function freeSpot(
     const text = rangeBox(o.range);
     if (text) blocked.push(text);
   }
+  const boxAt = (x: number, y: number): PageRect => ({ left: x, top: y, right: x + w, bottom: y + h });
   const free = (x: number, y: number): boolean => {
-    const box = { left: x, top: y, right: x + w, bottom: y + h };
+    const box = boxAt(x, y);
     return !blocked.some((b) => overlapsPage(box, b));
   };
-  const below = own ? { x: own.left, y: own.bottom + MARGIN } : fallback;
-  const left0 = clampPageLeft(below.x);
-  if (free(left0, below.y)) return { x: left0, y: below.y };
-  // Spots must be on screen across, inside the page, and not far down.
-  const minX = Math.max(MARGIN, window.scrollX + MARGIN);
-  const maxX = window.scrollX + window.innerWidth - w - MARGIN;
-  const fits = (x: number, y: number): boolean =>
-    x >= minX && x <= maxX && clampPageLeft(x) === x && y >= MARGIN && Math.abs(y - below.y) <= reach;
-  if (own) {
-    const right = { x: own.right + MARGIN, y: own.top };
-    if (fits(right.x, right.y) && free(right.x, right.y)) return right;
-  }
-  const xs = new Set<number>([left0]);
-  const ys = new Set<number>([below.y]);
+  const sx = window.scrollX;
+  const sy = window.scrollY;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const whollyShown = (x: number, y: number): boolean => x >= sx && y >= sy && x + w <= sx + vw && y + h <= sy + vh;
+  // Searched spots stay on screen across (or at its left edge, for a card
+  // wider than the screen): one off to the side cannot be seen by scrolling
+  // down, and widens the page.
+  const across = (x: number): boolean => x >= sx && x <= Math.max(sx + MARGIN, sx + vw - w);
+  const inPage = (x: number, y: number): boolean => y >= MARGIN && clampPageLeft(x) === x && across(x);
+
+  const below = { x: clampPageLeft(own ? own.left : fallback.x), y: Math.max(MARGIN, own ? own.bottom + MARGIN : fallback.y) };
+  const right = own ? { x: own.right + MARGIN, y: Math.max(MARGIN, own.top) } : null;
+  const roomRight = !!right && right.x + w <= sx + vw - MARGIN && clampPageLeft(right.x) === right.x;
+
+  const xs = new Set<number>([below.x, MARGIN, sx + MARGIN, sx + vw - w - MARGIN]);
+  const ys = new Set<number>([below.y, sy + MARGIN, sy + vh - h - MARGIN]);
   if (own) {
     xs.add(own.right + MARGIN);
     xs.add(own.left - w - MARGIN);
@@ -1881,54 +1968,41 @@ function freeSpot(
     ys.add(own.top - h - MARGIN);
   }
   for (const b of blocked) {
+    xs.add(b.left);
     xs.add(b.right + MARGIN);
     xs.add(b.left - w - MARGIN);
     ys.add(b.bottom + MARGIN);
     ys.add(b.top - h - MARGIN);
   }
-  let best: { x: number; y: number } | null = null;
-  let bestD = Infinity;
+  const spots: Array<{ x: number; y: number; d: number }> = [];
   for (const y of ys) {
     for (const x of xs) {
-      const d = Math.hypot(x - left0, y - below.y);
-      if (d >= bestD || !fits(x, y) || !free(x, y)) continue;
-      best = { x, y };
-      bestD = d;
+      if (inPage(x, y)) spots.push({ x, y, d: Math.hypot(x - below.x, y - below.y) });
     }
   }
-  return best;
-}
+  spots.sort((a, b) => a.d - b.d);
 
-/**
- * Before pinning `pin` by its text: a card among `among` that covers that
- * text moves off it, a short way (beside, or at most its own height up or
- * down) and not into the spot just below the text, unless the user put it
- * where it is or there is no such spot. A card sent far from its own text
- * is worse than one that covers another's.
- */
-function makeRoomFor(pin: Pin, among: Iterable<Pin>): void {
-  const mine = rangeBox(pin.range);
-  if (!mine) return;
-  const size = cardSize(pin.host);
-  const left = clampPageLeft(mine.left);
-  const wanted = { left, top: mine.bottom + MARGIN, right: left + size.w, bottom: mine.bottom + MARGIN + size.h };
-  const list = Array.from(among).filter((o) => o !== pin);
-  for (const o of list) {
-    if (o.placement !== 'pinned' || o.host.dataset.tzxDragged === '1') continue;
-    if (!overlapsPage(pinBox(o), mine)) continue;
-    const rest = list.filter((p) => p !== o);
-    const to = freeSpot(o, rest, currentPagePos(o), [mine, wanted], cardSize(o.host).h);
-    if (!to) continue;
-    positionAbsolute(o.host, to.x, to.y);
-    o.pageX = to.x;
-    o.pageY = to.y;
+  for (const shownOnly of [true, false]) {
+    const ok = (x: number, y: number): boolean => free(x, y) && (!shownOnly || whollyShown(x, y));
+    if (ok(below.x, below.y)) return below;
+    if (right && roomRight && ok(right.x, right.y)) return right;
+    const near = spots.find((s) => ok(s.x, s.y));
+    if (near) return { x: near.x, y: near.y };
   }
+  // Nothing free anywhere searched: stack below what is in the way.
+  let y = below.y;
+  for (let guard = 0; guard <= blocked.length; guard++) {
+    const box = boxAt(below.x, y);
+    const hit = blocked.filter((b) => overlapsPage(box, b));
+    if (hit.length === 0) break;
+    y = Math.max(...hit.map((b) => b.bottom)) + MARGIN;
+  }
+  return { x: below.x, y };
 }
 
-/** Pin a new card by its text, where it covers no other pinned card or its text (see pinSpot). */
-function placeNewPin(pin: Pin, fallback: { x: number; y: number }): void {
-  makeRoomFor(pin, pins);
-  const at = pinSpot(pin, pins, fallback);
+/** Put a pinned card at the spot pinSpot gives, among every other card. */
+function placePin(pin: Pin, fallback: PagePoint, others: Iterable<Pin> = pins): void {
+  const at = pinSpot(pin, others, fallback);
   positionAbsolute(pin.host, at.x, at.y);
   pin.pageX = at.x;
   pin.pageY = at.y;
@@ -2029,9 +2103,9 @@ function floatInPlace(pin: Pin): { top: number; left: number } {
 /**
  * Pin ↔ float. Floating keeps the card where it is on screen (brought into
  * view, clear of the other floating cards' headers). Pinning puts it back
- * next to its source text when that text is still on the page (stepping off
- * the cards in `others`, by default every other card), else where it is now,
- * in page coordinates.
+ * next to its source text when that text is still on the page (see pinSpot:
+ * clear of the cards in `others`, by default every other card, which stay
+ * where they are), else where it is now, in page coordinates.
  */
 function setPlacement(pin: Pin, placement: 'pinned' | 'floating', others?: Iterable<Pin>): void {
   if (pin.placement === placement) return;
@@ -2057,10 +2131,7 @@ function setPlacement(pin: Pin, placement: 'pinned' | 'floating', others?: Itera
     // Measured as it will be once pinned (the "floating" tag goes).
     pin.placement = placement;
     renderNow(pin);
-    const among = Array.from(others ?? pins).filter((p) => p !== pin);
-    makeRoomFor(pin, among);
-    const at = pinSpot(pin, among, anchor);
-    positionAbsolute(pin.host, at.x, at.y);
+    placePin(pin, anchor, others ?? pins);
   } else {
     const r = pin.host.getBoundingClientRect();
     applyBox(pin.host, 'absolute', r.top + window.scrollY, r.left + window.scrollX);
@@ -2132,7 +2203,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
             compact: pin.compact,
             pinNumber: slot + 1,
             pinDot: color.dot,
-            onStep: pin.matches.length > 1 ? (delta: number) => stepPin(pin, delta) : undefined,
+            onStep: pin.matches.length > 1 || pin.capped ? (delta: number) => stepPin(pin, delta) : undefined,
             onClose: () => {
               removePin(pin);
               refreshDock();
@@ -2164,7 +2235,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
     else {
       // Measure it first: where it can go depends on its size.
       renderNow(pin);
-      placeNewPin(pin, { x: px, y: py });
+      placePin(pin, { x: px, y: py });
     }
 
     if (!restore) {
@@ -2182,12 +2253,24 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
   }
 }
 
+/**
+ * The page range of a pin's match. A pin keeps no selection map (one entry
+ * per character of what was read, see mapSelection): it maps its selection
+ * again, only up to the match, each time it needs one.
+ */
+function pinMatchRange(src: MarkSource, p: ParsedTime): Range | null {
+  if (src.selMap || !src.selRange || src.selText === null) return matchRange(src, p);
+  const end = src.selLead + (p.sourceIndex ?? 0) + p.matchedText.length;
+  const selMap = mapSelection(src.selRange, src.selText, Math.min(src.selText.length, end + 1));
+  return matchRange({ selRange: src.selRange, selText: src.selText, selLead: src.selLead, selMap }, p);
+}
+
 /** Move a pin's mark to the time it shows now. */
 function markPin(pin: Pin): void {
   clearPinHighlight(pin.slot);
   let range: Range | null = null;
   try {
-    range = matchRange(pin.src, pin.parsed)?.cloneRange() ?? null;
+    range = pinMatchRange(pin.src, pin.parsed)?.cloneRange() ?? null;
   } catch {
     range = null;
   }
@@ -2197,7 +2280,9 @@ function markPin(pin: Pin): void {
 
 /**
  * Show the previous (-1) or next (+1) time of a pin's selection, wrapping
- * around, and move its mark there. The card stays where it is.
+ * around, and move its mark there. The card stays where it is, unless it
+ * would cover that time itself: then a pinned card moves by pinSpot's rule.
+ * (It may still cover another pin's time; cards sit next to text.)
  */
 function stepPin(pin: Pin, delta: number): void {
   const n = pin.matches.length;
@@ -2206,11 +2291,16 @@ function stepPin(pin: Pin, delta: number): void {
   pin.parsed = pin.matches[pin.index] as ParsedTime;
   markPin(pin);
   pin.render();
+  if (pin.placement !== 'pinned') return;
+  const mine = rangeBox(pin.range);
+  if (mine && overlapsPage(pinBox(pin), mine)) placePin(pin, currentPagePos(pin));
 }
 
 /** Read a pin's text again with the current settings, keeping the match it shows when it is still there. */
 function rereadPin(pin: Pin): void {
   const again = reparse(pin.src, pin.parsed);
+  // Reading built the selection's map; the pin does not keep it (see pinMatchRange).
+  pin.src.selMap = undefined;
   if (again) {
     const moved = !sameMatch(again.parsed, pin.parsed);
     pin.parsed = again.parsed;
@@ -2278,15 +2368,33 @@ function setAllCompact(compact: boolean): void {
   refreshDock();
 }
 
+/**
+ * Cards in the order their text comes in the page; cards whose text is
+ * gone keep their order, after the others.
+ */
+function inReadingOrder(list: readonly Pin[]): Pin[] {
+  const at = (p: Pin): Range | null => (p.range && p.range.startContainer.isConnected ? p.range : null);
+  return [...list].sort((a, b) => {
+    const ra = at(a);
+    const rb = at(b);
+    if (!ra || !rb) return ra ? -1 : rb ? 1 : 0;
+    try {
+      return ra.compareBoundaryPoints(Range.START_TO_START, rb);
+    } catch {
+      return 0;
+    }
+  });
+}
+
 function togglePlacementAll(): void {
   const list = Array.from(pins);
   const allFloating = list.every((p) => p.placement === 'floating');
   if (allFloating) {
-    // Each card goes back next to its own source, stepping off only the
-    // cards already put back in this pass (at their new spots), not off
-    // where the others still float.
+    // Each card goes back next to its own source, in reading order, one by
+    // one by the same rule as a new pin: clear of the cards already put back
+    // in this pass (the others still float).
     const placed: Pin[] = [];
-    for (const pin of list) {
+    for (const pin of inReadingOrder(list)) {
       setPlacement(pin, 'pinned', placed);
       placed.push(pin);
     }

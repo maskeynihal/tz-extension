@@ -103,10 +103,14 @@ export const ZONE_ABBREVIATIONS: readonly ZoneAbbreviation[] = [
 
 const ABBR_BY_CODE = new Map(ZONE_ABBREVIATIONS.map((a) => [a.code, a]));
 
-/** Every real-world UTC offset in use, in minutes (−12:00 … +14:00). */
+/**
+ * Every real-world UTC offset in use, in minutes (−12:00 … +14:00): each one
+ * a listed zone has at some point in the year (+13:45 is Chatham's summer
+ * time), plus −12:00 (Etc/GMT+12, "anywhere on Earth").
+ */
 export const UTC_OFFSET_MINUTES: readonly number[] = [
   -720, -660, -600, -570, -540, -480, -420, -360, -300, -240, -210, -180, -150, -120, -60, 0, 60, 120, 180,
-  210, 240, 270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 840,
+  210, 240, 270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 825, 840,
 ];
 
 function pad2(n: number): string {
@@ -1112,7 +1116,7 @@ function etcGroup(): ZoneGroup {
     const real = offsetLabel(minutes);
     options.push(
       makeOption(
-        { id, label: id, detail: `${real} · POSIX sign, reversed: ${id} is ${real}` },
+        { id, label: id, detail: `${real} · POSIX sign is reversed` },
         { kind: 'iana', exact: [id], extra: [`utc${offsetString(minutes)}`], minutes },
       ),
     );
