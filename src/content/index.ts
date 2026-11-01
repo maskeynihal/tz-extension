@@ -614,26 +614,65 @@ interface SeenCache {
   readonly hides: Map<Element, boolean>;
   /** Per element: its own text is drawn in a fully transparent colour. */
   readonly clear: Map<Element, boolean>;
-  /** Per element: how far it and the boxes it is in are scrolled (not the window). */
-  readonly scrolled: Map<Element, { readonly x: number; readonly y: number }>;
+  /** Per element: how it and the elements it is in, up to its scroll container, are positioned. */
+  readonly placed: Map<Element, Placed>;
+  /** The page's direction, read once per read: 'rtl' scrolls to the left. */
+  rtl?: boolean;
 }
 
+/** How text is positioned: in a `position: fixed` box, an `absolute` one, or neither. */
+type Placed = 'fixed' | 'absolute' | null;
+
 function seenCache(): SeenCache {
-  return { hides: new Map(), clear: new Map(), scrolled: new Map() };
+  return { hides: new Map(), clear: new Map(), placed: new Map() };
+}
+
+/** `fixed` over `absolute` over neither. */
+function morePlaced(a: Placed, b: Placed): Placed {
+  return a === 'fixed' || b === 'fixed' ? 'fixed' : (a ?? b);
+}
+
+/** True for an element whose content scrolls or is clipped (a scroll container). */
+function scrolls(cs: CSSStyleDeclaration): boolean {
+  return /^(auto|scroll|hidden|overlay)$/.test(cs.overflowX || cs.overflow) || /^(auto|scroll|hidden|overlay)$/.test(cs.overflowY || cs.overflow);
 }
 
 /**
- * How far the content of `el` is scrolled by `el` and the elements it is
- * in (scroll panes, code blocks), leaving out the window's own scroll.
+ * Whether the text directly in `el` is in a box taken out of the flow
+ * (`position: absolute` or `fixed`) below its nearest scroll container:
+ * `el` itself or an element it is in, up to (not with) the first one whose
+ * content scrolls or is clipped. That is how off-page text is built. Text
+ * in a scroll container is placed by its scrolling, which can be negative
+ * (a `column-reverse` pane scrolled up, an RTL pane scrolled sideways).
  */
-function paneScroll(el: Element | null, cache: SeenCache): { x: number; y: number } {
-  if (!el || el === document.body || el === document.documentElement) return { x: 0, y: 0 };
-  const known = cache.scrolled.get(el);
-  if (known) return known;
-  const up = paneScroll(el.parentElement, cache);
-  const at = { x: up.x + (el.scrollLeft || 0), y: up.y + (el.scrollTop || 0) };
-  cache.scrolled.set(el, at);
-  return at;
+function placedText(el: Element | null, cache: SeenCache): Placed {
+  if (!el || el === document.body || el === document.documentElement) return null;
+  const known = cache.placed.get(el);
+  if (known !== undefined) return known;
+  let got: Placed = null;
+  try {
+    const cs = getComputedStyle(el);
+    if (!scrolls(cs)) {
+      const here: Placed = cs.position === 'fixed' ? 'fixed' : cs.position === 'absolute' ? 'absolute' : null;
+      got = morePlaced(here, placedText(el.parentElement, cache));
+    }
+  } catch {
+    got = null;
+  }
+  cache.placed.set(el, got);
+  return got;
+}
+
+/** True when the page scrolls to the left (`direction: rtl` on the root). */
+function pageRtl(cache: SeenCache): boolean {
+  if (cache.rtl === undefined) {
+    try {
+      cache.rtl = getComputedStyle(document.documentElement).direction === 'rtl';
+    } catch {
+      cache.rtl = false;
+    }
+  }
+  return cache.rtl;
 }
 
 /**
@@ -707,23 +746,39 @@ function inkless(el: Element | null, cache: SeenCache): boolean {
 }
 
 /**
+ * Whether a box of positioned text (see placedText) is moved off the page:
+ * above its top, or past the side it cannot scroll to (the left on a
+ * left-to-right page, the right on a right-to-left one). Measured against
+ * the window's scroll only; text in a `fixed` box against the viewport.
+ */
+function offPage(b: Box, placed: Exclude<Placed, null>, cache: SeenCache): boolean {
+  const sx = placed === 'fixed' ? 0 : window.scrollX;
+  const sy = placed === 'fixed' ? 0 : window.scrollY;
+  if (b.bottom + sy <= 0) return true;
+  if (!pageRtl(cache)) return b.right + sx <= 0;
+  const edge = placed === 'fixed' ? window.innerWidth : document.documentElement.clientWidth || window.innerWidth;
+  return b.left + sx >= edge;
+}
+
+/**
  * The line boxes of a match the user can see, or null when the browser
- * cannot tell. Empty for text with no visible box: every box empty or at
- * negative page coordinates (moved off the page, as `left: -9999px` does;
- * measured as if the panes it is in were not scrolled), clipped to nothing
+ * cannot tell. Empty for text with no visible box: every box empty,
+ * positioned text moved off the page (as `left: -9999px` or a `fixed`
+ * `top: -500px` box does, see offPage), clipped to nothing
  * (screen-reader-only text), with `opacity: 0`, or in a transparent
- * colour. A box past the page's far edges is kept: it can be text
- * scrolled away inside a pane or a code block.
+ * colour. Any other box is kept wherever it is: it can be text scrolled
+ * away inside a pane or a code block, either way (a `column-reverse` chat
+ * pane scrolled up, a right-to-left page or pane scrolled sideways).
  */
 function visibleBoxes(r: Range, cache: SeenCache): Box[] | null {
   const boxes = rangeBoxes(r);
   if (!boxes) return null;
   const node = r.startContainer;
   const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
-  const pane = paneScroll(el, cache);
-  const sx = window.scrollX + pane.x;
-  const sy = window.scrollY + pane.y;
-  const shown = boxes.filter((b) => b.width > 0 && b.height > 0 && b.right + sx > 0 && b.bottom + sy > 0);
+  let shown = boxes.filter((b) => b.width > 0 && b.height > 0);
+  if (shown.length === 0) return [];
+  const placed = placedText(el, cache);
+  if (placed) shown = shown.filter((b) => !offPage(b, placed, cache));
   if (shown.length === 0) return [];
   return clippedAway(el, cache) || inkless(el, cache) ? [] : shown;
 }
@@ -1319,9 +1374,9 @@ function refitFixed(hostEl: HTMLDivElement, anchor: DOMRect): void {
 const fixedAnchors = new WeakMap<HTMLElement, DOMRect>();
 
 /** Place a pinned card at a document-space point (scrolls with the page). */
-function positionAbsolute(hostEl: HTMLDivElement, pageX: number, pageY: number): void {
+function positionAbsolute(hostEl: HTMLDivElement, pageX: number, pageY: number, w = CARD_MAX_W): void {
   // Clamp horizontally within the document width so it never overflows off-screen.
-  applyBox(hostEl, 'absolute', pageY, clampPageLeft(pageX));
+  applyBox(hostEl, 'absolute', pageY, clampPageLeft(pageX, w));
 }
 
 function applyBox(
@@ -1861,10 +1916,13 @@ interface PinSpec {
   readonly slot?: number;
 }
 
-/** Left edge a pinned card gets for a page x (kept inside the document width). */
-function clampPageLeft(pageX: number): number {
+/**
+ * Left edge a pinned card `w` px wide gets for a page x (kept inside the
+ * document width; the widest card when its width is not known).
+ */
+function clampPageLeft(pageX: number, w = CARD_MAX_W): number {
   const docW = document.documentElement.scrollWidth;
-  return Math.max(MARGIN, Math.min(pageX, docW - CARD_MAX_W - MARGIN));
+  return Math.max(MARGIN, Math.min(pageX, docW - w - MARGIN));
 }
 
 /** Where a card is now, in page coordinates (after any drag, float or clamp). */
@@ -1924,7 +1982,10 @@ type PagePoint = { x: number; y: number };
  *    screen (so the search grows outward from below its text);
  * 4. directly below the lowest card in the way of "below its text",
  *    stacking down the page as far as it takes.
- * Steps 1 to 3 look for a spot wholly on screen first, then for any spot.
+ * Steps 1 to 3 look for a spot wholly on screen first, then for any spot;
+ * when its text is scrolled off screen, for any spot only (so the card
+ * goes back by its text). Spots right of other cards count up to the
+ * screen's edge, at the card's own width.
  * `fallback` stands in for "below its text" when the text is gone.
  * Floating cards are left out: they stay on screen wherever the page is.
  */
@@ -1953,11 +2014,17 @@ function pinSpot(pin: Pin, others: Iterable<Pin>, fallback: PagePoint): PagePoin
   // wider than the screen): one off to the side cannot be seen by scrolling
   // down, and widens the page.
   const across = (x: number): boolean => x >= sx && x <= Math.max(sx + MARGIN, sx + vw - w);
-  const inPage = (x: number, y: number): boolean => y >= MARGIN && clampPageLeft(x) === x && across(x);
+  // Kept inside the page at the card's own width, so the columns right of
+  // other cards count up to the screen's edge.
+  const clampLeft = (x: number): number => clampPageLeft(x, w);
+  const inPage = (x: number, y: number): boolean => y >= MARGIN && clampLeft(x) === x && across(x);
 
-  const below = { x: clampPageLeft(own ? own.left : fallback.x), y: Math.max(MARGIN, own ? own.bottom + MARGIN : fallback.y) };
+  const below = { x: clampLeft(own ? own.left : fallback.x), y: Math.max(MARGIN, own ? own.bottom + MARGIN : fallback.y) };
   const right = own ? { x: own.right + MARGIN, y: Math.max(MARGIN, own.top) } : null;
-  const roomRight = !!right && right.x + w <= sx + vw - MARGIN && clampPageLeft(right.x) === right.x;
+  const roomRight = !!right && right.x + w <= sx + vw - MARGIN && clampLeft(right.x) === right.x;
+  // Its text scrolled away ("Pin all to page" after scrolling): by its text
+  // first, wherever that is, before any spot on screen.
+  const textAway = !!own && (own.bottom <= sy || own.top >= sy + vh || own.right <= sx || own.left >= sx + vw);
 
   const xs = new Set<number>([below.x, MARGIN, sx + MARGIN, sx + vw - w - MARGIN]);
   const ys = new Set<number>([below.y, sy + MARGIN, sy + vh - h - MARGIN]);
@@ -1982,7 +2049,7 @@ function pinSpot(pin: Pin, others: Iterable<Pin>, fallback: PagePoint): PagePoin
   }
   spots.sort((a, b) => a.d - b.d);
 
-  for (const shownOnly of [true, false]) {
+  for (const shownOnly of textAway ? [false] : [true, false]) {
     const ok = (x: number, y: number): boolean => free(x, y) && (!shownOnly || whollyShown(x, y));
     if (ok(below.x, below.y)) return below;
     if (right && roomRight && ok(right.x, right.y)) return right;
@@ -2003,9 +2070,32 @@ function pinSpot(pin: Pin, others: Iterable<Pin>, fallback: PagePoint): PagePoin
 /** Put a pinned card at the spot pinSpot gives, among every other card. */
 function placePin(pin: Pin, fallback: PagePoint, others: Iterable<Pin> = pins): void {
   const at = pinSpot(pin, others, fallback);
-  positionAbsolute(pin.host, at.x, at.y);
+  movePin(pin, at);
+}
+
+function movePin(pin: Pin, at: PagePoint): void {
+  positionAbsolute(pin.host, at.x, at.y, cardSize(pin.host).w);
   pin.pageX = at.x;
   pin.pageY = at.y;
+}
+
+/**
+ * Scroll the page so a pinned card just placed is wholly in view (the
+ * least scroll that does it), so it does not vanish on the click that
+ * placed it. The scroll is ours: it dismisses nothing (see onScroll).
+ */
+function bringPinIntoView(pin: Pin): void {
+  const r = pin.host.getBoundingClientRect();
+  if (!r.width && !r.height) return;
+  const inView = r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth;
+  if (inView || typeof pin.host.scrollIntoView !== 'function') return;
+  ownScrollUntil = Date.now() + OWN_SCROLL_MS;
+  try {
+    pin.host.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' as ScrollBehavior });
+  } catch {
+    /* not scrollable */
+  }
+  ownScrollAt = { x: window.scrollX, y: window.scrollY };
 }
 
 /**
@@ -2215,6 +2305,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
             },
             onTogglePlacement: () => {
               setPlacement(pin, pin.placement === 'pinned' ? 'floating' : 'pinned');
+              if (pin.placement === 'pinned') bringPinIntoView(pin);
               refreshDock();
             },
             onDragStart: (e) => startDrag(host, e, pin.placement === 'floating'),
@@ -2246,6 +2337,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
       closedPins = null;
     }
     refreshDock();
+    if (!restore && !spec.box) bringPinIntoView(pin);
     return pin;
   } catch {
     /* restricted page — ignore */
@@ -2279,9 +2371,45 @@ function markPin(pin: Pin): void {
 }
 
 /**
+ * Where a stepped pin goes when it covers its own new mark (`mark`): a spot
+ * wholly on screen right by the mark (just above it, just below it, or
+ * beside it, slid along the mark's edge to stay on screen), over neither
+ * the mark nor another pinned card; the one nearest to where the card is.
+ * Null when there is none: the card then stays where it is.
+ */
+function stepSpot(pin: Pin, mark: PageRect): PagePoint | null {
+  const { w, h } = cardSize(pin.host);
+  const sx = window.scrollX;
+  const sy = window.scrollY;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const blocked: PageRect[] = [mark];
+  for (const o of pins) if (o !== pin && o.placement === 'pinned') blocked.push(pinBox(o));
+  const intoX = (x: number): number => Math.max(sx + MARGIN, Math.min(x, sx + vw - w - MARGIN));
+  const intoY = (y: number): number => Math.max(sy + MARGIN, Math.min(y, sy + vh - h - MARGIN));
+  const spots: PagePoint[] = [
+    { x: intoX(mark.left), y: mark.top - h - MARGIN },
+    { x: intoX(mark.left), y: mark.bottom + MARGIN },
+    { x: mark.right + MARGIN, y: intoY(mark.top) },
+    { x: mark.left - w - MARGIN, y: intoY(mark.top) },
+  ];
+  const now = currentPagePos(pin);
+  const fits = (s: PagePoint): boolean => {
+    const box = { left: s.x, top: s.y, right: s.x + w, bottom: s.y + h };
+    const shown = box.left >= sx && box.top >= sy && box.right <= sx + vw && box.bottom <= sy + vh;
+    return shown && clampPageLeft(s.x, w) === s.x && !blocked.some((b) => overlapsPage(box, b));
+  };
+  const ok = spots.filter(fits);
+  ok.sort((a, b) => Math.hypot(a.x - now.x, a.y - now.y) - Math.hypot(b.x - now.x, b.y - now.y));
+  return ok[0] ?? null;
+}
+
+/**
  * Show the previous (-1) or next (+1) time of a pin's selection, wrapping
  * around, and move its mark there. The card stays where it is, unless it
- * would cover that time itself: then a pinned card moves by pinSpot's rule.
+ * would cover that time itself: then a pinned card moves to a spot on
+ * screen by the mark (see stepSpot), or stays put (partly over its mark)
+ * when there is none, rather than jump off screen.
  * (It may still cover another pin's time; cards sit next to text.)
  */
 function stepPin(pin: Pin, delta: number): void {
@@ -2293,7 +2421,9 @@ function stepPin(pin: Pin, delta: number): void {
   pin.render();
   if (pin.placement !== 'pinned') return;
   const mine = rangeBox(pin.range);
-  if (mine && overlapsPage(pinBox(pin), mine)) placePin(pin, currentPagePos(pin));
+  if (!mine || !overlapsPage(pinBox(pin), mine)) return;
+  const at = stepSpot(pin, mine);
+  if (at) movePin(pin, at);
 }
 
 /** Read a pin's text again with the current settings, keeping the match it shows when it is still there. */

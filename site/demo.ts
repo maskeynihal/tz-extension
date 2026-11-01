@@ -53,6 +53,20 @@ function shownZones(prefs: Preferences): string[] {
   return out;
 }
 
+/**
+ * A zone name with a line-break chance after each "/", so a narrow row wraps
+ * "America/New_York" as "America/" + "New_York" instead of running it into
+ * the date beside it (QA r8 H5). The text content is unchanged.
+ */
+function zoneNameParts(name: string): (Node | string)[] {
+  const out: (Node | string)[] = [];
+  name.split('/').forEach((part, i, all) => {
+    out.push(i < all.length - 1 ? `${part}/` : part);
+    if (i < all.length - 1) out.push(document.createElement('wbr'));
+  });
+  return out;
+}
+
 /** The reading of an ambiguous numeric date that matches the saved preference. */
 function preferredEpoch(p: ParsedTime, order: NumericDateOrder): number {
   if (p.dateOrder && p.dateOrder.order !== order) return p.dateOrder.alternate.epochMs;
@@ -100,6 +114,10 @@ function mountDemo(): void {
   const nextBtn = h('button', { class: 'demo-stepbtn', type: 'button', 'aria-label': 'Next time', title: 'Next time' }, ['›']);
   stepper.append(prevBtn, stepCount, nextBtn, h('span', { class: 'demo-stepnote' }, ['times in the input']));
   stepper.hidden = true;
+  // Under the stepper: why a capped count has a "+", as visible text, like
+  // the extension card's line (QA r8 H4). Empty and hidden otherwise.
+  const stepWhy = h('p', { class: 'demo-stepwhy' });
+  stepWhy.hidden = true;
   // Which match is shown: its key, and the input text it was chosen for. A
   // new input opens on the parser's best match; a re-render of the same input
   // (a setting changed here or in another tab) keeps the match if it is still
@@ -138,12 +156,17 @@ function mountDemo(): void {
     nextBtn.disabled = n < 2;
     stepCount.replaceChildren(h('span', { class: 'demo-sr' }, ['Time ']), `${shownIndex + 1} of ${n}${shownCapped ? '+' : ''}`);
     if (shownCapped && n > 0) {
-      stepCount.title =
+      const why =
         n >= MAX_LISTED
           ? `Only the first ${MAX_LISTED} times are listed`
           : `Text past the first ${MAX_READ_CHARS.toLocaleString('en-US')} characters is not read`;
+      stepCount.title = why;
+      stepWhy.textContent = `${why}.`;
+      stepWhy.hidden = false;
     } else {
       stepCount.removeAttribute('title');
+      stepWhy.textContent = '';
+      stepWhy.hidden = true;
     }
   }
   prevBtn.addEventListener('click', () => step(-1));
@@ -187,7 +210,7 @@ function mountDemo(): void {
       const isHome = sameZone(zone, prefs.homeZone);
       const detail = resolveZone(zone)?.long;
       const name = h('div', { class: 'demo-zone' }, [
-        h('span', { class: 'demo-zone-name' }, [zoneLabel(zone)]),
+        h('span', { class: 'demo-zone-name' }, zoneNameParts(zoneLabel(zone))),
         ...(detail && detail !== zoneLabel(zone) ? [h('span', { class: 'demo-zone-detail' }, [detail])] : []),
         ...(isHome ? [h('span', { class: 'demo-local' }, ['HOME'])] : []),
       ]);
@@ -277,7 +300,7 @@ function mountDemo(): void {
     // Every time in the input, in reading order, opening on the parser's best
     // match: the same list the extension card steps through.
     // A step re-renders with the same input and settings: reuse the list
-    // rather than reading up to 200k characters again on every click.
+    // rather than reading up to MAX_READ_CHARS characters again on every click.
     if (!listCache || listCache.raw !== raw || listCache.prefs !== prefs) {
       listCache = { raw, prefs, list: readTimes(raw, opts) };
     }
@@ -290,9 +313,14 @@ function mountDemo(): void {
     stepKey = parsed ? matchKey(parsed) : null;
     renderStepper();
     if (!parsed) {
-      hint.textContent = readEpochInput(raw)
-        ? "Couldn't read that as a time. To read it as a Unix timestamp, use the Epoch tab."
-        : "Couldn't read that as a time. Try an epoch, an ISO string, or a full date.";
+      // A time past the read limit is never seen: say so rather than "Couldn't
+      // read that" (QA r8 H4).
+      hint.textContent =
+        raw.length > MAX_READ_CHARS
+          ? `No time found in the first ${MAX_READ_CHARS.toLocaleString('en-US')} characters; text past that is not read.`
+          : readEpochInput(raw)
+            ? "Couldn't read that as a time. To read it as a Unix timestamp, use the Epoch tab."
+            : "Couldn't read that as a time. Try an epoch, an ISO string, or a full date.";
       hint.className = 'demo-hint is-error';
       renderPicker();
       return;
@@ -332,7 +360,7 @@ function mountDemo(): void {
   }
 
   const head = h('div', { class: 'demo-head' }, [tabs, clock]);
-  root.append(head, input, stepper, hint, note, format, orderBox, out, pickerHost);
+  root.append(head, input, stepper, stepWhy, hint, note, format, orderBox, out, pickerHost);
 
   input.addEventListener('input', render);
   // Seed with "now" so the demo is alive on load.

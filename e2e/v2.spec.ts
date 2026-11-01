@@ -1313,4 +1313,210 @@ test.describe('v2 features', () => {
       await page.close();
     });
   }
+
+  // --- Round 8 ---------------------------------------------------------------
+
+  test('round 8: a column-reverse chat scrolled up lists every message and opens on a visible one', async () => {
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const msgs = Array.from(
+      { length: 120 },
+      (_, i) =>
+        `<p ${i === 20 ? 'id="m20"' : ''} style="margin:0;line-height:30px">Msg ${i} sent 2024-05-${String((i % 28) + 1).padStart(2, '0')} 1${i % 10}:00 UTC</p>`,
+    ).join('');
+    const page = await openPage(
+      `<div id="chat" style="height:600px;overflow-y:auto;display:flex;flex-direction:column-reverse"><div>${msgs}</div></div>`,
+    );
+    await page.setViewportSize({ width: 1280, height: 700 });
+    // Scrolled up inside the pane only: its scrollTop goes negative.
+    const at = await page.evaluate(() => {
+      const pane = document.getElementById('chat') as HTMLElement;
+      pane.scrollTop = -2600;
+      const b = (document.getElementById('m20') as HTMLElement).getBoundingClientRect();
+      return { scrollTop: pane.scrollTop, top: b.top, bottom: b.bottom };
+    });
+    expect(at.scrollTop).toBeLessThan(0);
+    expect(at.top).toBeGreaterThanOrEqual(0);
+    expect(at.bottom).toBeLessThanOrEqual(700);
+    await selectAll(page, 'm20');
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(card(page).locator('.tzx-src span').first()).toHaveText('“2024-05-21 10:00 UTC”');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await selectAll(page, 'chat', { x: 200, y: (at.top + at.bottom) / 2 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect(card(page).locator('[aria-live="polite"]')).toHaveText(/^Time \d+ of 120$/);
+    await page.close();
+  });
+
+  test('round 8: right-to-left panes and pages scrolled sideways list their times; positioned off-page text is still left out', async () => {
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC'], cardSize: 'full', keepSelection: true });
+    const table = (id: string): string =>
+      `<table style="width:3000px"><tr><td style="width:2600px">first</td><td id="${id}">end 2024-05-06 11:00 UTC</td></tr></table>`;
+    const box = (page: Page, id: string): Promise<{ left: number; right: number }> =>
+      page.evaluate((id) => {
+        const r = document.createRange();
+        r.selectNodeContents(document.getElementById(id) as HTMLElement);
+        const b = r.getBoundingClientRect();
+        return { left: b.left, right: b.right };
+      }, id);
+    const opens = async (page: Page, id: string): Promise<void> => {
+      await selectAll(page, id);
+      await expect(card(page), `#${id}`).toBeVisible({ timeout: 5000 });
+      await expect(card(page).locator('.tzx-src span').first(), `#${id}`).toHaveText('“2024-05-06 11:00 UTC”');
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    };
+
+    // A right-to-left table in a scroller on a left-to-right page, scrolled so the time shows.
+    let page = await openPage(`<div id="pane" dir="rtl" style="overflow-x:auto;width:100%">${table('t')}</div>`);
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.evaluate(() => {
+      (document.getElementById('pane') as HTMLElement).scrollLeft = -3000;
+    });
+    expect(await page.evaluate(() => (document.getElementById('pane') as HTMLElement).scrollLeft)).toBeLessThan(0);
+    const inPane = await box(page, 't');
+    expect(inPane.left).toBeGreaterThanOrEqual(0);
+    expect(inPane.right).toBeLessThanOrEqual(1280);
+    await opens(page, 't');
+    await page.close();
+
+    // A right-to-left page, 3000 px wide: the time off to the left, then scrolled into view.
+    page = await openPage(
+      table('t') +
+        '<p id="right">x <span style="position:absolute;right:-9999px">2024-08-12 06:00 UTC</span> y</p>' +
+        '<p id="fixed">x <span style="position:fixed;top:-500px">2024-08-12 06:00 UTC</span> y</p>',
+    );
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.evaluate(() => {
+      document.documentElement.dir = 'rtl';
+    });
+    expect((await box(page, 't')).right).toBeLessThan(0);
+    await opens(page, 't');
+    await page.evaluate(() => window.scrollTo(-3000, 0));
+    expect(await page.evaluate(() => window.scrollX)).toBeLessThan(0);
+    const onPage = await box(page, 't');
+    expect(onPage.left).toBeGreaterThanOrEqual(0);
+    expect(onPage.right).toBeLessThanOrEqual(1280);
+    await opens(page, 't');
+    // Positioned text past the side the page cannot scroll to, or above a scrolled page, gives no card.
+    await page.evaluate(() => window.scrollTo(-500, 600));
+    for (const id of ['right', 'fixed']) {
+      await selectAll(page, id);
+      await page.waitForTimeout(500);
+      await expect(card(page), `#${id}`).toHaveCount(0);
+    }
+    await page.close();
+  });
+
+  /** The QA's five-line page (pins3.mjs): lines `gap` px apart, each indented 30 px more. */
+  async function qaLines(width: number, gap = 40): Promise<Page> {
+    const lines = [
+      'Standup 09:00 UTC, review 13:30 UTC, deploy 2024-04-02 18:00 UTC',
+      '03/04/2024 10:00 and 05/06/2024 11:00',
+      'Release 2024-05-10 08:00 PST',
+      'Window 2024-06-01 12:00 UTC to 2024-06-01 14:00 UTC',
+      'Cutover 2024-07-04T23:00:00Z',
+    ];
+    const page = await openPage(
+      '<style>body { padding: 0 8px !important; margin: 0; }</style><div style="height:60px"></div>' +
+        lines.map((l, i) => `<p id="l${i}" style="margin:${gap}px 0 0 ${i * 30}px"><span>${l}</span></p>`).join(''),
+    );
+    await page.setViewportSize({ width, height: 800 });
+    return page;
+  }
+
+  /** Pin the first `n` QA lines, from the top of the page; true for each pin wholly on screen right after it was pinned. */
+  async function pinLines(page: Page, n: number): Promise<boolean[]> {
+    const shown: boolean[] = [];
+    for (let i = 0; i < n; i++) {
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await selectAll(page, `l${i}`);
+      await expect(card(page)).toBeVisible({ timeout: 5000 });
+      await card(page).getByRole('button', { name: 'Pin to page' }).click();
+      await expect(page.locator('.tz-extension-pin-host')).toHaveCount(i + 1);
+      await page.waitForTimeout(150);
+      shown.push(await wholly(page, i));
+    }
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    return shown;
+  }
+
+  /** Whether pin `i` is wholly in the viewport. */
+  function wholly(page: Page, i: number): Promise<boolean> {
+    return page.evaluate((i) => {
+      const b = (document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')[i] as HTMLElement).getBoundingClientRect();
+      return b.top >= 0 && b.left >= 0 && b.bottom <= window.innerHeight && b.right <= window.innerWidth;
+    }, i);
+  }
+
+  for (const n of [2, 5]) {
+    test(`round 8: at 390 px with ${n} pins, a new pin is scrolled into view and a stepped pin stays on screen`, async () => {
+      await setPrefs({ homeZone: 'UTC', targetZones: ['UTC', 'Asia/Kathmandu', 'America/New_York'], cardSize: 'full', keepSelection: true, numericDateOrder: 'mdy' });
+      const page = await qaLines(390);
+      expect(await pinLines(page, n)).toEqual(Array(n).fill(true));
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const first = page.locator('.tz-extension-pin-host').first();
+      const status = first.locator('[aria-live="polite"]');
+      // Step through all three times of line 1; the card never leaves the screen.
+      for (let s = 0; s < 3; s++) {
+        const was = (await status.textContent()) ?? '';
+        await first.getByRole('button', { name: 'Next time' }).click();
+        await expect(status).not.toHaveText(was);
+        await page.waitForTimeout(100);
+        expect(await wholly(page, 0), `after step ${s + 1}: ${await status.textContent()}`).toBe(true);
+      }
+      expect(await coverReport(page).then((r) => r.filter((x) => x.includes('/')))).toEqual([]);
+      await page.close();
+    });
+  }
+
+  test('round 8: at 1280 px the QA’s five pins all land on screen, the last two in the free column on the right', async () => {
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC', 'Asia/Kathmandu', 'America/New_York'], cardSize: 'full', keepSelection: true, numericDateOrder: 'mdy' });
+    const page = await qaLines(1280);
+    expect(await pinLines(page, 5)).toEqual([true, true, true, true, true]);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    const boxes = await page.locator('.tz-extension-pin-host').evaluateAll((hosts) => hosts.map((h) => h.getBoundingClientRect().toJSON() as DOMRect));
+    const third = boxes[2]!;
+    for (const b of boxes.slice(3)) expect(b.left, JSON.stringify(boxes)).toBeGreaterThanOrEqual(third.right);
+    expect(await coverReport(page).then((r) => r.filter((x) => x.includes('/')))).toEqual([]);
+    console.log(`pins8 1280: ${boxes.map((b) => `${Math.round(b.left)},${Math.round(b.top)}`).join(' ')}`);
+    await page.close();
+  });
+
+  test('round 8: "Pin all to page" after scrolling to y 2000 puts each card back by its own text', async () => {
+    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC', 'Asia/Kathmandu', 'America/New_York'], cardSize: 'full', keepSelection: true, numericDateOrder: 'mdy' });
+    // The review's page (pins8.spec.ts): three lines 120 px apart near the top.
+    const page = await openPage(
+      '<style>body { margin: 0; padding: 40px 20px !important; font-size: 16px !important; min-height: 4000px !important; }</style>' +
+        [
+          'Standup 09:00 UTC, review 13:30 UTC, deploy 2024-04-02 18:00 UTC',
+          '03/04/2024 10:00 and 05/06/2024 11:00',
+          'Release 2024-05-10 08:00 PST',
+        ]
+          .map((t, i) => `<p id="l${i}" style="margin:0;height:120px;line-height:20px">${t}</p>`)
+          .join(''),
+    );
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await pinLines(page, 3);
+    await page.evaluate(() => window.scrollTo(0, 2000));
+    expect(await page.evaluate(() => window.scrollY)).toBe(2000);
+    await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
+    await expect(page.locator('.tz-extension-pin-host .tzx-card.floating')).toHaveCount(3);
+    await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Pin all to page' }).click();
+    await expect(page.locator('.tz-extension-pin-host .tzx-card.floating')).toHaveCount(0);
+    await page.waitForTimeout(100);
+    const far = await page.evaluate(() => {
+      const reg = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights;
+      return Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((h, i) => {
+        const card = h.getBoundingClientRect();
+        const text = (Array.from(reg.get(`tz-pin-${i}`) ?? [])[0] as Range).getBoundingClientRect();
+        // The gap between the card and its marked time, in card heights.
+        const dx = Math.max(0, text.left - card.right, card.left - text.right);
+        const dy = Math.max(0, text.top - card.bottom, card.top - text.bottom);
+        return Math.hypot(dx, dy) / card.height;
+      });
+    });
+    for (const d of far) expect(d, JSON.stringify(far)).toBeLessThanOrEqual(1);
+    await page.close();
+  });
 });
