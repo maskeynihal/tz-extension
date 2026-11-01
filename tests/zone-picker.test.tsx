@@ -130,7 +130,9 @@ describe('ZonePicker results', () => {
   it('accepts a Unicode minus', () => {
     const { input } = setup();
     fireEvent.change(input, { target: { value: 'UTC−5' } });
-    expect(options()[0]).toHaveTextContent('UTC−05:00');
+    // Input may use U+2212; the label shows the ASCII hyphen-minus (copy-safe).
+    expect(options()[0]).toHaveTextContent('UTC-05:00');
+    expect(options()[0]).not.toHaveTextContent('−');
   });
 
   it('does not search again on a re-render with default props', () => {

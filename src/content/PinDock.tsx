@@ -21,6 +21,8 @@ export interface PinDockProps {
 
 /** How long the "Closed N cards · Undo" offer stays, unless hovered or focused. */
 export const UNDO_MS = 6000;
+/** The longest the undo offer stays, counted from when it appeared, even while held. */
+export const UNDO_MAX_MS = 30_000;
 
 type IconName = 'pin' | 'float' | 'compact' | 'expand' | 'close' | 'chevron' | 'undo';
 
@@ -130,7 +132,7 @@ export const DOCK_STYLE = `
 .undo { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 999px; border: none; background: #1313ba; color: #fff; cursor: pointer; font: inherit; font-weight: 700; }
 .undo:hover { background: #0e0e8c; }
 .timer { position: absolute; left: 12px; right: 12px; bottom: -3px; height: 2px; border-radius: 2px; background: #1313ba; transform-origin: left; opacity: 0.5; animation: drain linear forwards; }
-.dock:hover .timer, .dock:focus-within .timer { animation-play-state: paused; }
+.dock[data-paused] .timer { animation-play-state: paused; }
 @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
@@ -215,14 +217,17 @@ export function PinDock(props: PinDockProps): JSX.Element {
       timer.current = window.setTimeout(() => endOfferRef.current(props.onDismissUndo), remaining.current);
     };
     arm();
+    // However long the user holds it, the offer ends UNDO_MAX_MS after it appeared.
+    const cap = window.setTimeout(() => endOfferRef.current(props.onDismissUndo), UNDO_MAX_MS);
     // Move focus to Undo so keyboard and screen reader users can act on it.
     // This programmatic focus does not pause the countdown (the listeners
-    // below are not attached yet); moving focus within the dock, or hovering
-    // it, does.
+    // below are not attached yet); moving focus within the dock does.
     undoRef.current?.focus({ preventScroll: true });
     const el = barRef.current;
     let hovered = false;
     let focused = false;
+    /** Where a pointer already resting on the dock was when the offer appeared. */
+    let restingAt: { x: number; y: number } | null = null;
     const sync = (): void => {
       const hold = hovered || focused;
       if (hold && !paused.current) {
@@ -233,22 +238,48 @@ export function PinDock(props: PinDockProps): JSX.Element {
         paused.current = false;
         arm();
       }
+      if (el) {
+        if (paused.current) el.dataset.paused = '';
+        else delete el.dataset.paused;
+      }
     };
-    const enter = (): void => { hovered = true; sync(); };
-    const leave = (): void => { hovered = false; sync(); };
-    const fin = (): void => { focused = true; sync(); };
+    // The toast can appear under a pointer that is not moving (it was on
+    // "Close all"), which fires pointerenter. Only a real move over the dock
+    // counts as hovering it.
+    const enter = (e: PointerEvent): void => {
+      if (!hovered) restingAt = { x: e.clientX, y: e.clientY };
+    };
+    const move = (e: PointerEvent): void => {
+      if (hovered) return;
+      if (restingAt && restingAt.x === e.clientX && restingAt.y === e.clientY) return;
+      hovered = true;
+      sync();
+    };
+    const leave = (): void => {
+      restingAt = null;
+      hovered = false;
+      sync();
+    };
+    const fin = (): void => {
+      focused = true;
+      sync();
+    };
     const fout = (e: FocusEvent): void => {
       focused = e.relatedTarget instanceof Node && Boolean(el?.contains(e.relatedTarget));
       sync();
     };
     el?.addEventListener('pointerenter', enter);
+    el?.addEventListener('pointermove', move);
     el?.addEventListener('pointerleave', leave);
     el?.addEventListener('focusin', fin);
     el?.addEventListener('focusout', fout);
     return () => {
       window.clearTimeout(timer.current);
+      window.clearTimeout(cap);
       paused.current = false;
+      if (el) delete el.dataset.paused;
       el?.removeEventListener('pointerenter', enter);
+      el?.removeEventListener('pointermove', move);
       el?.removeEventListener('pointerleave', leave);
       el?.removeEventListener('focusin', fin);
       el?.removeEventListener('focusout', fout);

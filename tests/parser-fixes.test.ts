@@ -97,8 +97,15 @@ describe('compact and ISO-week ids', () => {
 });
 
 describe('numeric triples that are times or codes', () => {
-  it.each(['10.30.15', '01.02.03', '01-23-45', 'ext 01-23-45', 'lot 11-12-13'])('%s is not a date', (text) => {
+  it.each(['10.30.15', '01-23-45', 'ext 01-23-45', 'lot 11-12-13'])('%s is not a date', (text) => {
     expect(ids(text)).not.toContain('numeric-date');
+  });
+
+  // Round 2: "01.02.03" has the same shape as the German short date
+  // "12.03.24" (dd.MM.yy), so it is read as 1 February 2003. Only a middle
+  // part that cannot be a month ("10.30.15") marks a dotted triple as a time.
+  it('01.02.03 is the day-first date 1 Feb 2003', () => {
+    expect(iso(first('01.02.03')!.epochMs)).toBe('2003-02-01T00:00:00.000Z');
   });
 
   it('dates with a time, or with a 19xx year, still parse', () => {

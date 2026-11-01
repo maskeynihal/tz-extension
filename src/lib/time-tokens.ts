@@ -1,6 +1,6 @@
-import { fromZonedTime } from 'date-fns-tz';
 import type { DateOnlyPolicy, ParsedTime, ParseKind } from '../types';
 import { resolveZone } from './tz';
+import { wallFieldsToInstant } from './wallclock';
 
 /** The date-fns-tz / Intl argument for any zone id (IANA, UTC±hh:mm, abbr:XXX). */
 function tzArg(zone: string): string {
@@ -448,9 +448,45 @@ function isoLocal(w: WallClock): string {
 }
 
 /**
- * Build a ParsedTime from wall-clock fields. With a zone token the instant is
- * absolute; without one it is interpreted in `assumedZone`. Returns null when
- * the instant cannot be computed.
+ * The earliest year a written date may have. A page never means year 0 or
+ * 999 by "0000-01-01"; Date would also render such years with nonsense
+ * offsets. Epoch values have their own bounds (epoch.ts).
+ */
+export const MIN_YEAR = 1000;
+
+/**
+ * Fold the two ISO 8601 clock values JS has no direct form for:
+ * - 24:00[:00] is the end of the day, i.e. 00:00 of the next one (only with
+ *   minutes, seconds and fraction all zero);
+ * - a leap second, :60 (only in minute 59), reads as :59.999 so the date and
+ *   minute stay as written.
+ * Returns null when the fields are not a valid clock time.
+ */
+function normalizeClock(w: WallClock): { fields: WallClock; extraMs: number } | null {
+  const extraMs = w.ms !== undefined && Number.isFinite(w.ms) ? w.ms : 0;
+  if (w.h < 0 || w.h > 24 || w.mi < 0 || w.mi > 59 || w.s < 0 || w.s > 60) return null;
+  if (w.h === 24) {
+    if (w.mi !== 0 || w.s !== 0 || extraMs !== 0) return null;
+    const next = new Date(Date.UTC(w.y, w.mo - 1, w.d + 1));
+    return {
+      fields: { y: next.getUTCFullYear(), mo: next.getUTCMonth() + 1, d: next.getUTCDate(), h: 0, mi: 0, s: 0 },
+      extraMs: 0,
+    };
+  }
+  if (w.s === 60) {
+    if (w.mi !== 59) return null;
+    return { fields: { ...w, s: 59 }, extraMs: 999 };
+  }
+  return { fields: w, extraMs };
+}
+
+/**
+ * Build a ParsedTime from wall-clock fields. With a fixed-offset zone token
+ * the instant is absolute; with an IANA zone token (ET, [Europe/Paris]) or
+ * none (read in `assumedZone`) it follows that zone's daylight saving: a time
+ * in a spring-forward gap or a fall-back overlap is resolved like java.time
+ * and Temporal ("compatible") and flagged in `wallClock`. Returns null when
+ * the fields are invalid or the instant cannot be computed.
  */
 export function buildParsed(
   w: WallClock,
@@ -458,20 +494,26 @@ export function buildParsed(
   assumedZone: string,
   meta: MatchMeta,
 ): ParsedTime | null {
-  if (w.y < 0 || w.y > 9999) return null;
+  if (w.y < MIN_YEAR || w.y > 9999) return null;
   if (!isRealDate(w.y, w.mo, w.d)) return null;
-  if (w.h < 0 || w.h > 23 || w.mi < 0 || w.mi > 59 || w.s < 0 || w.s > 59) return null;
-  const extraMs = w.ms !== undefined && Number.isFinite(w.ms) ? w.ms : 0;
+  const clock = normalizeClock(w);
+  if (!clock) return null;
+  const f = clock.fields;
   let epochMs: number;
-  try {
-    if (zone?.offsetIso) epochMs = Date.parse(`${isoLocal(w)}${zone.offsetIso}`);
-    else epochMs = fromZonedTime(isoLocal(w), zone?.iana ?? tzArg(assumedZone)).getTime();
-  } catch {
-    return null;
+  let wallClock: 'gap' | 'ambiguous' | undefined;
+  if (zone?.offsetIso) epochMs = Date.parse(`${isoLocal(f)}${zone.offsetIso}`);
+  else {
+    const hit = wallFieldsToInstant(f, zone?.iana ?? tzArg(assumedZone));
+    if (!hit) return null;
+    epochMs = hit.epochMs;
+    // A date-only value's time came from the date-only policy, not the
+    // page, so there is no written time to warn about.
+    if (!meta.dateOnly) wallClock = hit.wallClock;
   }
   if (!Number.isFinite(epochMs)) return null;
   const base: ParsedTime = {
-    epochMs: epochMs + extraMs,
+    ...(wallClock ? { wallClock } : {}),
+    epochMs: epochMs + clock.extraMs,
     matchedText: meta.matchedText,
     sourceZone: zone ? zone.label : null,
     assumedZone,

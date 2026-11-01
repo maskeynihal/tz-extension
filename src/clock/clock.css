@@ -247,13 +247,20 @@ body:has(> #root > .tzc-app) {
   background: var(--tzc-sub); opacity: 0.5; pointer-events: none;
 }
 .tzc-scale {
-  position: relative; height: 18px;
+  position: relative; height: 22px; margin: 0; padding: 0; list-style: none;
   font-size: 0.6875rem; color: var(--tzc-sub); font-variant-numeric: tabular-nums;
 }
-.tzc-scale span {
-  position: absolute; transform: translateX(-50%); white-space: nowrap;
+.tzc-scale li {
+  position: absolute; transform: translateX(-50%);
   left: calc(10px + (100% - 20px) * var(--f));
 }
+/* Each scale mark is a preset: it jumps the planner to that offset. */
+.tzc-scale-btn {
+  font: inherit; color: inherit; white-space: nowrap; cursor: pointer;
+  background: none; border: 1px solid transparent; border-radius: 6px; padding: 1px 4px;
+}
+.tzc-scale-btn:hover { color: var(--tzc-ink); border-color: var(--tz-border-brand); }
+.tzc-scale-btn[aria-pressed='true'] { color: var(--tz-brand); font-weight: 600; }
 .tzc-hint { margin: 8px 0 0; font-size: 0.75rem; color: var(--tzc-sub); }
 
 /* ---------- Board ---------- */

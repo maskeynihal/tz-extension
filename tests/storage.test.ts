@@ -14,7 +14,7 @@ import {
   syncItemBytes,
   toSyncItems,
 } from '../src/lib/storage';
-import { listTimeZones } from '../src/lib/tz';
+import { ianaEquivalent, listTimeZones } from '../src/lib/tz';
 import { DEFAULT_PREFERENCES, type Preferences } from '../src/types';
 
 interface AreaMock {
@@ -264,6 +264,87 @@ describe('sync across versions: two items', () => {
     const p = await loadPreferences();
     expect(p.homeZone).toBe('Asia/Tokyo');
     expect(p.targetZones).toEqual(NEW_STYLE.targetZones);
+  });
+
+  it('accepted quirk (ABA): an old device setting home back to the legacy projection keeps the full value', async () => {
+    // abbr:PT is written to the legacy item as America/Los_Angeles.
+    await savePreferences(NEW_STYLE);
+    let s = await stored();
+    await chromeMock().storage.sync.set({
+      [PREFS_KEY]: oldDeviceRewrite(s[PREFS_KEY] as Record<string, unknown>, (p) => (p.homeZone = 'Asia/Tokyo')),
+    });
+    expect((await loadPreferences()).homeZone).toBe('Asia/Tokyo');
+    s = await stored();
+    await chromeMock().storage.sync.set({
+      [PREFS_KEY]: oldDeviceRewrite(s[PREFS_KEY] as Record<string, unknown>, (p) => (p.homeZone = 'America/Los_Angeles')),
+    });
+    // The user picked Los Angeles, but it matches the fingerprint, so abbr:PT
+    // shows. Deliberate: both show the same clock; only the label differs.
+    expect((await loadPreferences()).homeZone).toBe('abbr:PT');
+    expect(ianaEquivalent('abbr:PT')).toBe('America/Los_Angeles');
+  });
+
+  it('writes one shared write id into both items, fresh per write', () => {
+    const a = toSyncItems(NEW_STYLE);
+    const b = toSyncItems(NEW_STYLE);
+    const wa = (a[PREFS_KEY] as Record<string, unknown>).w;
+    expect(typeof wa).toBe('string');
+    expect((a[PREFS_EXTRAS_KEY] as Record<string, unknown>).w).toBe(wa);
+    expect((b[PREFS_KEY] as Record<string, unknown>).w).not.toBe(wa);
+    // The write id is storage bookkeeping, not a preference.
+    expect(fromSyncItems(a)).not.toHaveProperty('w');
+  });
+
+  it('partial delivery: newer extras with the previous legacy item do not bring a removed zone back', () => {
+    const start: Preferences = { ...NEW_STYLE, targetZones: ['Europe/London', 'UTC+05:45', 'abbr:IST-IE', 'Asia/Tokyo'] };
+    const before = toSyncItems(start);
+    const after = toSyncItems({ ...start, targetZones: ['Europe/London', 'UTC+05:45', 'abbr:IST-IE'] });
+    // A peer has the new extras but still the old legacy item.
+    const p = fromSyncItems({ [PREFS_KEY]: before[PREFS_KEY], [PREFS_EXTRAS_KEY]: after[PREFS_EXTRAS_KEY] });
+    expect(p.targetZones).toEqual(['Europe/London', 'UTC+05:45', 'abbr:IST-IE']);
+    expect(p.homeZone).toBe('abbr:PT');
+  });
+
+  it('partial delivery the other way: newer legacy with the previous extras shows the previous zones until extras land', () => {
+    const start: Preferences = { ...NEW_STYLE, targetZones: ['Europe/London', 'UTC+05:45', 'Asia/Tokyo'] };
+    const before = toSyncItems(start);
+    const next: Preferences = { ...start, targetZones: ['UTC+05:45', 'Asia/Tokyo'] };
+    const after = toSyncItems(next);
+    const mixed = { [PREFS_KEY]: after[PREFS_KEY], [PREFS_EXTRAS_KEY]: before[PREFS_EXTRAS_KEY] };
+    expect(fromSyncItems(mixed).targetZones).toEqual(start.targetZones);
+    expect(fromSyncItems({ ...mixed, [PREFS_EXTRAS_KEY]: after[PREFS_EXTRAS_KEY] }).targetZones).toEqual(next.targetZones);
+  });
+
+  it('an old device write (no write id) after a new write still merges as before', () => {
+    const items = toSyncItems(NEW_STYLE);
+    const legacy = oldDeviceRewrite(items[PREFS_KEY] as Record<string, unknown>, (p) => {
+      p.targetZones = ['Asia/Tokyo'];
+    });
+    expect(legacy).not.toHaveProperty('w');
+    expect(fromSyncItems({ ...items, [PREFS_KEY]: legacy }).targetZones).toEqual([
+      'UTC+05:45',
+      'abbr:PDT',
+      'abbr:IST-IE',
+      'Asia/Tokyo',
+    ]);
+  });
+
+  it('extras from a build before the write id still use the fingerprints', () => {
+    const items = toSyncItems(NEW_STYLE);
+    const { w: _drop, ...oldExtras } = items[PREFS_EXTRAS_KEY] as Record<string, unknown>;
+    void _drop;
+    const legacy = { ...(items[PREFS_KEY] as Record<string, unknown>), homeZone: 'Asia/Tokyo' };
+    expect(fromSyncItems({ [PREFS_KEY]: legacy, [PREFS_EXTRAS_KEY]: oldExtras }).homeZone).toBe('Asia/Tokyo');
+  });
+
+  it('an alias stored by an old device and its current name collapse to one entry', async () => {
+    // 0.6.x on an engine that reports legacy names stored Asia/Calcutta.
+    await chromeMock().storage.sync.set({ [PREFS_KEY]: { ...DEFAULT_PREFERENCES, homeZone: 'Asia/Katmandu', targetZones: ['Asia/Calcutta'] } });
+    const n = await loadPreferences();
+    expect(n.targetZones).toEqual(['Asia/Calcutta']);
+    await savePreferences({ ...n, targetZones: [...n.targetZones, 'Asia/Kolkata', 'UTC+05:45'] });
+    expect((await loadPreferences()).targetZones).toEqual(['Asia/Calcutta', 'UTC+05:45']);
+    expect(sanitize({ targetZones: ['Europe/Kyiv', 'Europe/Kiev', 'UTC'] }).targetZones).toEqual(['Europe/Kyiv', 'UTC']);
   });
 
   it('fires onPreferencesChanged with merged prefs for a change to either item', async () => {

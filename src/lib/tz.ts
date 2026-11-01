@@ -1,4 +1,7 @@
-import { formatInTimeZone, toZonedTime, fromZonedTime } from 'date-fns-tz';
+import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
+import { parseWallIso, wallFieldsToInstant, type WallInstant } from './wallclock';
+
+export type { WallInstant } from './wallclock';
 
 /**
  * Zone ids used across the extension. Three kinds:
@@ -108,9 +111,13 @@ export function fixedZoneId(minutes: number): string {
   return `UTC${offsetString(minutes)}`;
 }
 
-/** Display form of an offset, with a real minus sign: "UTC−08:00". */
+/**
+ * Display form of an offset: "UTC-08:00". Displayed offsets use the ASCII
+ * hyphen-minus so copied text pastes cleanly into any tool; search still
+ * accepts U+2212 and dashes as input.
+ */
 function offsetLabel(minutes: number): string {
-  return `UTC${offsetString(minutes).replace('-', '−')}`;
+  return `UTC${offsetString(minutes)}`;
 }
 
 /** What a zone id means, resolved for formatting. */
@@ -121,7 +128,7 @@ export interface ResolvedZone {
   readonly tz: string;
   /** Short display name: "Asia/Kathmandu", "UTC+05:45", "PDT". */
   readonly short: string;
-  /** Longer description for lists: "Pacific Daylight Time · UTC−07:00". */
+  /** Longer description for lists: "Pacific Daylight Time · UTC-07:00". */
   readonly long: string;
   /** Fixed offset in minutes, when the zone has one. */
   readonly minutes?: number;
@@ -483,6 +490,14 @@ const PLACE_ALIASES: readonly (readonly [string, string])[] = [
   ['United Kingdom', 'Europe/London'],
   ['UK', 'Europe/London'],
   ['England', 'Europe/London'],
+  ['Great Britain', 'Europe/London'],
+  ['Britain', 'Europe/London'],
+  ['Scotland', 'Europe/London'],
+  ['Wales', 'Europe/London'],
+  ['Northern Ireland', 'Europe/London'],
+  ['Glasgow', 'Europe/London'],
+  ['Cardiff', 'Europe/London'],
+  ['Belfast', 'Europe/London'],
   ['Dublin', 'Europe/Dublin'],
   ['Ireland', 'Europe/Dublin'],
   ['Lisbon', 'Europe/Lisbon'],
@@ -611,7 +626,6 @@ const PLACE_ALIASES: readonly (readonly [string, string])[] = [
   ['Mexico City', 'America/Mexico_City'],
   ['Guadalajara', 'America/Mexico_City'],
   ['Monterrey', 'America/Monterrey'],
-  ['Mexico', 'America/Mexico_City'],
   ['Bogotá', 'America/Bogota'],
   ['Colombia', 'America/Bogota'],
   ['Lima', 'America/Lima'],
@@ -626,7 +640,6 @@ const PLACE_ALIASES: readonly (readonly [string, string])[] = [
   ['Rio', 'America/Sao_Paulo'],
   ['Rio de Janeiro', 'America/Sao_Paulo'],
   ['Brasília', 'America/Sao_Paulo'],
-  ['Brazil', 'America/Sao_Paulo'],
   ['Montevideo', 'America/Montevideo'],
   ['Uruguay', 'America/Montevideo'],
   ['Havana', 'America/Havana'],
@@ -684,10 +697,108 @@ const ABBR_PLACES: ReadonlyMap<string, string> = new Map([
   ['MST', 'America/Phoenix'],
 ]);
 
+/** A country with several zones: the names it goes by, its main zones and abbreviations, best first. */
+interface CountryZones {
+  readonly names: readonly string[];
+  readonly zones: readonly string[];
+  readonly abbrs?: readonly string[];
+}
+
+/**
+ * Countries spanning several zones. Searching a country name finds its main
+ * zones in this order (east to west for the US and Canada, capital first
+ * elsewhere), plus the abbreviations named here.
+ */
+const MULTI_ZONE_COUNTRIES: readonly CountryZones[] = [
+  {
+    names: ['United States', 'United States of America', 'USA', 'US', 'America'],
+    zones: [
+      'America/New_York',
+      'America/Chicago',
+      'America/Denver',
+      'America/Phoenix',
+      'America/Los_Angeles',
+      'America/Anchorage',
+      'Pacific/Honolulu',
+    ],
+    abbrs: ['ET', 'CT', 'MT', 'PT', 'AKT', 'HST'],
+  },
+  {
+    names: ['Canada'],
+    zones: [
+      'America/Toronto',
+      'America/Winnipeg',
+      'America/Edmonton',
+      'America/Vancouver',
+      'America/Halifax',
+      'America/St_Johns',
+      'America/Regina',
+    ],
+    abbrs: ['ET', 'CT', 'MT', 'PT', 'AST', 'NST'],
+  },
+  {
+    names: ['Mexico'],
+    zones: ['America/Mexico_City', 'America/Cancun', 'America/Tijuana', 'America/Hermosillo', 'America/Mazatlan'],
+  },
+  {
+    names: ['Brazil'],
+    zones: ['America/Sao_Paulo', 'America/Manaus', 'America/Rio_Branco', 'America/Noronha'],
+  },
+  {
+    names: ['Russia', 'Russian Federation'],
+    zones: [
+      'Europe/Moscow',
+      'Europe/Kaliningrad',
+      'Europe/Samara',
+      'Asia/Yekaterinburg',
+      'Asia/Omsk',
+      'Asia/Novosibirsk',
+      'Asia/Krasnoyarsk',
+      'Asia/Irkutsk',
+      'Asia/Yakutsk',
+      'Asia/Vladivostok',
+      'Asia/Magadan',
+      'Asia/Kamchatka',
+    ],
+  },
+  {
+    names: ['Australia'],
+    zones: [
+      'Australia/Sydney',
+      'Australia/Melbourne',
+      'Australia/Brisbane',
+      'Australia/Adelaide',
+      'Australia/Darwin',
+      'Australia/Perth',
+      'Australia/Hobart',
+    ],
+  },
+  {
+    names: ['Indonesia'],
+    zones: ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura'],
+  },
+];
+
 /** A name an option can be found by exactly ("mumbai" → shown as "Mumbai"). */
 interface SearchName {
   readonly key: string;
   readonly display: string;
+  /** Rank among options found by the same name (country zones); lower first, default 0. */
+  readonly order?: number;
+}
+
+/** Search names for abbreviations: the countries they belong to. */
+function abbrNames(code: string): SearchName[] {
+  const out: SearchName[] = [];
+  for (const c of MULTI_ZONE_COUNTRIES) {
+    const order = c.abbrs?.indexOf(code) ?? -1;
+    if (order < 0) continue;
+    for (const n of c.names) {
+      const key = normalizeSearch(n);
+      if (!out.some((o) => o.key === key)) out.push({ key, display: n, order });
+    }
+  }
+  return out;
 }
 
 /** Precomputed search data for one option. */
@@ -716,14 +827,15 @@ let namesByZone: Map<string, SearchName[]> | null = null;
 function zoneNames(): Map<string, SearchName[]> {
   if (namesByZone) return namesByZone;
   const map = new Map<string, SearchName[]>();
-  const add = (zone: string, display: string): void => {
+  const add = (zone: string, display: string, order?: number): void => {
     const z = modernIana(zone);
     const list = map.get(z) ?? [];
     const key = normalizeSearch(display.replace(/_/g, ' '));
-    if (!list.some((n) => n.key === key)) list.push({ key, display });
+    if (!list.some((n) => n.key === key)) list.push(order === undefined ? { key, display } : { key, display, order });
     map.set(z, list);
   };
   for (const [place, zone] of PLACE_ALIASES) add(zone, place);
+  for (const c of MULTI_ZONE_COUNTRIES) c.zones.forEach((zone, i) => c.names.forEach((n) => add(zone, n, i)));
   for (const [code, zone] of ABBR_PLACES) add(zone, abbrLabel(code));
   for (const [legacy, zone] of LEGACY_ZONES) {
     add(zone, legacy);
@@ -801,6 +913,7 @@ export function zoneGroups(now: number = Date.now()): readonly ZoneGroup[] {
       {
         kind: 'abbr',
         exact: [a.code, label],
+        names: abbrNames(a.code),
         extra: [`utc${off}`, a.iana ?? '', city],
         minutes: a.minutes ?? parseOffset(off),
       },
@@ -864,6 +977,8 @@ function parseOffsetQuery(q: string): { readonly minutes: number; readonly typed
 interface SearchHit {
   readonly score: number;
   readonly matched?: string;
+  /** Tie-break within a score (a country's main zones in order); default 0. */
+  readonly order?: number;
 }
 
 /** True when the option's visible text already shows this name. */
@@ -878,7 +993,7 @@ function showsName(e: SearchEntry, key: string): boolean {
 function textHit(e: SearchEntry, q: string, words: readonly string[]): SearchHit | null {
   if (e.exact.includes(q)) return { score: 0 };
   const name = e.names.find((n) => n.key === q);
-  if (name) return { score: 1, matched: showsName(e, name.key) ? undefined : name.display };
+  if (name) return { score: 1, matched: showsName(e, name.key) ? undefined : name.display, order: name.order };
   const prefix = (w: string) => (x: string) => x.startsWith(w);
   if (words.every((w) => e.words.some(prefix(w)))) {
     if (words.every((w) => e.visibleWords.some(prefix(w)))) return { score: 2 };
@@ -907,6 +1022,8 @@ interface RankedGroup {
   readonly group: ZoneGroup;
   readonly order: number;
   readonly best: number;
+  /** Tie-break order of the best hit (a country's first zone wins). */
+  readonly bestOrder: number;
   readonly hits: readonly { readonly option: ZoneOption; readonly score: number }[];
 }
 
@@ -916,21 +1033,22 @@ function rankGroups(q: string, keep: (id: string) => boolean): RankedGroup[] {
   const words = q.split(' ').filter(Boolean);
   const out: RankedGroup[] = [];
   zoneGroups().forEach((group, order) => {
-    const hits: { option: ZoneOption; score: number; i: number }[] = [];
+    const hits: { option: ZoneOption; score: number; order: number; i: number }[] = [];
     group.options.forEach((o, i) => {
       if (!keep(o.id)) return;
       const e = searchEntries.get(o);
       if (!e) return;
       const hit = offset ? offsetHit(e, offset.minutes, offset.typed) : textHit(e, q, words);
       if (!hit) return;
-      hits.push({ option: hit.matched ? { ...o, matched: hit.matched } : o, score: hit.score, i });
+      hits.push({ option: hit.matched ? { ...o, matched: hit.matched } : o, score: hit.score, order: hit.order ?? 0, i });
     });
     if (hits.length === 0) return;
-    hits.sort((a, b) => a.score - b.score || a.i - b.i);
-    out.push({ group, order, best: hits[0]?.score ?? 3, hits });
+    hits.sort((a, b) => a.score - b.score || a.order - b.order || a.i - b.i);
+    out.push({ group, order, best: hits[0]?.score ?? 3, bestOrder: hits[0]?.order ?? 0, hits });
   });
-  // The group holding the best match comes first; ties keep the usual order.
-  return out.sort((a, b) => a.best - b.best || a.order - b.order);
+  // The group holding the best match comes first (for a country, the group
+  // with its first zone); ties keep the usual order.
+  return out.sort((a, b) => a.best - b.best || a.bestOrder - b.bestOrder || a.order - b.order);
 }
 
 /** Membership test for zone ids that treats aliases as the same zone. */
@@ -1000,25 +1118,55 @@ function constantOffset(zone: string, minutes: number, at: number): boolean {
   return [Date.UTC(y, 0, 1), Date.UTC(y, 6, 1)].every((t) => offsetMinutesAt(t, zone) === minutes);
 }
 
-/** Places with a year-round fractional offset, tried before scanning every zone. */
-const FRACTIONAL_PLACES: ReadonlyMap<number, string> = new Map([
-  [-570, 'Pacific/Marquesas'],
-  [210, 'Asia/Tehran'],
-  [270, 'Asia/Kabul'],
-  [330, 'Asia/Kolkata'],
-  [345, 'Asia/Kathmandu'],
-  [390, 'Asia/Yangon'],
-  [525, 'Australia/Eucla'],
-  [570, 'Australia/Darwin'],
+/** True when `zone` shows offset `minutes` at some point in the year of `at` (checked monthly). */
+function usesOffset(zone: string, minutes: number, at: number): boolean {
+  const y = new Date(at).getUTCFullYear();
+  for (let mo = 0; mo < 12; mo++) if (offsetMinutesAt(Date.UTC(y, mo, 15), zone) === minutes) return true;
+  return false;
+}
+
+/**
+ * Places for offsets with no Etc/GMT name (not whole hours), best first,
+ * tried before scanning every zone. Several are seasonal: +10:30 is
+ * Adelaide's summer and Lord Howe's winter, +12:45 / +13:45 are Chatham's
+ * winter / summer, -03:30 / -02:30 St John's winter / summer.
+ */
+const ODD_OFFSET_PLACES: ReadonlyMap<number, readonly string[]> = new Map([
+  [-570, ['Pacific/Marquesas']],
+  [-210, ['America/St_Johns']],
+  [-150, ['America/St_Johns']],
+  [210, ['Asia/Tehran']],
+  [270, ['Asia/Kabul']],
+  [330, ['Asia/Kolkata']],
+  [345, ['Asia/Kathmandu']],
+  [390, ['Asia/Yangon']],
+  [525, ['Australia/Eucla']],
+  [570, ['Australia/Darwin', 'Australia/Adelaide']],
+  [630, ['Australia/Adelaide', 'Australia/Lord_Howe']],
+  [765, ['Pacific/Chatham']],
+  [825, ['Pacific/Chatham']],
 ]);
+
+/** The first of `zones` on `m` all year, else on it at `at`, else on it some time that year. */
+function pickOnOffset(zones: readonly string[], m: number, at: number): string | undefined {
+  return (
+    zones.find((z) => constantOffset(z, m, at)) ??
+    zones.find((z) => offsetMinutesAt(at, z) === m) ??
+    zones.find((z) => usesOffset(z, m, at))
+  );
+}
 
 /**
  * An IANA id that shows the same clock as `zone`, for readers that only know
  * IANA ids (older installs reading synced settings). IANA ids come back
  * unchanged, DST-aware abbreviations give the zone they follow, and fixed
- * offsets give a place on that offset all year ("abbr:IST" → Asia/Kolkata,
- * "UTC+05:45" → Asia/Kathmandu), else "Etc/GMT-8"-style ids for whole hours,
- * else a zone on that offset at `at`, else "UTC".
+ * offsets give, in order: the abbreviation's own place when it keeps that
+ * offset all year ("abbr:IST" → Asia/Kolkata); "Etc/GMT-8"-style ids for
+ * whole hours; a place on that offset all year ("UTC+05:45" →
+ * Asia/Kathmandu); one on it at `at` ("UTC+10:30" → Adelaide in January,
+ * Lord Howe in July); one on it at some time that year ("UTC+12:45" →
+ * Pacific/Chatham even in its summer, when Chatham is at +13:45). "UTC" only
+ * when no zone ever uses the offset.
  */
 export function ianaEquivalent(zone: string, at: number = Date.now()): string {
   const r = resolveZone(zone);
@@ -1034,11 +1182,23 @@ export function ianaEquivalent(zone: string, at: number = Date.now()): string {
     const etc = `Etc/GMT${m > 0 ? '-' : '+'}${Math.abs(m) / 60}`;
     if (isIana(etc)) return etc;
   }
-  const known = FRACTIONAL_PLACES.get(m);
-  if (known && isIana(known) && constantOffset(known, m, at)) return known;
-  const zones = listTimeZones();
-  // No place keeps it all year (+12:45 is Chatham's winter time): one on it now.
-  return zones.find((z) => constantOffset(z, m, at)) ?? zones.find((z) => offsetMinutesAt(at, z) === m) ?? 'UTC';
+  const known = (ODD_OFFSET_PLACES.get(m) ?? []).filter(isIana);
+  return pickOnOffset(known, m, at) ?? pickOnOffset(listTimeZones(), m, at) ?? 'UTC';
+}
+
+/**
+ * Friendly place name for any zone id: the city of the zone's current
+ * canonical IANA name ("Asia/Katmandu" → "Kathmandu", "America/Argentina/
+ * ComodRivadavia" → "Catamarca"), "UTC" for UTC, else the zone's short label
+ * ("UTC+05:45", "PT", "IST (IE)"). Falls back to the id itself.
+ */
+export function displayZoneName(zone: string): string {
+  const r = resolveZone(zone);
+  if (!r) return zone;
+  if (r.kind !== 'iana') return r.short;
+  const name = r.short;
+  if (name === 'UTC' || name === 'Etc/UTC' || name === 'Etc/GMT' || name === 'GMT' || name === 'Etc/Universal') return 'UTC';
+  return name.slice(name.lastIndexOf('/') + 1).replace(/_/g, ' ');
 }
 
 /**
@@ -1110,12 +1270,25 @@ export function offsetMinutesAt(epochMs: number, zone: string): number {
 
 /**
  * Given wall-clock components as interpreted in `zone`, return the absolute
- * instant (epoch ms). DST-correct via date-fns-tz.
+ * instant (epoch ms), or NaN when either is invalid. DST-correct: see
+ * wallClockToInstant for gaps and overlaps.
  */
 export function wallClockToEpochMs(isoLocal: string, zone: string): number {
-  // isoLocal is a zone-less ISO string like "2024-01-02T15:04:05".
-  const utc = fromZonedTime(isoLocal, tzOf(zone));
-  return utc.getTime();
+  return wallClockToInstant(isoLocal, zone)?.epochMs ?? NaN;
+}
+
+/**
+ * The instant a zone-less "YYYY-MM-DDTHH:mm[:ss]" names in `zone` (any zone
+ * id: IANA, "UTC+05:45", "abbr:*"), with `wallClock` set when the time fell
+ * in a DST gap or overlap (see WallInstant). Null for a malformed string or
+ * an unknown zone.
+ */
+export function wallClockToInstant(isoLocal: string, zone: string): WallInstant | null {
+  const fields = parseWallIso(isoLocal);
+  if (!fields) return null;
+  const r = resolveZone(zone);
+  if (!r) return null;
+  return wallFieldsToInstant(fields, r.tz);
 }
 
 /** Convert an absolute instant to the wall-clock Date in a zone (for pickers). */

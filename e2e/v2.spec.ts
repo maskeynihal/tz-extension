@@ -284,6 +284,84 @@ test.describe('v2 features', () => {
     await page.close();
   });
 
+  test('Escape closes the card even when the page stops Escape on body', async () => {
+    await setPrefs({ targetZones: ['UTC'], cardSize: 'full' });
+    const page = await openPage(
+      '<p id="t">Standup at 1700000000 today.</p>' +
+        '<script>document.body.addEventListener("keydown", (e) => { if (e.key === "Escape") e.stopPropagation(); });</script>',
+    );
+    // From the card itself (it has focus after opening).
+    await page.locator('#t').click({ clickCount: 3 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('tz-extension-popover-host');
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toHaveCount(0);
+
+    // From the zone search: with text, the first Escape only clears it.
+    await page.mouse.click(5, 5);
+    await page.locator('#t').click({ clickCount: 3 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    const search = card(page).getByRole('combobox', { name: 'Add a timezone' });
+    await search.fill('lon');
+    await search.press('Escape');
+    await expect(card(page)).toBeVisible();
+    await expect(search).toHaveValue('');
+    await expect(search).toHaveAttribute('aria-expanded', 'false');
+    // Empty and shut: Escape closes the card.
+    await search.press('Escape');
+    await expect(card(page)).toHaveCount(0);
+
+    // An empty search box whose list is open: the first Escape shuts the list, the next closes the card.
+    await page.mouse.click(5, 5);
+    await page.locator('#t').click({ clickCount: 3 });
+    await expect(card(page)).toBeVisible({ timeout: 5000 });
+    await card(page).getByRole('combobox', { name: 'Add a timezone' }).click();
+    await expect(card(page).getByRole('combobox', { name: 'Add a timezone' })).toHaveAttribute('aria-expanded', 'true');
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toHaveCount(0);
+    await page.close();
+  });
+
+  test('at 390 px, "Unpin all" with 5 pins leaves every card header reachable, at the same width', async () => {
+    await setPrefs({ targetZones: ['UTC', 'Asia/Tokyo'], cardSize: 'full' });
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    const page = await openPage(
+      ids.map((id, i) => `<p id="${id}" style="margin-top:${i ? 420 : 0}px">${1700000000 + i * 1000}</p>`).join(''),
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const id of ids) {
+      await page.mouse.click(5, 5);
+      await page.locator(`#${id}`).scrollIntoViewIfNeeded();
+      await page.locator(`#${id}`).click({ clickCount: 3 });
+      await expect(card(page)).toBeVisible({ timeout: 5000 });
+      await card(page).getByLabel('Pin to page').click();
+    }
+    const pins = page.locator('.tz-extension-pin-host');
+    await expect(pins).toHaveCount(5);
+    const widths = async (): Promise<number[]> =>
+      pins.evaluateAll((hosts) => hosts.map((h) => Math.round(h.getBoundingClientRect().width)));
+    const pinnedWidths = await widths();
+    await page.locator('#tz-extension-pin-dock').getByRole('button', { name: 'Unpin all' }).click();
+    await expect(pins.locator('.tzx-card.floating')).toHaveCount(5);
+    expect(await widths()).toEqual(pinnedWidths);
+
+    const report = await page.evaluate(() =>
+      Array.from(document.querySelectorAll<HTMLElement>('.tz-extension-pin-host')).map((host) => {
+        const head = host.shadowRoot?.querySelector('.tzx-head')?.getBoundingClientRect();
+        if (!head) return { ok: false, at: 'no header' };
+        const x = head.left + 4;
+        const y = head.top + 4;
+        const r = host.getBoundingClientRect();
+        return { ok: document.elementFromPoint(x, y) === host, at: `${Math.round(r.left)},${Math.round(r.top)}` };
+      }),
+    );
+    expect(report.map((r) => r.ok), JSON.stringify(report)).toEqual([true, true, true, true, true]);
+    expect(new Set(report.map((r) => r.at)).size).toBe(5);
+    await page.close();
+  });
+
   test('pin dock: minimize, expand, unpin, pin, close all and undo', async () => {
     const page = await openPage('<p id="a">1700000000</p><p id="b" style="margin-top:300px">2024-01-02T10:00:00Z</p>');
     for (const id of ['#a', '#b']) {

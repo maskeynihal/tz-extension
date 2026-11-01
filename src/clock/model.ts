@@ -1,6 +1,6 @@
 // Pure helpers for the world clock: no React, no DOM. Unit-tested through
 // the Clock component and directly where the maths is fiddly.
-import { offsetMinutesAt, resolveZone, sameZone } from '../lib/tz';
+import { displayZoneName, offsetMinutesAt, resolveZone, sameZone } from '../lib/tz';
 import type { Preferences } from '../types';
 
 /** Scrubber range, in 15-minute steps: −12 h … +36 h. */
@@ -20,7 +20,11 @@ export function shownInstant(nowMs: number, steps: number): number {
   return Math.floor(nowMs / STEP_MS) * STEP_MS + steps * STEP_MS;
 }
 
-/** "+5h 45m", "−9h", "−30m"; `null` when the offsets are equal. */
+/**
+ * "+5h 45m", "−9h", "−30m"; `null` when the offsets are equal. A relative
+ * difference, not an offset anyone pastes into a tool, so it keeps the
+ * typographic minus.
+ */
 export function formatDiff(minutes: number): string | null {
   if (minutes === 0) return null;
   const sign = minutes > 0 ? '+' : '−';
@@ -143,15 +147,13 @@ export function dayProgress(p: WallParts): number {
   return (p.hour * 60 + p.minute) / 1440;
 }
 
-/** A friendly place name: the city of an IANA id, else the zone's short label. */
+/**
+ * A friendly place name, from the zone's current canonical name, so a legacy
+ * id ("Asia/Katmandu", "America/Argentina/ComodRivadavia") reads like every
+ * other surface ("Kathmandu", "Catamarca").
+ */
 export function zonePlace(zone: string): string {
-  const r = resolveZone(zone);
-  if (!r) return zone;
-  if (r.kind === 'iana') {
-    if (r.id === 'UTC' || r.id === 'Etc/UTC') return 'UTC';
-    return r.id.slice(r.id.lastIndexOf('/') + 1).replace(/_/g, ' ');
-  }
-  return r.short;
+  return displayZoneName(zone);
 }
 
 /** The secondary line under a card's title. */
@@ -159,18 +161,21 @@ export function zoneDescription(zone: string): string {
   const r = resolveZone(zone);
   if (!r) return '';
   if (r.kind === 'iana') {
-    if (r.id === 'UTC' || r.id === 'Etc/UTC') return 'Coordinated Universal Time';
-    return r.id.replace(/_/g, ' ');
+    if (r.short === 'UTC' || r.short === 'Etc/UTC') return 'Coordinated Universal Time';
+    return r.short.replace(/_/g, ' ');
   }
   if (r.kind === 'offset') return 'Fixed offset, no daylight saving';
   return r.long;
 }
 
-/** Offset vs UTC for display: "UTC+05:45", "UTC−08:00", "UTC±0". */
+/**
+ * Offset vs UTC for display: "UTC+05:45", "UTC-08:00", "UTC±0". ASCII
+ * hyphen-minus, like every other offset, so copied text pastes cleanly.
+ */
 export function utcOffsetLabel(minutes: number): string {
   if (minutes === 0) return 'UTC±0';
   const abs = Math.abs(minutes);
-  return `UTC${minutes < 0 ? '−' : '+'}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+  return `UTC${minutes < 0 ? '-' : '+'}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
 }
 
 /** Home first, then the target zones that are not the home zone. */

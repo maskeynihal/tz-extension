@@ -3,6 +3,8 @@ import type { DateOnlyPolicy, NumericDateOrder, ParsedTime, Preferences } from '
 import { formatCalendarDate, resolveLocalZone } from '../types';
 import { viewInZone, isValidZone, sameZone, zoneLabel, resolveZone } from '../lib/tz';
 import { SCAN_LIMIT } from '../lib/parse';
+// The DST note shares one wording with the popup and the website.
+import { wallClockNote } from '../lib/wall-note';
 import { ZonePicker, ZONE_PICKER_CSS } from '../popup/ZonePicker';
 
 /** Where a card lives: the transient card, pinned to a spot on the page, or floating on screen. */
@@ -119,7 +121,10 @@ function pageFocusIsFree(): boolean {
   return !a || a === document.body || a === document.documentElement;
 }
 
+export { wallClockNote };
+
 const LOCAL_ZONE = resolveLocalZone();
+
 
 const STYLE = `
 :host { all: initial; }
@@ -261,6 +266,18 @@ ${ZONE_PICKER_CSS}
 .tzx-card.compact .tzx-zonewrap { min-width: 0; }
 .tzx-card.compact .tzx-zone { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tzx-card.compact .tzx-val { flex-shrink: 0; }
+/* A card keeps its width between pinned and floating: the host fixes it, and
+   the title (with its "floating" tag) wraps rather than widening the card. */
+.tzx-title { min-width: 0; flex-wrap: wrap; row-gap: 2px; }
+.tzx-actions { flex-shrink: 0; }
+.tzx-dst { margin-top: 4px; font-size: 11px; color: #5b5e68; }
+.tzx-dstbadge { font-size: 9px; font-weight: 700; letter-spacing: 0.04em; color: #5b5e68; background: #f1f2f5; border-radius: 4px; padding: 1px 4px; cursor: help; }
+:host([data-tz-theme='dark']) .tzx-dst, :host([data-tz-theme='dark']) .tzx-dstbadge { color: #a0a3ac; }
+:host([data-tz-theme='dark']) .tzx-dstbadge { background: #22242b; }
+@media (prefers-color-scheme: dark) {
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-dst, :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-dstbadge { color: #a0a3ac; }
+  :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-dstbadge { background: #22242b; }
+}
 @media (prefers-color-scheme: dark) {
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-btn { background: #1b1d24; border-color: #33353d; color: #e7e8ec; }
   :host(:not([data-tz-theme='light']):not([data-tz-theme='dark'])) .tzx-order-btn.on { background: #8989dd; border-color: #8989dd; color: #0f1115; }
@@ -370,6 +387,7 @@ export function Popover({
     ) : null;
 
   const pinLabel = where === 'pinned' ? 'Float on screen' : 'Pin to page';
+  const dstNote = wallClockNote(parsed, prefs.hour12);
 
   return (
     <div
@@ -395,6 +413,11 @@ export function Popover({
             </span>
           )}
           {where === 'floating' && <span className="tzx-floattag">floating</span>}
+          {compact && dstNote && (
+            <span className="tzx-dstbadge" role="img" aria-label={dstNote} title={dstNote}>
+              DST
+            </span>
+          )}
         </span>
         <div className="tzx-actions">
           {!pinned && onPin && (
@@ -444,6 +467,11 @@ export function Popover({
                 format: {parsed.formatLabel}
               </span>
             </>
+          )}
+          {dstNote && (
+            <div className="tzx-dst" role="note">
+              {dstNote}
+            </div>
           )}
           {parsed.dateOnly && onDateOnlyPolicy && (
             <div className="tzx-dateonly">

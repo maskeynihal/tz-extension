@@ -144,6 +144,14 @@ function timeFragment(dot: boolean): string {
 /** Trailing zone, bare or parenthesized (" UTC", " (GMT+1)"), and am/pm after it (" CET AM"). */
 const ZONE_TAIL = String.raw`(?:[ \t]+\(?(?<zone>${ZONE})\)?(?![\w+-])(?:[ \t]+(?<apz>${AMPM}))?)?`;
 
+/** Inside "[...]": an IANA-looking zone name ("Europe/Paris", "UTC"); checked with resolveZone. */
+const BRACKET_ZONE = String.raw`[A-Za-z][\w+-]*(?:\/[\w+-]+){0,2}`;
+/**
+ * A bare IANA zone name after a time ("10:00 Europe/Paris"). Only the IANA
+ * regions count, so "3pm ET/PT" still reads the abbreviation ET.
+ */
+const BARE_IANA = String.raw`(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)\/[A-Za-z][\w+-]*(?:\/[A-Za-z][\w+-]*)?(?![\w/+-])`;
+
 const RE_EPOCH_S = /(?<![\w.-])(-?\d{10,11})(?![\w]|\.\d)/;
 const RE_EPOCH_MS = /(?<![\w.-])(-?\d{12,13})(?![\w]|\.\d)/;
 
@@ -154,8 +162,10 @@ const RE_EPOCH_MS = /(?<![\w.-])(-?\d{12,13})(?![\w]|\.\d)/;
 // date alone may carry an offset ("1999-03-22+01:00") or an era ("AD").
 const RE_ISO = new RegExp(
   String.raw`\b(?<y>\d{4})-(?<mo>\d{2})-(?<d>\d{2})(?:[T ](?<h>\d{2}):(?<mi>\d{2})(?::(?<s>\d{2})(?:[.,](?<f>\d{1,9}))?)?` +
-    String.raw`(?:\s*(?<glued>Z|[+-]\d{2}:?\d{2})(?![\w:])|(?<short>[+-]\d{2})(?![\w:])|[ \t]+(?<word>(?:[Gg][Mm][Tt]|[Uu][Tt][Cc])[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5})(?![\w+-]))?` +
-    String.raw`(?<br>\[(?<brz>[A-Za-z][\w+-]*(?:\/[\w+-]+){0,2})\])?` +
+    String.raw`(?:\s*(?<glued>Z|[+-]\d{2}:?\d{2})(?![\w:])|(?<short>[+-]\d{2})(?![\w:])` +
+    String.raw`|(?<sp>[ \t](?:\[(?<sbrz>${BRACKET_ZONE})\]|(?<bare>${BARE_IANA})))` +
+    String.raw`|[ \t]+(?<word>(?:[Gg][Mm][Tt]|[Uu][Tt][Cc])[+-]\d{1,2}(?::?\d{2})?|[A-Za-z]{2,5})(?![\w+-]))?` +
+    String.raw`(?<br>\[(?<brz>${BRACKET_ZONE})\])?` +
     String.raw`|(?<dz>Z|[+-]\d{2}:\d{2})(?![\w:])|[ \t]+(?<era>AD|BC|CE|BCE)(?!\w))?(?!\d)`,
 );
 
@@ -183,7 +193,7 @@ const ORDINAL_ID_BEFORE = idLabel(
   'pr|id|ticket|invoice|inv|ref|order|issue|bug|case|req|no|number|sku|build|job|run|release',
 );
 /** Labels that make "20240115" or "2024W012" a product code or id rather than a date. */
-const CODE_ID_BEFORE = idLabel('order|sku|id|model|part|item|ref|no|build|lot|serial|product');
+const CODE_ID_BEFORE = idLabel('order|sku|id|model|part|item|ref|no|build|lot|serial|product|ext');
 
 /** True when `re` matches the text just before `index` (same line only). */
 function labelledBefore(src: string, index: number, re: RegExp): boolean {
@@ -202,7 +212,7 @@ const RE_DATE_SLASH = new RegExp(
  * letter, digit, dot or slash, so version numbers and IP addresses
  * ("v1.2.3", "10.0.0.12") do not start or end one.
  */
-const NUM_DATE = String.raw`(?<![\w./:+-])(?<a>\d{1,4})(?<sep>[/-]|\.[ ]?)(?<b>\d{1,2})\k<sep>(?<c>\d{1,4})(?<tdot>(?<=\.[ ]?\d{1,4})\.)?(?![\w/-]|[.:]\d)`;
+const NUM_DATE = String.raw`(?<![\w./:+-])(?<a>\d{1,4})(?<sep>[/-]|\.[ ]?)(?<b>\d{1,2})\k<sep>(?<c>\d{1,4})(?<tdot>(?<=\.[ ]?\d{1,4})\.)?(?![\w/%-]|[.:]\d)`;
 
 // "22/03/1999", "3/22/99 5:06 AM", "22.03.1999 um 05:06 MEZ", "1999.03.22. 5:06:07".
 const RE_NUMERIC = new RegExp(String.raw`${NUM_DATE}(?:${CONNECTOR}${timeFragment(true)}${ZONE_TAIL})?`);
@@ -243,9 +253,29 @@ const RE_CJK = new RegExp(
 
 // Bare time: "3pm", "15:04", "3:30 p.m. UTC", "9:00 +05:45". Never starts
 // inside a number or another time ("10:30:15" must not yield "15").
+// An IANA zone one space after the time ("10:00 Europe/Paris", "10:00 [Asia/Tokyo]") is read
+// too, and so is a glued Zulu "Z" ("10:00Z", "23:59:60Z").
+// Groups: 1 hour, 2 minutes, 3 seconds, 4 am/pm, 5 bracketed zone, 6 bare IANA zone, 7 zone token.
 const RE_TIME = new RegExp(
-  String.raw`(?<![\d:.])(?<!(?:^|[^\d:])\d{1,3},)\b(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:[ \t]*(${AMPM}))?(?:[ \t]+(${ZONE})(?![\w+-]))?(?![\w:])`,
+  String.raw`(?<![\d:.])(?<!(?:^|[^\d:])\d{1,3},)\b(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:[ \t]*(${AMPM}))?` +
+    String.raw`(?:[ \t](?:\[(${BRACKET_ZONE})\]|(${BARE_IANA}))|(?:[ \t]+|(?=Z(?![\w+-])))(${ZONE})(?![\w+-]))?(?![\w:])`,
 );
+
+/**
+ * Scripture references look like times: "John 3:16", "Romans 8:28",
+ * "Surah 2:255". Book names (and "verse", "chapter") just before a bare
+ * H:MM make it chapter:verse. A list rather than "any capitalized word":
+ * "Standup 9:00" and "Lunch 12:30" are times. Book names that are common
+ * schedule words (Job, Acts, Numbers, Song) are left out.
+ */
+const SCRIPTURE_BEFORE = new RegExp(
+  String.raw`(?:^|[^${L}])(?:(?:Genesis|Exodus|Leviticus|Deuteronomy|Joshua|Judges|Ruth|Samuel|Kings|Chronicles|Ezra|Nehemiah|Esther|Psalms?|Proverbs|Ecclesiastes|Isaiah|Jeremiah|Lamentations|Ezekiel|Daniel|Hosea|Joel|Amos|Obadiah|Jonah|Micah|Nahum|Habakkuk|Zephaniah|Haggai|Zechariah|Malachi|Matthew|Mark|Luke|John|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians|Timothy|Titus|Philemon|Hebrews|James|Peter|Jude|Revelation|Gen|Exod|Deut|Matt|Rom|Cor|Gal|Eph|Phil|Heb|Rev|Ps|Prov|Isa|Jer|Ezek|Surah|Sura|Quran|Qur['’]an)\.?|[Vv]erses?|[Cc]hapter|[Cc]h\.)[ \t]+$`,
+);
+
+/** "odds of 1:30", "1:30 odds", "aspect ratio 4:30": a ratio, not a time. */
+const RATIO_WORD = 'odds|ratios?|scale|aspect|split|mix|proportions?';
+const RATIO_BEFORE = new RegExp(String.raw`(?<![${L}])(?:${RATIO_WORD})(?:[ \t]+(?:of|is|was|at|=))?[ \t:=]*$`, 'i');
+const RATIO_AFTER = new RegExp(String.raw`^[ \t]*(?:${RATIO_WORD})(?![${L}])`, 'i');
 
 /**
  * True when the text just before `index` ends in a date that no enabled
@@ -305,6 +335,14 @@ function apToken(raw: string | undefined): string | undefined {
 type Clock = { h: number; mi: number; s: number; ms?: number };
 
 /**
+ * to24h, plus ISO 8601's "24:00" (end of the day) on a 24-hour clock.
+ * buildParsed accepts hour 24 only with zero minutes and seconds.
+ */
+function clockHour(hour: number, ap: string | undefined): number | null {
+  return hour === 24 && !ap ? 24 : to24h(hour, ap);
+}
+
+/**
  * Wall-clock time from timeFragment() groups (plus `apz`, am/pm after the
  * zone). undefined when there is no time; null when it is invalid (13pm, or
  * two am/pm markers).
@@ -321,7 +359,7 @@ function timeFromGroups(g: Record<string, string | undefined>): Clock | null | u
       if (ap) return null;
       ap = apz;
     }
-    const h = to24h(Number(g.h), ap);
+    const h = clockHour(Number(g.h), ap);
     return h === null ? null : { h, mi: Number(g.mi ?? 0), s: Number(g.s ?? 0), ms: fractionMs(g.f) };
   }
   if (g.h3 !== undefined) {
@@ -346,27 +384,30 @@ function numericDate(
   g: Record<string, string | undefined>,
   order: NumericDateOrder,
   timed: boolean,
+  nowMs: number,
 ): { y: number; mo: number; d: number; ambiguous: boolean; order: NumericDateOrder } | 'bad' | null {
   const [a, b, c, sep] = [g.a ?? '', g.b ?? '', g.c ?? '', g.sep ?? ''];
   const [A, B, C] = [Number(a), Number(b), Number(c)];
   // "1.2.30", "1-2-30": two one-digit parts and a short year are more often a
-  // version or a code than a date. Slashes ("1/2/30") stay dates.
+  // version or a code than a date. Slashes ("1/2/30") stay dates, and so
+  // does any of them with a time ("3.4.24 10:00").
   const dotOrDash = sep !== '/';
+  const yearFirst = (a.length === 4 || (a.length === 2 && A > 31)) && c.length <= 2;
   if (!timed) {
-    // "10.30.15", "01.02.03": with a two-digit year, dotted numbers that make
-    // a valid H.MM.SS are as likely a time as a date.
-    if (sep.startsWith('.') && a.length <= 2 && b.length === 2 && c.length === 2 && A <= 23 && B <= 59 && C <= 59) {
-      return null;
-    }
-    // "01-23-45", "ext 01-23-45", "lot 11-12-13": three two-digit groups
-    // joined by dashes are usually a phone extension or a code. Only a
-    // 19xx year ("22-03-99", "99-03-22") is read as a date on its own.
-    if (sep === '-' && a.length === 2 && b.length === 2 && c.length === 2 && (A > 31 ? A : C) < 70) return null;
+    // "10.30.15": dotted dates are day-first wherever they are used, so with
+    // a two-digit year a middle part that cannot be a month makes it a time
+    // (H.MM.SS) or a code, not a date. "12.03.24" stays a date.
+    if (sep.startsWith('.') && !yearFirst && c.length === 2 && B > 12) return null;
+    // "01-23-45", "ext 01-23-45": a dash date whose two-digit year is more
+    // than ten years ahead is a phone extension or a code ("22-03-24" and
+    // "22-03-99" stay dates). Code words are checked by the caller.
+    const yy = yearFirst ? a : c;
+    if (sep === '-' && yy.length === 2 && expandYear(yy) > new Date(nowMs).getUTCFullYear() + 10) return null;
   }
 
   // Year first: yyyy-M-d, yy/MM/dd (when the first part cannot be a day).
-  if ((a.length === 4 || (a.length === 2 && A > 31)) && c.length <= 2) {
-    if (a.length === 2 && dotOrDash && b.length === 1 && c.length === 1) return null;
+  if (yearFirst) {
+    if (!timed && a.length === 2 && dotOrDash && b.length === 1 && c.length === 1) return null;
     const y = a.length === 4 ? A : expandYear(a);
     let [mo, d] = [B, C];
     // yyyy.d.M ("1999.22.3"): only with dots, and only when the month cannot be first.
@@ -376,7 +417,7 @@ function numericDate(
   }
   // Year last: d/M/y or M/d/y.
   if (a.length <= 2 && b.length <= 2 && (c.length === 4 || c.length === 2)) {
-    if (c.length === 2 && dotOrDash && a.length === 1 && b.length === 1) return null;
+    if (!timed && c.length === 2 && dotOrDash && a.length === 1 && b.length === 1) return null;
     const y = c.length === 4 ? C : expandYear(c);
     const strong = c.length === 4;
     let chosen: NumericDateOrder;
@@ -465,7 +506,9 @@ function numericMatcher(src: string, ctx: BuiltinMatchContext): MatchResult[] {
   const convert = (m: RegExpExecArray): Converted | typeof VETO | null => {
     const g = (m.groups ?? {}) as Record<string, string | undefined>;
     const timed = g.h !== undefined || g.h2 !== undefined || g.h3 !== undefined;
-    const date = numericDate(g, order, timed);
+    // "lot 11-12-13", "ext 12-03-24": a dash triple after a code word is the code.
+    if (!timed && g.sep === '-' && (g.c ?? '').length <= 2 && labelledBefore(src, m.index, CODE_ID_BEFORE)) return null;
+    const date = numericDate(g, order, timed, ctx.nowMs ?? Date.now());
     if (date === null) return null;
     if (date === 'bad') return VETO;
     if (badOffset(g.zone)) return VETO;
@@ -548,7 +591,7 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     id: 'iso-8601',
     label: 'ISO 8601',
     description:
-      'YYYY-MM-DD with an optional time, fraction (. or ,) and zone (Z, ±hh:mm, ±hh, UTC, EST, GMT+1, [Europe/Paris]). A date alone may carry an offset or "AD". Without a zone the time is read in your home zone.',
+      'YYYY-MM-DD with an optional time, fraction (. or ,) and zone (Z, ±hh:mm, ±hh, UTC, EST, GMT+1, [Europe/Paris], or Europe/Paris after a space). A date alone may carry an offset or "AD". 24:00 is the end of the day. Without a zone the time is read in your home zone.',
     examples: [
       '2024-01-02T15:04:05Z',
       '2024-01-02 15:04 UTC',
@@ -570,9 +613,21 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
         // with an impossible offset is not a date and a separate time;
         // refuse the whole thing.
         if (badOffset(zoneTok)) return VETO;
+        // "2024-03-22-001": a date followed by "-digits" is an id.
+        if (dateOnly && /^-\d/.test(src.slice(m.index + m[0].length))) return VETO;
         let zone: ResolvedZone | null = zoneTok ? resolveZoneToken(zoneTok) : null;
         let text = m[0];
-        if (g.br) {
+        if (g.sp) {
+          // "2024-03-10 02:30 [America/New_York]", "... America/New_York":
+          // a real IANA zone one space after the time. Anything after it
+          // (a second bracket) is not part of the timestamp.
+          const name = g.sbrz ?? g.bare ?? '';
+          const end = m[0].length - (g.br?.length ?? 0);
+          if (resolveZone(name)?.kind === 'iana') {
+            zone = { iana: name, label: name, today: name };
+            text = m[0].slice(0, end);
+          } else text = m[0].slice(0, end - g.sp.length);
+        } else if (g.br) {
           // "[Europe/Paris]": the zone, unless an explicit offset already says it.
           const iana = g.brz && resolveZone(g.brz)?.kind === 'iana' ? g.brz : null;
           if (!iana) text = text.slice(0, text.length - g.br.length);
@@ -789,24 +844,44 @@ export const BUILTIN_FORMATS: readonly BuiltinFormat[] = [
     id: 'time-of-day',
     label: 'Time of day',
     description:
-      'A time with a colon, am/pm or a zone, taken as today. Ignored when it follows a date no format recognized, and a lone number like "5" is ignored.',
+      'A time with a colon, am/pm or a zone (also Europe/Paris), taken as today. Ignored when it follows a date no format recognized, and a lone number like "5", a verse ("John 3:16"), a ratio ("1:30 odds") or a lap time ("1:23.456") is ignored.',
     examples: ['3pm', '15:30', '11:00 p.m.', '9:00 UTC', '9:00 GMT+5:30', '3 PM ET', '3:30 PM +05:45'],
     regex: RE_TIME,
     match: (src, ctx) =>
       scan(RE_TIME, src, (m) => {
-        const [, hTok, miTok, sTok, ampm, zoneTok] = m;
+        const [, hTok, miTok, sTok, ampm, brTok, bareTok, zoneTok] = m;
         if (dateLikeBefore(src, m.index)) return null;
         // "10:00 +15:00": refuse the whole span so "15:00" is not read next.
         if (badOffset(zoneTok)) return VETO;
-        const zone = resolveZoneToken(zoneTok);
+        // "10:00 Europe/Paris", "10:00 [Asia/Tokyo]": only a real IANA zone counts.
+        const ianaTok = brTok ?? bareTok;
+        const iana = ianaTok !== undefined && resolveZone(ianaTok)?.kind === 'iana' ? ianaTok : null;
+        const zone: ResolvedZone | null = iana ? { iana, label: iana, today: iana } : resolveZoneToken(zoneTok);
+        // A bare H:MM (no seconds, am/pm or zone) can be many things that are not a time of day.
+        if (miTok !== undefined && sTok === undefined && !ampm && !zone) {
+          const end = m.index + (hTok ?? '').length + 1 + miTok.length; // just after "H:MM"
+          // "Lap 1:23.456", "split 0:59.87": minutes, seconds and a fraction is a duration.
+          if (/^\.\d/.test(src.slice(end))) return VETO;
+          const before = src.slice(Math.max(0, m.index - 40), m.index);
+          const line = before.slice(before.lastIndexOf('\n') + 1);
+          // "John 3:16", "odds of 1:30", "1:30 odds".
+          if (SCRIPTURE_BEFORE.test(line) || RATIO_BEFORE.test(line) || RATIO_AFTER.test(src.slice(end, end + 20))) {
+            return null;
+          }
+        }
         // Need an am/pm marker, a colon, or a real zone; "5" alone is not a
         // time. A bare number before a two-letter name ("3 CT scans",
         // "Apollo 11 MT") is a count, not a time.
         const strongZone = zone !== null && (zoneTok?.length ?? 0) >= 3;
         if (!(ampm || miTok !== undefined || strongZone)) return null;
-        const hour = to24h(Number(hTok), ampm);
+        // "24:00" is the end of today (tomorrow 00:00); buildParsed checks the minutes.
+        const hour = clockHour(Number(hTok), ampm);
         if (hour === null) return null;
-        const text = trimUnresolvedZone(m[0], zoneTok, zone !== null);
+        let text = trimUnresolvedZone(m[0], zoneTok, zone !== null);
+        if (ianaTok !== undefined && !iana) {
+          const tok = brTok !== undefined ? `[${brTok}]` : ianaTok;
+          text = text.slice(0, text.length - tok.length).trimEnd();
+        }
         const today = todayIn(zone ? zone.today : ctx.assumedZone, ctx.nowMs);
         const parsed = buildParsed(
           { ...today, h: hour, mi: Number(miTok ?? 0), s: Number(sTok ?? 0) },

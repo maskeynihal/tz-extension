@@ -23,7 +23,7 @@ vi.mock('../src/clock/model', async (importOriginal) => {
 
 const KEY = 'tz-extension-prefs';
 
-// Tuesday 2 Jan 2024, 20:00:00 UTC. Home (UTC−08:00) is 12:00 Tue; UTC+05:45 is 01:45 Wed.
+// Tuesday 2 Jan 2024, 20:00:00 UTC. Home (UTC-08:00) is 12:00 Tue; UTC+05:45 is 01:45 Wed.
 const NOW = Date.UTC(2024, 0, 2, 20, 0, 0);
 
 const base: Preferences = {
@@ -94,7 +94,7 @@ describe('ClockApp', () => {
     const cards = Array.from(document.querySelectorAll<HTMLElement>('.tzc-card'));
     expect(cards.map((c) => c.dataset.zone)).toEqual(['UTC-08:00', 'UTC+05:45', 'UTC']);
     expect(within(cards[0] as HTMLElement).getByText('Home')).toBeInTheDocument();
-    expect(within(cards[0] as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('UTC−08:00');
+    expect(within(cards[0] as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('UTC-08:00');
     expect(within(card('UTC')).getByRole('heading', { level: 3 })).toHaveTextContent('UTC');
     expect(within(card('UTC')).getByText('Coordinated Universal Time')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: 'World clock' })).toBeInTheDocument();
@@ -120,7 +120,7 @@ describe('ClockApp', () => {
     const home = within(card('UTC-08:00'));
     expect(home.getByText('Home zone')).toBeInTheDocument();
     expect(home.getByText('Working hours')).toBeInTheDocument();
-    expect(home.getByText('UTC−08:00', { selector: 'dd' })).toBeInTheDocument();
+    expect(home.getByText('UTC-08:00', { selector: 'dd' })).toBeInTheDocument();
   });
 
   it('ticks once per second', async () => {
@@ -140,8 +140,8 @@ describe('ClockApp', () => {
     expect(timeOf('UTC-08:00')).toBe('14:00');
     expect(timeOf('UTC+05:45')).toBe('03:45');
     expect(timeOf('UTC')).toBe('22:00');
-    expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Tue 14:00 in UTC−08:00/);
-    expect(slider).toHaveAttribute('aria-valuetext', expect.stringContaining('Tue 14:00 in UTC−08:00'));
+    expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Tue 14:00 in UTC-08:00/);
+    expect(slider).toHaveAttribute('aria-valuetext', expect.stringContaining('Tue 14:00 in UTC-08:00'));
 
     // Page Up adds an hour; Escape returns to now.
     fireEvent.keyDown(slider, { key: 'PageUp' });

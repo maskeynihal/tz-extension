@@ -1,5 +1,5 @@
 import { DEFAULT_PREFERENCES, type Preferences } from '../types';
-import { ianaEquivalent, isValidZone, resolveZone } from './tz';
+import { canonicalZone, ianaEquivalent, isValidZone, resolveZone } from './tz';
 import { BUILTIN_FORMAT_IDS } from './builtin-formats';
 import { MAX_ADVANCED_PATTERN } from './custom-formats';
 
@@ -110,9 +110,17 @@ export function sanitize(input: unknown): Preferences {
     const valid = obj.targetZones.filter(
       (z): z is string => typeof z === 'string' && isValidZone(z),
     );
-    // De-dup, keep order. An explicitly empty array is respected (the user
-    // cleared the list); only an absent/non-array field falls back to defaults.
-    targetZones = Array.from(new Set(valid));
+    // De-dup, keep order; an alias counts as its zone ("Asia/Calcutta" and
+    // "Asia/Kolkata" keep only the first). An explicitly empty array is
+    // respected (the user cleared the list); only an absent/non-array field
+    // falls back to defaults.
+    const seen = new Set<string>();
+    targetZones = valid.filter((z) => {
+      const c = canonicalZone(z);
+      if (seen.has(c)) return false;
+      seen.add(c);
+      return true;
+    });
   }
 
   const hour12 = typeof obj.hour12 === 'boolean' ? obj.hour12 : base.hour12;
@@ -197,18 +205,34 @@ export function sanitize(input: unknown): Preferences {
  * - PREFS_EXTRAS_KEY ("extras"): the full homeZone and targetZones, the
  *   fields 0.6.x drops (cardSize, lastCardSize, numericDateOrder), and a
  *   fingerprint of the legacy homeZone and targetZones just written.
+ * - Both items carry the same random write id `w`. 0.6.x's sanitize drops
+ *   unknown fields, so a legacy item written by 0.6.x has no `w`.
  *
  * Reading (fromSyncItems):
  * - No extras: the legacy item as is.
- * - homeZone: if the legacy value still matches its fingerprint, nobody else
- *   changed it, so use the full value from extras. Otherwise an old device
- *   picked a new home; use the legacy value.
- * - targetZones: if the legacy list matches its fingerprint, use the full list
- *   from extras. Otherwise an old device edited the list. Its list is the
- *   truth for IANA ids (order, additions, removals), and each new-style id
- *   from extras goes back in right after the IANA id that preceded it in the
- *   full list (at the start when none did, or that id was removed and no
- *   earlier one survives).
+ * - Legacy carries a `w` (written by this build): if it equals extras' `w`,
+ *   both come from one write, so use extras' full zone values. If it differs,
+ *   the two items come from two different writes of this build and one of
+ *   them has not arrived yet (sync can deliver them separately). No old
+ *   device was involved, so use extras' full zone values rather than merging
+ *   (merging would bring back a zone just removed on another device); the
+ *   item still in flight settles it when it lands.
+ * - Legacy has no `w` (0.6.x wrote it, or a build older than the write id):
+ *   - homeZone: if the legacy value still matches its fingerprint, nobody
+ *     else changed it, so use the full value from extras. Otherwise an old
+ *     device picked a new home; use the legacy value.
+ *   - targetZones: if the legacy list matches its fingerprint, use the full
+ *     list from extras. Otherwise an old device edited the list. Its list is
+ *     the truth for IANA ids (order, additions, removals), and each new-style
+ *     id from extras goes back in right after the IANA id that preceded it in
+ *     the full list (at the start when none did, or that id was removed and
+ *     no earlier one survives).
+ *   - Accepted quirk ("ABA"): an old device that sets a value back to exactly
+ *     the legacy projection (home abbr:PT is written as America/Los_Angeles;
+ *     the old device picks Tokyo, then Los Angeles again) matches the
+ *     fingerprint, so the full value (abbr:PT) wins. The cost is cosmetic:
+ *     the projection always shows the same clock as the full value, so only
+ *     the label differs.
  * - cardSize, lastCardSize, numericDateOrder: from extras, else legacy.
  * - Everything else: from legacy.
  * The localStorage backend stores the full preferences in one item; no old
@@ -242,8 +266,10 @@ export function toSyncItems(prefs: Preferences): Record<string, unknown> {
   // The legacy item keeps the new-only fields too: 0.6.x ignores them, and a
   // reader without extras still finds them.
   const legacy: Preferences = { ...clean, homeZone, targetZones };
+  const w = writeId();
   const extras = {
     v: 1,
+    w,
     homeZone: clean.homeZone,
     targetZones: clean.targetZones,
     cardSize: clean.cardSize,
@@ -252,7 +278,16 @@ export function toSyncItems(prefs: Preferences): Record<string, unknown> {
     fpHome: fingerprint(homeZone),
     fpTargets: fingerprint(targetZones),
   };
-  return { [KEY]: legacy, [EXTRAS_KEY]: extras };
+  return { [KEY]: { ...legacy, w }, [EXTRAS_KEY]: extras };
+}
+
+/** A fresh id shared by the two items of one write. */
+function writeId(): string {
+  const rand =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '')
+      : Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
+  return rand.slice(0, 12).padEnd(12, '0');
 }
 
 function record(v: unknown): Record<string, unknown> | null {
@@ -282,10 +317,17 @@ export function fromSyncItems(items: Record<string, unknown> | undefined | null)
   const extras = record(items?.[EXTRAS_KEY]);
   if (!extras) return sanitize(legacy ?? undefined);
   const out: Record<string, unknown> = { ...(legacy ?? {}) };
-  if (!legacy || typeof legacy.homeZone !== 'string' || fingerprint(legacy.homeZone) === extras.fpHome) {
+  // A write id on the legacy item means this build wrote it, not 0.6.x.
+  const newWriter = typeof legacy?.w === 'string' && typeof extras.w === 'string';
+  if (!legacy || newWriter || typeof legacy.homeZone !== 'string' || fingerprint(legacy.homeZone) === extras.fpHome) {
     out.homeZone = extras.homeZone;
   }
-  if (!legacy || !Array.isArray(legacy.targetZones) || fingerprint(legacy.targetZones) === extras.fpTargets) {
+  if (
+    !legacy ||
+    newWriter ||
+    !Array.isArray(legacy.targetZones) ||
+    fingerprint(legacy.targetZones) === extras.fpTargets
+  ) {
     out.targetZones = extras.targetZones;
   } else if (Array.isArray(extras.targetZones)) {
     out.targetZones = mergeTargets(legacy.targetZones, extras.targetZones);

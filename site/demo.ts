@@ -18,6 +18,7 @@ import {
 } from '../src/lib/storage';
 import { ZonePicker } from '../src/popup/ZonePicker';
 import { readingLabel } from './reading';
+import { readEpochInput, wallClockNote } from './convert';
 import {
   DEFAULT_PREFERENCES,
   type NumericDateOrder,
@@ -85,11 +86,23 @@ function mountDemo(): void {
 
   const hint = h('p', { class: 'demo-hint', 'aria-live': 'polite' });
   const format = h('p', { class: 'demo-format' });
+  const note = h('p', { class: 'demo-note' });
   const orderBox = h('div', { class: 'demo-order', role: 'group', 'aria-label': 'Read this date as' });
   const out = h('div', { class: 'demo-out' });
 
-  const clock = h('button', { class: 'demo-chip', type: 'button', 'aria-label': 'Toggle 12 or 24 hour clock' }, ['12h']);
-  clock.addEventListener('click', () => save({ ...prefs, hour12: !prefs.hour12 }));
+  // 12h | 24h: the same labelled segmented control as the extension popup.
+  const clock = h('div', { class: 'demo-seg', role: 'group', 'aria-label': 'Clock format' });
+  const clockButtons = ([true, false] as const).map((h12) => {
+    const label = h12 ? '12-hour clock' : '24-hour clock';
+    const b = h('button', { class: 'demo-seg-btn', type: 'button', 'aria-label': label, title: label, 'aria-pressed': 'false' }, [
+      h12 ? '12h' : '24h',
+    ]);
+    b.addEventListener('click', () => {
+      if (prefs.hour12 !== h12) save({ ...prefs, hour12: h12 });
+    });
+    clock.append(b);
+    return { b, h12 };
+  });
 
   let mode: 'paste' | 'epoch' = 'paste';
   const PLACEHOLDER = {
@@ -112,7 +125,7 @@ function mountDemo(): void {
     const wrap = h('ul', { class: 'demo-rows', 'aria-label': 'Converted times' });
     for (const zone of shownZones(prefs)) {
       const v = viewInZone(epochMs, zone, prefs.hour12);
-      const isHome = zone === prefs.homeZone;
+      const isHome = sameZone(zone, prefs.homeZone);
       const detail = resolveZone(zone)?.long;
       const name = h('div', { class: 'demo-zone' }, [
         h('span', { class: 'demo-zone-name' }, [zoneLabel(zone)]),
@@ -122,7 +135,7 @@ function mountDemo(): void {
       const val = h('div', { class: 'demo-val' }, [
         h('span', { class: 'demo-date' }, [v.date]),
         h('span', { class: 'demo-time' }, [`${v.weekday} ${v.time}`]),
-        h('span', { class: 'demo-off' }, [`UTC${v.offset.replace('-', '−')}`]),
+        h('span', { class: 'demo-off' }, [`UTC${v.offset}`]),
       ]);
       const row = h('li', { class: 'demo-row' + (isHome ? ' is-local' : '') }, [name, val]);
       if (!isHome) {
@@ -159,9 +172,14 @@ function mountDemo(): void {
   }
 
   function render(): void {
-    clock.textContent = prefs.hour12 ? '12h' : '24h';
+    for (const { b, h12 } of clockButtons) {
+      const on = prefs.hour12 === h12;
+      b.setAttribute('aria-pressed', String(on));
+      b.classList.toggle('is-on', on);
+    }
     out.replaceChildren();
     format.textContent = '';
+    note.textContent = '';
     orderBox.hidden = true;
     const raw = input.value.trim();
     if (!raw) {
@@ -177,14 +195,29 @@ function mountDemo(): void {
       disabledFormats: prefs.disabledFormats,
       numericDateOrder: prefs.numericDateOrder,
     };
+    if (mode === 'epoch') {
+      // The Epoch tab reads one integer, like the popup's Epoch tab: 0 and
+      // negative values (before 1970) included.
+      const e = readEpochInput(raw);
+      if (!e) {
+        hint.textContent =
+          "That isn't a Unix timestamp. Paste a whole number of seconds (like 1700000000) or milliseconds (13 digits); 0 and negative values work too.";
+        hint.className = 'demo-hint is-error';
+        renderPicker();
+        return;
+      }
+      hint.className = 'demo-hint';
+      hint.textContent = `Read "${raw}" as Unix ${e.unit} · ${toIsoUtc(e.epochMs)}`;
+      out.append(rows(e.epochMs));
+      renderPicker();
+      return;
+    }
     const matches = parseTimes(raw, opts);
-    const parsed =
-      mode === 'epoch' ? matches.find((m) => m.kind === 'epoch-seconds' || m.kind === 'epoch-millis') : matches[0];
+    const parsed = matches[0];
     if (!parsed) {
-      hint.textContent =
-        mode === 'epoch'
-          ? "That isn't a Unix timestamp. Paste seconds (10 digits) or milliseconds (13 digits)."
-          : "Couldn't read that as a time. Try an epoch, an ISO string, or a full date.";
+      hint.textContent = readEpochInput(raw)
+        ? "Couldn't read that as a time. To read it as a Unix timestamp, use the Epoch tab."
+        : "Couldn't read that as a time. Try an epoch, an ISO string, or a full date.";
       hint.className = 'demo-hint is-error';
       renderPicker();
       return;
@@ -194,6 +227,8 @@ function mountDemo(): void {
     hint.className = 'demo-hint';
     hint.textContent = `Read "${parsed.matchedText}" as ${src} · ${toIsoUtc(epochMs)}`;
     if (parsed.formatLabel) format.textContent = `Matched by format: ${parsed.formatLabel}`;
+    // The DST flag describes the parser's own reading, not a swapped day/month one.
+    note.textContent = (epochMs === parsed.epochMs ? wallClockNote(parsed, prefs.hour12) : null) ?? '';
     renderOrder(parsed);
     out.append(rows(epochMs));
     renderPicker();
@@ -222,7 +257,7 @@ function mountDemo(): void {
   }
 
   const head = h('div', { class: 'demo-head' }, [tabs, clock]);
-  root.append(head, input, hint, format, orderBox, out, pickerHost);
+  root.append(head, input, hint, note, format, orderBox, out, pickerHost);
 
   input.addEventListener('input', render);
   // Seed with "now" so the demo is alive on load.

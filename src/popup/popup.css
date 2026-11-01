@@ -135,6 +135,8 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 .tzx-time { font-weight: var(--tz-fw-semibold); }
 
 .tzx-error { color: var(--error); font-size: var(--tz-fs-lg); margin: 6px 0; }
+/* DST gap / overlap note under a date-time input. */
+.tzx-wall-note { font-size: var(--tz-fs-sm); color: var(--muted); margin: 4px 0 0; }
 .tzx-sep { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .tzx-loading { color: var(--muted); }
 .tzx-hint { color: var(--muted); font-size: var(--tz-fs-sm); margin: 6px 0 0; line-height: 1.5; }
@@ -254,6 +256,9 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
 .tzx-format-desc, .tzx-format-ex { font-size: var(--tz-fs-sm); color: var(--muted); }
 /* Each example wraps as a whole token; only one wider than the row breaks inside. */
 .tzx-format-ex code { display: inline-block; max-width: 100%; word-break: normal; overflow-wrap: anywhere; vertical-align: top; }
+/* Long examples break only at the <wbr> points (before "T" or "[", after "," or
+   a space); each piece between them stays whole, so "1999-03-" never ends a line. */
+.tzx-format-ex .tzx-ex-piece { white-space: nowrap; }
 .tzx-format-pattern { align-self: flex-start; }
 .tzx-format-actions { display: flex; align-items: center; gap: 6px; flex: none; }
 .tzx-regex { font-size: var(--tz-fs-sm); color: var(--muted); margin-top: 2px; }

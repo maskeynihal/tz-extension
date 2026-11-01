@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_PREFERENCES, resolveLocalZone, type Preferences } from '../types';
 import { loadPreferences, onPreferencesChanged, sanitize, savePreferences } from '../lib/storage';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
-import { resolveZone, viewInZone, zoneLabel } from '../lib/tz';
+import { resolveZone, sameZone, viewInZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from '../popup/ZonePicker';
 import { FormatsSection, Switch } from './Formats';
 import { SettingsNav, useScrollSpy, type NavSection } from './SettingsNav';
@@ -24,7 +24,12 @@ const SECTION_IDS = SECTIONS.map((s) => s.id);
 const POPULAR_ZONES = ['UTC', 'America/New_York', 'Europe/London', 'Asia/Tokyo', 'abbr:PT', 'abbr:ET'];
 
 function suggestedZones(skip: readonly string[]): string[] {
-  return [...new Set([resolveLocalZone(), ...POPULAR_ZONES])].filter((z) => !skip.includes(z));
+  // sameZone: the engine may report the local zone by a legacy name ("Asia/Katmandu").
+  const out: string[] = [];
+  for (const z of [resolveLocalZone(), ...POPULAR_ZONES]) {
+    if (!skip.some((s) => sameZone(s, z)) && !out.some((o) => sameZone(o, z))) out.push(z);
+  }
+  return out;
 }
 
 /** A row of flush buttons, one pressed; like the theme chooser. */
@@ -194,7 +199,7 @@ export function Options(): JSX.Element {
   }
 
   function addZone(zone: string): void {
-    if (prefs.targetZones.includes(zone)) return;
+    if (prefs.targetZones.some((z) => sameZone(z, zone))) return;
     update({ ...prefs, targetZones: [...prefs.targetZones, zone] });
   }
 

@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import type { Preferences } from '../types';
 import { resolveLocalZone } from '../types';
-import { viewInZone, wallClockToEpochMs, isValidZone, zoneLabel } from '../lib/tz';
+import { viewInZone, isValidZone, sameZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from './ZonePicker';
+import { readWallInput } from './wallnote';
 
 export interface ConverterProps {
   readonly prefs: Preferences;
@@ -30,17 +31,13 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
   );
 
   const result = useMemo(() => {
-    if (!localValue) return { error: 'Pick a date and time.' as string | null, epochMs: null as number | null };
-    if (!isValidZone(sourceZone)) return { error: 'Invalid source timezone.', epochMs: null };
-    const iso = localValue.length === 16 ? `${localValue}:00` : localValue;
-    try {
-      const epochMs = wallClockToEpochMs(iso, sourceZone);
-      if (!Number.isFinite(epochMs)) return { error: 'Could not parse that time.', epochMs: null };
-      return { error: null, epochMs };
-    } catch {
-      return { error: 'Could not parse that time.', epochMs: null };
-    }
-  }, [localValue, sourceZone]);
+    if (!localValue)
+      return { error: 'Pick a date and time.' as string | null, epochMs: null as number | null, note: null as string | null };
+    if (!isValidZone(sourceZone)) return { error: 'Invalid source timezone.', epochMs: null, note: null };
+    const r = readWallInput(localValue, sourceZone, prefs.hour12);
+    if (!r) return { error: 'Could not parse that time.', epochMs: null, note: null };
+    return { error: null, epochMs: r.epochMs, note: r.note };
+  }, [localValue, sourceZone, prefs.hour12]);
 
   function setNow(): void {
     if (isValidZone(sourceZone)) setLocalValue(wallInputValue(Date.now(), sourceZone));
@@ -57,14 +54,16 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
   }
 
   function addTarget(zone: string): void {
-    if (!isValidZone(zone) || prefs.targetZones.includes(zone)) return;
+    if (!isValidZone(zone) || prefs.targetZones.some((z) => sameZone(z, zone))) return;
     onPrefsChange({ ...prefs, targetZones: [...prefs.targetZones, zone] });
   }
   function removeTarget(zone: string): void {
     onPrefsChange({ ...prefs, targetZones: prefs.targetZones.filter((z) => z !== zone) });
   }
 
-  const sourceIsLocal = sourceZone === LOCAL_ZONE;
+  // Compare through sameZone: the engine may report a legacy name
+  // ("Asia/Katmandu") for the zone the lists call "Asia/Kathmandu".
+  const sourceIsLocal = sameZone(sourceZone, LOCAL_ZONE);
 
   return (
     <section className="tzx-pane">
@@ -76,11 +75,17 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
             type="datetime-local"
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
+            aria-describedby={result.note ? 'tzx-dt-note' : undefined}
           />
           <button type="button" className="tzx-btn" onClick={setNow}>
             Now
           </button>
         </div>
+        {result.note && (
+          <p className="tzx-wall-note" id="tzx-dt-note">
+            {result.note}
+          </p>
+        )}
       </div>
 
       <div className="tzx-field">
@@ -92,8 +97,8 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
             className={sourceIsLocal ? 'tzx-chip tzx-chip-on' : 'tzx-chip'}
             title={
               sourceIsLocal
-                ? `Source is your local timezone (${LOCAL_ZONE})`
-                : `Use your local timezone (${LOCAL_ZONE})`
+                ? `Source is your local timezone (${zoneLabel(LOCAL_ZONE)})`
+                : `Use your local timezone (${zoneLabel(LOCAL_ZONE)})`
             }
             aria-pressed={sourceIsLocal}
             onClick={() => changeSource(LOCAL_ZONE)}
@@ -118,7 +123,7 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
           <div className="tzx-results">
             {prefs.targetZones.map((zone) => {
               const v = viewInZone(result.epochMs as number, zone, prefs.hour12);
-              const isLocal = zone === LOCAL_ZONE;
+              const isLocal = sameZone(zone, LOCAL_ZONE);
               return (
                 <div className="tzx-result-card" key={zone}>
                   <div className="tzx-result-head">

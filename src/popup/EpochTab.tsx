@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { Preferences } from '../types';
 import { parseEpoch, toEpochSeconds, toEpochMillis, type EpochUnit } from '../lib/epoch';
-import { viewInZone, toIsoUtc, wallClockToEpochMs, isValidZone, zoneLabel } from '../lib/tz';
+import { viewInZone, toIsoUtc, isValidZone, zoneLabel } from '../lib/tz';
+import { readWallInput } from './wallnote';
 
 export interface EpochTabProps {
   readonly prefs: Preferences;
@@ -30,17 +31,13 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
   // --- Reverse: datetime -> epoch ---
   const [revLocal, setRevLocal] = useState<string>(() => toLocalInputValue(new Date()));
   const reverse = useMemo(() => {
-    if (!revLocal) return { error: 'Pick a date and time.' as string | null, s: null as number | null, ms: null as number | null };
-    if (!isValidZone(prefs.homeZone)) return { error: 'Invalid home timezone.', s: null, ms: null };
-    const iso = revLocal.length === 16 ? `${revLocal}:00` : revLocal;
-    try {
-      const epochMs = wallClockToEpochMs(iso, prefs.homeZone);
-      if (!Number.isFinite(epochMs)) return { error: 'Could not parse that time.', s: null, ms: null };
-      return { error: null, s: toEpochSeconds(epochMs), ms: toEpochMillis(epochMs) };
-    } catch {
-      return { error: 'Could not parse that time.', s: null, ms: null };
-    }
-  }, [revLocal, prefs.homeZone]);
+    const none = { s: null as number | null, ms: null as number | null, note: null as string | null };
+    if (!revLocal) return { ...none, error: 'Pick a date and time.' as string | null };
+    if (!isValidZone(prefs.homeZone)) return { ...none, error: 'Invalid home timezone.' };
+    const r = readWallInput(revLocal, prefs.homeZone, prefs.hour12);
+    if (!r) return { ...none, error: 'Could not parse that time.' };
+    return { error: null, s: toEpochSeconds(r.epochMs), ms: toEpochMillis(r.epochMs), note: r.note };
+  }, [revLocal, prefs.homeZone, prefs.hour12]);
 
   return (
     <section className="tzx-pane">
@@ -106,7 +103,13 @@ export function EpochTab({ prefs }: EpochTabProps): JSX.Element {
           step={1}
           value={revLocal}
           onChange={(e) => setRevLocal(e.target.value)}
+          aria-describedby={reverse.note ? 'tzx-rev-note' : undefined}
         />
+        {reverse.note && (
+          <p className="tzx-wall-note" id="tzx-rev-note">
+            {reverse.note}
+          </p>
+        )}
       </div>
       {reverse.error ? (
         <p className="tzx-error" role="alert">

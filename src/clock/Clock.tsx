@@ -616,6 +616,12 @@ interface ScrubberProps {
 
 const SCALE_HOURS = [-12, -6, 0, 6, 12, 18, 24, 30, 36];
 
+/** Accessible name of a scale preset: "Plan 12 hours ahead", "Plan 6 hours back". */
+function scaleLabel(h: number): string {
+  if (h === 0) return 'Plan the current time';
+  return `Plan ${Math.abs(h)} hours ${h > 0 ? 'ahead' : 'back'}`;
+}
+
 /** "Tue 15:30 in Kathmandu" for the planned instant. */
 function planText(instant: number, home: string, hour12: boolean): string {
   const face = clockText(wallParts(instant, home), hour12);
@@ -690,13 +696,24 @@ function Scrubber({ steps, nowMs, home, hour12, scrubbed, onChange, idBase }: Sc
         />
         <span className="tzc-range-now" aria-hidden="true" />
       </div>
-      <div className="tzc-scale" aria-hidden="true">
-        {SCALE_HOURS.map((h) => (
-          <span key={h} style={{ '--f': frac((h * 60) / STEP_MINUTES) } as React.CSSProperties}>
-            {h === 0 ? 'Now' : `${h > 0 ? '+' : '−'}${Math.abs(h)}h`}
-          </span>
-        ))}
-      </div>
+      <ul className="tzc-scale" aria-label="Jump to">
+        {SCALE_HOURS.map((h) => {
+          const target = (h * 60) / STEP_MINUTES;
+          return (
+            <li key={h} style={{ '--f': frac(target) } as React.CSSProperties}>
+              <button
+                type="button"
+                className="tzc-scale-btn"
+                aria-label={scaleLabel(h)}
+                aria-pressed={steps === target}
+                onClick={() => onChange(target)}
+              >
+                {h === 0 ? 'Now' : `${h > 0 ? '+' : '−'}${Math.abs(h)}h`}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
       <p className="tzc-hint" id={`${idBase}-scrub-hint`}>
         Arrow keys move 15 minutes, Page Up/Down one hour, Escape returns to now.
       </p>

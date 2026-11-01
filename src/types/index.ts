@@ -1,3 +1,6 @@
+// tz.ts never imports this module at runtime, so this creates no cycle.
+import { canonicalZone } from '../lib/tz';
+
 /** A resolved instant plus how it was interpreted. */
 export interface ParsedTime {
   /** The absolute instant, as epoch milliseconds (UTC). */
@@ -17,6 +20,13 @@ export interface ParsedTime {
   readonly dateOnly?: boolean;
   /** True when the source had a time but no date (taken as today). */
   readonly timeOnly?: boolean;
+  /**
+   * Set when the written wall-clock time did not map to exactly one instant
+   * in its zone: 'gap' (clocks jumped forward past it; read with the offset
+   * before the change, so 02:30 becomes 03:30) or 'ambiguous' (clocks fell
+   * back and it happened twice; read as the earlier one). Absent otherwise.
+   */
+  readonly wallClock?: 'gap' | 'ambiguous';
   /** How confident / what kind of match produced this. */
   readonly kind: ParseKind;
   /**
@@ -177,10 +187,16 @@ export const DEFAULT_PREFERENCES: Preferences = {
   numericDateOrder: localeDateOrder(),
 };
 
+/**
+ * The browser's zone under its current canonical name. Chrome reports some
+ * zones under legacy names ("Asia/Katmandu", "Asia/Calcutta") while the zone
+ * lists save the current ones ("Asia/Kathmandu"), so the raw value would
+ * never equal a saved id.
+ */
 export function resolveLocalZone(): string {
   try {
     const z = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return z && z.length > 0 ? z : 'UTC';
+    return z && z.length > 0 ? canonicalZone(z) : 'UTC';
   } catch {
     return 'UTC';
   }

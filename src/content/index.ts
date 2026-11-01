@@ -363,6 +363,151 @@ function syncHighlights(): void {
 // --- Positioning ----------------------------------------------------------
 
 /**
+ * The box of a whole selection: the union of its line boxes, so a card
+ * anchored below it clears every selected line (a selection that wraps onto
+ * a second line ends at that line's bottom, not the first one's).
+ */
+export function selectionRect(range: Range): DOMRect {
+  const box = range.getBoundingClientRect();
+  const lines = typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
+  const parts = [box, ...lines].filter((r) => r.width > 0 || r.height > 0);
+  if (parts.length === 0) return box;
+  const left = Math.min(...parts.map((r) => r.left));
+  const top = Math.min(...parts.map((r) => r.top));
+  const right = Math.max(...parts.map((r) => r.right));
+  const bottom = Math.max(...parts.map((r) => r.bottom));
+  return new DOMRect(left, top, right - left, bottom - top);
+}
+
+/** A floating card's viewport box. */
+export interface CardBox {
+  readonly top: number;
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+}
+/** A viewport rectangle (the dock's). */
+export interface ViewRect {
+  readonly top: number;
+  readonly left: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+/** Step between cascaded floating cards, both ways. */
+export const FLOAT_STEP = 32;
+/**
+ * The top-left square of a card (its grip and number) that no card painted
+ * above it may cover, so every card's header can still be grabbed.
+ */
+export const FLOAT_CORNER = 24;
+
+interface FitView {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Where a floating card of `card`'s size goes, as close to `card.top/left`
+ * as possible. Cards in `below` are painted under it: it must not cover
+ * their top-left corner. Cards in `above` are painted over it: they must not
+ * cover its corner. It stays on screen and clear of the dock. Tries, in
+ * order: the wanted spot; a cascade from it (down-right, down-left, up-right,
+ * FLOAT_STEP a step); columns from the top left; and as a last resort a
+ * FLOAT_CORNER step down-right of the last card below (wrapping on screen).
+ */
+export function fitFloating(
+  card: CardBox,
+  below: readonly CardBox[],
+  above: readonly CardBox[],
+  view: FitView,
+  dock: ViewRect | null,
+): { top: number; left: number } {
+  const w = card.width;
+  const h = card.height;
+  const maxL = Math.max(MARGIN, view.width - w - MARGIN);
+  const maxT = Math.max(MARGIN, view.height - h - MARGIN);
+  const clampL = (x: number): number => Math.min(Math.max(MARGIN, x), maxL);
+  const clampT = (y: number): number => Math.min(Math.max(MARGIN, y), maxT);
+  const hits = (a: ViewRect, b: ViewRect): boolean =>
+    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  const rect = (top: number, left: number, width: number, height: number): ViewRect => ({
+    top,
+    left,
+    right: left + width,
+    bottom: top + height,
+  });
+  const corner = (b: { top: number; left: number }): ViewRect => rect(b.top, b.left, FLOAT_CORNER, FLOAT_CORNER);
+  const ok = (top: number, left: number): boolean => {
+    const me = rect(top, left, w, h);
+    if (dock && hits(me, dock)) return false;
+    for (const b of below) if (hits(me, corner(b))) return false;
+    const mine = corner({ top, left });
+    for (const a of above) if (hits(mine, rect(a.top, a.left, a.width, a.height))) return false;
+    return true;
+  };
+  const fits = (top: number, left: number): boolean => top >= MARGIN && top <= maxT && left >= MARGIN && left <= maxL;
+
+  const start = { top: clampT(card.top), left: clampL(card.left) };
+  // Out of the dock's way, straight up, when it would sit on it.
+  if (dock && hits(rect(start.top, start.left, w, h), dock) && dock.top - MARGIN - h >= MARGIN) {
+    start.top = dock.top - MARGIN - h;
+  }
+  if (ok(start.top, start.left)) return start;
+
+  for (const [dx, dy] of [
+    [1, 1],
+    [-1, 1],
+    [1, -1],
+  ] as const) {
+    for (let k = 1; ; k++) {
+      const top = start.top + dy * k * FLOAT_STEP;
+      const left = start.left + dx * k * FLOAT_STEP;
+      if (!fits(top, left)) break;
+      if (ok(top, left)) return { top, left };
+    }
+  }
+  for (let left = MARGIN; left <= maxL; left += FLOAT_STEP) {
+    for (let top = MARGIN; top <= maxT; top += FLOAT_STEP) {
+      if (ok(top, left)) return { top, left };
+    }
+  }
+  // No spot leaves every corner free (very many cards on a small screen):
+  // step off the last card below, so at least that one is not hidden.
+  const last = below[below.length - 1];
+  if (!last) return start;
+  let top = last.top + FLOAT_CORNER;
+  let left = last.left + FLOAT_CORNER;
+  if (top > maxT) top = MARGIN;
+  if (left > maxL) left = MARGIN;
+  return { top, left };
+}
+
+/**
+ * Lay out floating cards given in painting order (later ones on top), each
+ * as close as it can stay to where it wants to be, so that none hides
+ * another's header. See fitFloating.
+ */
+export function layoutFloating(
+  cards: readonly CardBox[],
+  view: FitView,
+  dock: ViewRect | null,
+): Array<{ top: number; left: number }> {
+  const placed: CardBox[] = [];
+  return cards.map((card) => {
+    const at = fitFloating(card, placed, [], view, dock);
+    placed.push({ ...at, width: card.width, height: card.height });
+    return at;
+  });
+}
+
+/** The dock's viewport rect, when it is on the page. */
+function dockRect(): ViewRect | null {
+  if (!dockHost || !dockHost.isConnected) return null;
+  const d = dockHost.getBoundingClientRect();
+  return d.width && d.height ? d : null;
+}
+
+/**
  * Move a fixed (viewport) box of size w×h up out of the dock's way, when it
  * would overlap the dock and there is room above it.
  */
@@ -536,19 +681,50 @@ function fromOurUi(e: Event): boolean {
   return e.target instanceof Node && inOurUi(e.target);
 }
 
+/** True for an element the user types into (text inputs, textareas, contenteditable). */
+function isTextField(el: EventTarget | undefined): boolean {
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (el instanceof HTMLInputElement) {
+    return !['button', 'checkbox', 'radio', 'range', 'color', 'file', 'submit', 'reset', 'image'].includes(el.type);
+  }
+  return el instanceof HTMLElement && el.isContentEditable;
+}
+
 /**
- * Escape from the page (capture, so page handlers cannot swallow it) closes
- * the transient card. Escape from inside our UI is left to the bubble phase
- * below, so the zone search and the dock can use it first.
+ * A card's zone search with nothing to clear or close: empty, list shut. The
+ * picker leaves that Escape alone, so it should close the card.
+ */
+function isIdleZoneSearch(el: EventTarget | undefined): boolean {
+  return (
+    el instanceof HTMLInputElement &&
+    el.getAttribute('role') === 'combobox' &&
+    el.value === '' &&
+    el.getAttribute('aria-expanded') !== 'true'
+  );
+}
+
+/**
+ * Escape closes the transient card. This runs in the capture phase, before
+ * any page handler: the card takes focus when it opens, so the usual Escape
+ * starts inside our shadow root and then bubbles through the page's `body`,
+ * where a page listener could stop it. Left alone here (for the bubble phase
+ * below): an Escape in a text field of ours that has something to clear (the
+ * zone search clears or closes its list first), and one inside the dock,
+ * which uses it to fold its labels.
  */
 function onKeyDown(e: KeyboardEvent): void {
-  if (e.key !== 'Escape' || fromOurUi(e)) return;
+  if (e.key !== 'Escape') return;
+  if (fromOurUi(e)) {
+    if (dockHost && e.target instanceof Node && dockHost.contains(e.target)) return;
+    const origin = e.composedPath()[0];
+    if (isTextField(origin) && !isIdleZoneSearch(origin)) return;
+  }
   dismissTransient();
 }
 
 /**
- * Escape from inside a card or the dock that nothing there handled (the zone
- * search stops the Escape that clears or closes it) closes the card.
+ * Escape from inside the dock (or a text field of ours) that nothing there
+ * handled closes the card.
  */
 function onKeyDownBubble(e: KeyboardEvent): void {
   if (e.key !== 'Escape' || !fromOurUi(e)) return;
@@ -661,6 +837,8 @@ interface PinSpec {
   readonly placement?: 'pinned' | 'floating';
   /** Exact host position to restore (viewport for floating, page for pinned). */
   readonly box?: { readonly top: number; readonly left: number };
+  /** Width the card was fixed at (see lockWidth), to restore. */
+  readonly width?: string;
   /** Highlight slot (number and color) to take back, when it is free. */
   readonly slot?: number;
 }
@@ -709,9 +887,29 @@ function cascadeFrom(pageX: number, pageY: number, skip?: Pin): { x: number; y: 
 function sourceAnchor(range: Range | null): { x: number; y: number } | null {
   if (!range || range.collapsed || !range.startContainer.isConnected) return null;
   if (typeof range.getBoundingClientRect !== 'function') return null;
-  const r = range.getBoundingClientRect();
+  const r = selectionRect(range);
   if (!r.width && !r.height) return null;
   return { x: r.left + window.scrollX, y: r.bottom + MARGIN + window.scrollY };
+}
+
+/** A px value we set on a host's style, or `fallback` when it is not set. */
+function styleNum(el: HTMLElement, prop: 'top' | 'left', fallback: number): number {
+  const v = parseFloat(el.style.getPropertyValue(prop));
+  return Number.isFinite(v) ? v : fallback;
+}
+
+/**
+ * Fix a card's width at what it is now, so it keeps it when it moves between
+ * pinned and floating (the "floating" tag must not make it wider).
+ */
+function lockWidth(host: HTMLElement): void {
+  const w = host.getBoundingClientRect().width;
+  if (w > 0) host.style.setProperty('width', `${Math.ceil(w)}px`, 'important');
+}
+
+/** Let a card size to its content again (it changed size: compact ↔ full). */
+function unlockWidth(host: HTMLElement): void {
+  host.style.removeProperty('width');
 }
 
 /** Viewport box of a card, clamped so the whole card is on screen. */
@@ -731,9 +929,32 @@ function clampToViewport(host: HTMLElement): { top: number; left: number } {
  */
 function setPlacement(pin: Pin, placement: 'pinned' | 'floating'): void {
   if (pin.placement === placement) return;
+  lockWidth(pin.host);
   if (placement === 'floating') {
     const { top, left } = clampToViewport(pin.host);
-    applyBox(pin.host, 'fixed', top, left);
+    const r = pin.host.getBoundingClientRect();
+    const size = { width: r.width || CARD_MAX_W, height: r.height || EST_HEIGHT };
+    // Keep clear of the other floating cards' headers (painted in page order).
+    const list = Array.from(pins);
+    const i = list.indexOf(pin);
+    const boxOf = (p: Pin): CardBox => {
+      const b = p.host.getBoundingClientRect();
+      return {
+        top: styleNum(p.host, 'top', b.top),
+        left: styleNum(p.host, 'left', b.left),
+        width: b.width || CARD_MAX_W,
+        height: b.height || EST_HEIGHT,
+      };
+    };
+    const floating = (p: Pin): boolean => p !== pin && p.placement === 'floating';
+    const at = fitFloating(
+      { top, left, ...size },
+      list.slice(0, i).filter(floating).map(boxOf),
+      list.slice(i + 1).filter(floating).map(boxOf),
+      { width: window.innerWidth, height: window.innerHeight },
+      dockRect(),
+    );
+    applyBox(pin.host, 'fixed', at.top, at.left);
   } else {
     const anchor = sourceAnchor(pin.range);
     if (anchor) {
@@ -782,6 +1003,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
     const placement = spec.placement ?? 'pinned';
     if (spec.box) applyBox(host, placement === 'floating' ? 'fixed' : 'absolute', spec.box.top, spec.box.left);
     else positionAbsolute(host, px, py);
+    if (spec.width) host.style.setProperty('width', spec.width, 'important');
 
     const root = createRoot(mount);
     const pin: Pin = {
@@ -814,6 +1036,7 @@ function createPin(spec: PinSpec, restore = false): Pin | null {
             onToggleCompact: () => {
               pin.compact = !pin.compact;
               rememberSize(pin.compact);
+              unlockWidth(host);
               pin.render();
               refreshDock();
             },
@@ -901,6 +1124,7 @@ function specOf(pin: Pin): PinSpec {
     placement: pin.placement,
     slot: pin.slot,
     box: Number.isFinite(top) && Number.isFinite(left) ? { top, left } : measured,
+    width: pin.host.style.getPropertyValue('width') || undefined,
   };
 }
 
@@ -908,6 +1132,7 @@ function setAllCompact(compact: boolean): void {
   for (const pin of pins) {
     if (pin.compact === compact) continue;
     pin.compact = compact;
+    unlockWidth(pin.host);
     pin.render();
   }
   rememberSize(compact);
@@ -917,25 +1142,41 @@ function setAllCompact(compact: boolean): void {
 function togglePlacementAll(): void {
   const list = Array.from(pins);
   const allFloating = list.every((p) => p.placement === 'floating');
-  const target = allFloating ? 'pinned' : 'floating';
-  // Floating cards gather in view: cascade the ones that were off screen.
-  let cascade = 0;
-  for (const pin of list) {
-    if (pin.placement === target) continue;
-    const before = pin.host.getBoundingClientRect();
-    setPlacement(pin, target);
-    if (target === 'floating') {
-      const offscreen = before.bottom < 0 || before.top > window.innerHeight;
-      if (offscreen) {
-        const top = Math.min(window.innerHeight - EST_HEIGHT - MARGIN, 64 + cascade * 28);
-        const left = Math.max(MARGIN, window.innerWidth - CARD_MAX_W - 24 - cascade * 28);
-        const r = pin.host.getBoundingClientRect();
-        const box = avoidDock({ top: Math.max(MARGIN, top), left }, r.width || CARD_MAX_W, r.height || EST_HEIGHT);
-        applyBox(pin.host, 'fixed', box.top, box.left);
-        cascade += 1;
-      }
-    }
+  if (allFloating) {
+    for (const pin of list) setPlacement(pin, 'pinned');
+    refreshDock();
+    return;
   }
+  // Every card floats. Cards on screen want to stay where they are; the ones
+  // scrolled away gather near the top right. Then lay them all out (in page
+  // order, later ones painted on top) so no card hides another's header.
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let gathered = 0;
+  const wanted: CardBox[] = list.map((pin) => {
+    const r = pin.host.getBoundingClientRect();
+    const width = r.width || CARD_MAX_W;
+    const height = r.height || EST_HEIGHT;
+    const offscreen = r.bottom < 0 || r.top > vh;
+    if (pin.placement === 'pinned' && offscreen) {
+      const top = 64 + gathered * FLOAT_STEP;
+      const left = vw - width - 24 - gathered * FLOAT_STEP;
+      gathered += 1;
+      return { top, left, width, height };
+    }
+    return { top: r.top, left: r.left, width, height };
+  });
+  const at = layoutFloating(wanted, { width: vw, height: vh }, dockRect());
+  list.forEach((pin, i) => {
+    const box = at[i];
+    if (!box) return;
+    lockWidth(pin.host);
+    applyBox(pin.host, 'fixed', box.top, box.left);
+    if (pin.placement !== 'floating') {
+      pin.placement = 'floating';
+      pin.render();
+    }
+  });
   refreshDock();
 }
 
@@ -1140,7 +1381,7 @@ function readSelection(): { text: string; rect: DOMRect; range: Range | null } |
   let range: Range | null = null;
   try {
     range = sel.getRangeAt(0);
-    rect = range.getBoundingClientRect();
+    rect = selectionRect(range);
   } catch {
     return null;
   }

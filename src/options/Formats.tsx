@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { Fragment, useId, useMemo, useState } from 'react';
 import type { CustomFormat, Preferences } from '../types';
 import { BUILTIN_FORMATS } from '../lib/builtin-formats';
 import { compileFormat, layoutMatches, matchCustomFormat, TOKEN_REFERENCE, KNOWN_GROUPS } from '../lib/custom-formats';
@@ -12,6 +12,30 @@ interface Props {
 }
 
 /** An accessible on/off switch. */
+/**
+ * Split a format example at the places a line may break: before the ISO "T"
+ * between digits, before "[", and after "," or a space. "1999-03-22T05:06:07,000[Europe/Paris]"
+ * gives "1999-03-22", "T05:06:07,", "000", "[Europe/Paris]".
+ */
+export function examplePieces(text: string): string[] {
+  return text.split(/(?<=\d)(?=T\d)|(?=\[)|(?<=,)(?! )|(?<= )/).filter((p) => p.length > 0);
+}
+
+/** An example as code whose pieces never break inside (see .tzx-ex-piece). */
+function ExampleCode({ text }: { readonly text: string }): JSX.Element {
+  const pieces = examplePieces(text);
+  return (
+    <code>
+      {pieces.map((p, i) => (
+        <Fragment key={i}>
+          {i > 0 && <wbr />}
+          <span className="tzx-ex-piece">{p}</span>
+        </Fragment>
+      ))}
+    </code>
+  );
+}
+
 export function Switch({
   checked,
   label,
@@ -125,7 +149,7 @@ function BuiltinList({ prefs, update }: Props): JSX.Element {
                   {f.examples.map((ex, i) => (
                     <span key={ex}>
                       {i > 0 && ', '}
-                      <code>{ex}</code>
+                      <ExampleCode text={ex} />
                     </span>
                   ))}
                 </span>
