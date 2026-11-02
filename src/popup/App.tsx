@@ -4,6 +4,7 @@ import { useSyncedPreferences } from '../lib/use-synced-prefs';
 import { SITE_CLOCK_URL } from '../lib/site';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { getBuildInfo } from '../lib/build-info';
+import { AccessBanner } from './AccessBanner';
 import { Converter } from './Converter';
 import { EpochTab } from './EpochTab';
 
@@ -57,6 +58,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="tzx-app">
+      <AccessBanner />
       <header className="tzx-app-head">
         <div className="tzx-tabs" role="tablist">
           <button

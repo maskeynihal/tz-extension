@@ -122,6 +122,36 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
   void convertInTab(tab.id, info.frameId ?? 0, info.selectionText ?? '');
 });
 
+/**
+ * A fresh all-sites grant reaches only future navigations: manifest content
+ * scripts are not applied retroactively, so every tab the user already has
+ * open stays dead until it is reloaded. Inject into each one instead. The
+ * content script keeps a single live copy per page (see its INSTANCE_KEY
+ * guard), so landing on a tab that already runs it is a no-op.
+ */
+async function injectIntoOpenTabs(): Promise<void> {
+  if (contentScriptFiles().length === 0 || typeof chrome.tabs?.query !== 'function') return;
+  let tabs: chrome.tabs.Tab[];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    return;
+  }
+  for (const tab of tabs) {
+    if (tab.id === undefined || tab.id < 0) continue;
+    // inject() swallows restricted pages (browser UI, the web store) itself.
+    await inject(tab.id, 0);
+  }
+}
+
+// Exposed for the e2e suite, which cannot drive a permission prompt.
+(globalThis as unknown as { tzxInjectIntoOpenTabs?: typeof injectIntoOpenTabs }).tzxInjectIntoOpenTabs =
+  injectIntoOpenTabs;
+
+chrome.permissions?.onAdded?.addListener(() => {
+  void injectIntoOpenTabs();
+});
+
 /** Open settings; with a section, open a tab scrolled to it (openOptionsPage takes no anchor). */
 function openSettings(section: string | undefined): void {
   const page = chrome.runtime.getManifest().options_page;
