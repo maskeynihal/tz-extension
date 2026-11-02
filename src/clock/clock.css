@@ -209,7 +209,8 @@ body:has(> #root > .tzc-app) {
 /* Scrubber */
 .tzc-scrub-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
 .tzc-scrub-head .tzc-panel-title { margin: 0; }
-.tzc-scrub-head .tzc-btn { margin-left: auto; }
+/* The picker and the Now button travel together at the end of the head row. */
+.tzc-scrub-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .tzc-plan-chip, .tzc-live-chip {
   display: inline-flex; align-items: center; gap: 6px; font-size: 0.8125rem;
   border-radius: 999px; padding: 3px 10px; font-variant-numeric: tabular-nums;
@@ -262,6 +263,91 @@ body:has(> #root > .tzc-app) {
 .tzc-scale-btn:hover { color: var(--tzc-ink); border-color: var(--tz-border-brand); }
 .tzc-scale-btn[aria-pressed='true'] { color: var(--tz-brand); font-weight: 600; }
 .tzc-hint { margin: 8px 0 0; font-size: 0.75rem; color: var(--tzc-sub); }
+
+/* ---------- Date & time picker ---------- */
+.tzc-dp { position: relative; }
+.tzc-dp-trigger { font-variant-numeric: tabular-nums; }
+.tzc-dp-trigger.is-set { border-color: var(--tz-border-brand); background: var(--tz-brand-softer); }
+.tzc-dp-trigger[aria-expanded='true'] { border-color: var(--tz-brand); }
+
+.tzc-dp-pop {
+  position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; width: 304px;
+  padding: 12px; border-radius: var(--tzc-radius);
+  background: var(--tz-surface); border: 1px solid var(--tzc-line);
+  box-shadow: var(--tz-shadow-pop);
+  animation: tzc-dp-in 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes tzc-dp-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tzc-dp-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.tzc-dp-month {
+  flex: 1; text-align: center; color: var(--tzc-ink);
+  font-size: 0.9375rem; font-weight: var(--tz-fw-semibold); letter-spacing: -0.01em;
+}
+.tzc-dp-nav { width: 30px; height: 30px; flex: none; color: var(--tzc-sub); }
+.tzc-dp-nav:hover { color: var(--tzc-ink); }
+
+.tzc-dp-grid { display: flex; flex-direction: column; gap: 2px; }
+.tzc-dp-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
+.tzc-dp-wd {
+  display: grid; place-items: center; height: 24px;
+  font-size: 0.6875rem; font-weight: var(--tz-fw-bold); letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--tzc-sub);
+}
+.tzc-dp-cell { display: block; min-width: 0; }
+.tzc-dp-day {
+  width: 100%; height: 36px; padding: 0; border-radius: 9px;
+  border: 1px solid transparent; background: transparent; color: var(--tz-body);
+  font: inherit; font-size: 0.875rem; font-weight: var(--tz-fw-medium);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+.tzc-dp-day:hover { background: color-mix(in srgb, var(--tzc-sub) 14%, transparent); color: var(--tzc-ink); }
+/* Today is outlined; the selected day is filled. Both readable at AA on the
+   card surface, and they can be the same day without either disappearing. */
+.tzc-dp-day.is-today { border-color: var(--tz-border-brand); color: var(--tz-brand-strong); font-weight: var(--tz-fw-bold); }
+.tzc-dp-day.is-selected {
+  background: var(--tz-brand); border-color: var(--tz-brand); color: #fff; font-weight: var(--tz-fw-semibold);
+}
+:root[data-theme='dark'] .tzc-dp-day.is-selected { color: #0b0b1e; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not([data-theme='dark']) .tzc-dp-day.is-selected { color: #0b0b1e; }
+}
+
+.tzc-dp-time { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.tzc-dp-num {
+  width: 60px; font: inherit; font-size: 0.9375rem; font-variant-numeric: tabular-nums;
+  text-align: center; padding: 8px 6px; border-radius: 10px;
+  border: 1px solid var(--tz-border-medium); background: var(--tz-surface); color: var(--tzc-ink);
+}
+.tzc-dp-num:focus-visible { border-color: var(--tz-brand); box-shadow: var(--tzc-ring); outline: none; }
+.tzc-dp-colon { color: var(--tzc-sub); font-weight: var(--tz-fw-bold); }
+.tzc-dp-mer { margin-left: auto; }
+
+.tzc-dp-hint { margin: 10px 0 0; font-size: 0.6875rem; line-height: 1.45; color: var(--tzc-sub); }
+.tzc-dp-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+/* The shared gap / overlap wording, under the planner's head row. */
+.tzc-dst-note {
+  margin: 8px 0 0; padding: 7px 10px; border-radius: 10px;
+  font-size: 0.8125rem; line-height: 1.45;
+  color: var(--tzc-ink); background: var(--tz-warning-soft);
+  border: 1px solid color-mix(in srgb, var(--tz-warning) 45%, transparent);
+}
+
+/* Phones: the popover spans the panel instead of hanging off its right edge,
+   so nothing can push the page sideways. */
+@media (max-width: 560px) {
+  .tzc-dp { position: static; }
+  .tzc-dp-pop { left: 0; right: 0; width: auto; top: calc(100% + 8px); }
+  .tzc-scrub { position: relative; }
+  .tzc-scrub-tools { flex-wrap: wrap; }
+  .tzc-dp-trigger { max-width: 100%; }
+  .tzc-dp-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
 /* Phones: every other preset (−12h, Now, +12h, +24h, +36h), so the labels
    don't run together; the slider still reaches every quarter hour. */
 @media (max-width: 480px) {

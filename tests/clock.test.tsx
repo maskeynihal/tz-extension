@@ -156,6 +156,30 @@ describe('ClockApp', () => {
     expect(screen.queryByText('Planning:')).not.toBeInTheDocument();
   });
 
+  it('offers both ways to plan, and each one takes over from the other', async () => {
+    await mount();
+    const picker = document.querySelector<HTMLElement>('[data-dp-trigger]');
+    expect(picker).toHaveTextContent('Pick date & time');
+    const slider = screen.getByLabelText('Shift all clocks') as HTMLInputElement;
+
+    // The scrubber alone: the picker stays empty.
+    fireEvent.change(slider, { target: { value: '8' } });
+    expect(timeOf('UTC')).toBe('22:00');
+    expect(picker).toHaveTextContent('Pick date & time');
+
+    // A picked date the scrubber cannot reach, then the scrubber takes back over.
+    fireEvent.click(picker!);
+    fireEvent.click(document.querySelector<HTMLElement>('button[data-day="2024-01-22"]')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(timeOf('UTC-08:00')).toBe('12:00');
+    expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Mon, Jan 22 12:00 in UTC-08:00/);
+    // The slider sits at its "now" mark: no position stands for a date days out.
+    expect(slider.value).toBe('0');
+    fireEvent.change(slider, { target: { value: '-4' } });
+    expect(timeOf('UTC')).toBe('19:00');
+    expect(picker).toHaveTextContent('Pick date & time');
+  });
+
   it('removes a zone and persists it', async () => {
     await mount();
     fireEvent.click(screen.getByRole('button', { name: 'Remove UTC' }));

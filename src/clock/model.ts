@@ -1,7 +1,15 @@
 // Pure helpers for the world clock: no React, no DOM. Unit-tested through
 // the Clock component and directly where the maths is fiddly.
-import { displayZoneName, offsetMinutesAt, resolveZone, sameZone, zoneLabel } from '../lib/tz';
+import {
+  displayZoneName,
+  offsetMinutesAt,
+  resolveZone,
+  sameZone,
+  wallClockToInstant,
+  zoneLabel,
+} from '../lib/tz';
 import { wallFieldsAt } from '../lib/wallclock';
+import { describeWallClock } from '../lib/wall-note';
 import type { Preferences } from '../types';
 
 /** Scrubber range, in 15-minute steps: −12 h … +36 h. */
@@ -276,4 +284,181 @@ export function makeHome(prefs: Preferences, zone: string): Preferences {
     else targets = [prev, ...targets];
   }
   return { ...prefs, homeZone: zone, targetZones: targets };
+}
+
+// ---------------------------------------------------------------------------
+// Planning: the scrubber's offset, or an outright date and time.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the board shows.
+ * - `live`: the current time.
+ * - `offset`: the scrubber, −12 h … +36 h in 15-minute steps (see shownInstant).
+ * - `absolute`: an instant picked outright, which the scrubber cannot reach.
+ *
+ * A union rather than extra arguments on shownInstant/minutesFromNow: those
+ * two carry the scrubber's snapping rules, which an absolute pick has nothing
+ * to do with, and their signatures are depended on all over the tests.
+ */
+export type Plan =
+  | { readonly kind: 'live' }
+  | { readonly kind: 'offset'; readonly steps: number; readonly exact: boolean }
+  | { readonly kind: 'absolute'; readonly epochMs: number };
+
+export const LIVE: Plan = { kind: 'live' };
+
+/** A scrubber plan. `steps === 0` is live, so callers need no special case. */
+export function offsetPlan(steps: number, exact = false): Plan {
+  return steps === 0 ? LIVE : { kind: 'offset', steps, exact };
+}
+
+/** A picked instant. Anything non-finite falls back to live rather than showing NaN. */
+export function absolutePlan(epochMs: number): Plan {
+  return Number.isFinite(epochMs) ? { kind: 'absolute', epochMs } : LIVE;
+}
+
+export function isPlanning(plan: Plan): boolean {
+  return plan.kind !== 'live';
+}
+
+/** The instant every card shows for a plan. */
+export function planInstant(nowMs: number, plan: Plan): number {
+  if (plan.kind === 'live') return nowMs;
+  if (plan.kind === 'absolute') return plan.epochMs;
+  return shownInstant(nowMs, plan.steps, plan.exact);
+}
+
+/**
+ * Whole minutes from the current minute to the planned instant, for every
+ * kind of plan: the same honest "from now" figure minutesFromNow gives the
+ * scrubber, so a pick two weeks out reports its real distance.
+ */
+export function planMinutesFromNow(nowMs: number, plan: Plan): number {
+  if (plan.kind === 'live') return 0;
+  if (plan.kind === 'offset') return minutesFromNow(nowMs, plan.steps, plan.exact);
+  return Math.round((plan.epochMs - Math.floor(nowMs / MINUTE_MS) * MINUTE_MS) / MINUTE_MS);
+}
+
+const DAY_MINUTES = 1440;
+
+/**
+ * "from now" for any distance. Hours and minutes within two days ("+36h",
+ * "+23h 47m"), days beyond ("+3d 4h", "+10d"). Two days, because the
+ * scrubber's own range tops out at +36 h — so every slider plan keeps reading
+ * in hours, as it always has — and a meeting inside two days is still thought
+ * of in hours.
+ */
+export function formatSpan(minutes: number): string | null {
+  if (Math.abs(minutes) < 2 * DAY_MINUTES) return formatDiff(minutes);
+  const sign = minutes > 0 ? '+' : '−';
+  const abs = Math.abs(minutes);
+  const parts = [`${Math.floor(abs / DAY_MINUTES)}d`];
+  const h = Math.floor((abs % DAY_MINUTES) / 60);
+  const m = abs % 60;
+  if (h) parts.push(`${h}h`);
+  if (m) parts.push(`${m}m`);
+  return `${sign}${parts.join(' ')}`;
+}
+
+// ---------------------------------------------------------------------------
+// Calendar arithmetic for the picker. All of it on UTC fields: a local Date
+// would let the browser's own zone (and its DST gaps) decide which day a cell
+// belongs to.
+// ---------------------------------------------------------------------------
+
+/** A date and time as written on a wall clock. `mo` is 1-12. */
+export interface WallPick {
+  readonly y: number;
+  readonly mo: number;
+  readonly d: number;
+  readonly h: number;
+  readonly mi: number;
+}
+
+export interface YearMonth {
+  readonly y: number;
+  readonly mo: number;
+}
+
+/** Midnight of a calendar day read as UTC. setUTCFullYear, so years 0–99 aren't 19xx. */
+function dayUtc(y: number, mo: number, d: number): number {
+  const t = new Date(Date.UTC(2000, mo - 1, d));
+  t.setUTCFullYear(y);
+  return t.getTime();
+}
+
+/** Length of a month, 1-12, leap years included. */
+export function daysInMonth(y: number, mo: number): number {
+  if (mo === 2) return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 29 : 28;
+  return mo === 4 || mo === 6 || mo === 9 || mo === 11 ? 30 : 31;
+}
+
+/** Weekday of a calendar day, 0 = Sunday, as the rest of the model numbers them. */
+export function weekdayOf(y: number, mo: number, d: number): number {
+  return new Date(dayUtc(y, mo, d)).getUTCDay();
+}
+
+/** Step a month, carrying the year. */
+export function addMonths(ym: YearMonth, delta: number): YearMonth {
+  const n = ym.y * 12 + (ym.mo - 1) + delta;
+  return { y: Math.floor(n / 12), mo: (((n % 12) + 12) % 12) + 1 };
+}
+
+/** Step a pick by whole days, keeping its time of day. */
+export function addDays(pick: WallPick, delta: number): WallPick {
+  const d = new Date(dayUtc(pick.y, pick.mo, pick.d) + delta * 86_400_000);
+  return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), h: pick.h, mi: pick.mi };
+}
+
+/** A pick moved into another month, clamped to that month's length (31 Jan → 28 Feb). */
+export function withMonth(pick: WallPick, ym: YearMonth): WallPick {
+  return { ...pick, y: ym.y, mo: ym.mo, d: Math.min(pick.d, daysInMonth(ym.y, ym.mo)) };
+}
+
+/**
+ * The weeks of a month as day numbers, Sunday first, with nulls padding the
+ * first and last weeks so every row is seven cells.
+ */
+export function monthGrid(y: number, mo: number): (number | null)[][] {
+  const cells: (number | null)[] = Array<number | null>(weekdayOf(y, mo, 1)).fill(null);
+  for (let d = 1; d <= daysInMonth(y, mo); d += 1) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
+/** The wall-clock date and time of an instant in a zone, to seed the picker. */
+export function wallPick(epochMs: number, zone: string): WallPick {
+  const d = wallDate(epochMs, zone);
+  return {
+    y: d.getUTCFullYear(),
+    mo: d.getUTCMonth() + 1,
+    d: d.getUTCDate(),
+    h: d.getUTCHours(),
+    mi: d.getUTCMinutes(),
+  };
+}
+
+/** "2026-03-08T02:30:00", the shape wallClockToInstant parses. */
+export function pickToIso(pick: WallPick): string {
+  return `${String(pick.y).padStart(4, '0')}-${pad(pick.mo)}-${pad(pick.d)}T${pad(pick.h)}:${pad(pick.mi)}:00`;
+}
+
+export interface PickReading {
+  readonly epochMs: number;
+  /** The shared note when the picked time fell in a DST gap or overlap, else null. */
+  readonly note: string | null;
+}
+
+/**
+ * The instant a picked date and time names on `zone`'s wall clock, with the
+ * project's gap and overlap conventions and the one shared wording. Goes
+ * through wallClockToInstant, like the popup's readWallInput, so no local
+ * Date is built anywhere and the browser's zone cannot leak in.
+ */
+export function readWallPick(pick: WallPick, zone: string, hour12 = false): PickReading | null {
+  const r = wallClockToInstant(pickToIso(pick), zone);
+  if (!r || !Number.isFinite(r.epochMs)) return null;
+  return { epochMs: r.epochMs, note: r.wallClock ? describeWallClock(r.wallClock, r.epochMs, zone, hour12) : null };
 }
