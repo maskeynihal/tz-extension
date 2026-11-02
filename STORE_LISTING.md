@@ -111,15 +111,23 @@ that tab does not have it yet. Only files packaged in the extension are injected
 no remote code, no arbitrary code strings.
 ```
 
-### Permission justification — host permissions (content script on all sites)
+### Permission justification — host permissions (`<all_urls>`)
 
 ```
 The core feature is "select to convert": the user highlights a time on any web
 page and the extension shows it in their timezones in a small popover. To work
-on whatever page the user is reading, the content script must run on all sites.
-It only reads the text the user has actively selected, in order to parse a time,
-and injects a popover UI. It does not read, collect, or transmit page content,
-and makes no network requests.
+on whatever page the user is reading, the content script must run on all sites,
+so the extension declares host access to all sites.
+
+The access has to be standing rather than granted per click. The feature is
+triggered by the user selecting text on the page, not by clicking the
+extension's icon, so there is no click for the browser to hang temporary
+access on. With activeTab alone the extension would convert nothing until the
+user first opened its popup in that tab.
+
+It only reads the text the user has actively selected, in order to parse a
+time, and injects a popover UI. It does not read, collect, or transmit page
+content, and makes no network requests.
 ```
 
 ### Remote code justification
@@ -149,8 +157,8 @@ no network requests of any kind.
 
 It is a conservative flag triggered by the content script matching `<all_urls>`,
 not by any actual remote code. The manifest declares `permissions:
-["storage", "contextMenus", "activeTab", "scripting"]`, an empty
-`host_permissions`, no custom CSP, and no `eval`. `scripting` only injects the
+["storage", "contextMenus", "activeTab", "scripting"]`, `host_permissions:
+["<all_urls>"]`, no custom CSP, and no `eval`. `scripting` only injects the
 extension's own packaged content-script file, so the honest answer is that no
 remote code is used.
 

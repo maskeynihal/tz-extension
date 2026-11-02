@@ -164,12 +164,18 @@ test.describe('draggable zones in the popup and the selection card', () => {
     await page.keyboard.press('Enter');
     await expect.poll(names).toEqual([before[0], last, ...before.slice(1, -1)]);
     // Escape during a mouse drag puts the row back and keeps the card.
+    // The keyboard drop above has to have let go of the row first: a press
+    // that starts no drag is an Escape with nothing held, which closes the
+    // card by design. The lifted row carries data-sort-dragging, so wait for
+    // it rather than for the drop to settle on its own.
+    await expect(list.locator('[data-sort-handle][aria-pressed="true"]')).toHaveCount(0);
     const order = await names();
     const grip = list.getByRole('button', { name: `Drag to reorder ${order[0]}` });
     const g = (await grip.boundingBox())!;
     await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
     await page.mouse.down();
     await page.mouse.move(g.x + g.width / 2, g.y + 120, { steps: 6 });
+    await expect(list.locator('li[data-sort-dragging]')).toHaveCount(1);
     await page.keyboard.press('Escape');
     await page.mouse.up();
     await expect(card).toBeVisible();

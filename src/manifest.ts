@@ -48,8 +48,13 @@ export default defineManifest({
   },
   // storage: preferences. contextMenus: the right-click "Convert" item.
   // activeTab + scripting: when that item is clicked in a tab that has no
-  // content script yet (opened before install/update, or a Firefox site
-  // without granted access), inject it into that one tab on demand.
+  // content script yet (opened before install/update, or a site whose access
+  // the user narrowed), inject it into that one tab on demand.
   permissions: ['storage', 'contextMenus', 'activeTab', 'scripting'],
-  host_permissions: [],
+  // Standing access to every site, matching the content script above, so
+  // select-to-convert works from the moment the extension is installed. With
+  // activeTab alone the browser hands over a tab only when the user invokes
+  // the extension, and reports site access as "on click"; a reader who just
+  // highlights a time never invokes it, so nothing would convert.
+  host_permissions: ['<all_urls>'],
 });

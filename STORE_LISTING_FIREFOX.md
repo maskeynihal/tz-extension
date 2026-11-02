@@ -89,9 +89,12 @@ Permissions: "storage" (user preferences), "contextMenus" (one right-click
 "Convert" item for selected text), and "activeTab" + "scripting" (after that
 menu click, inject the add-on's own packaged content script into the current tab
 if it is not running there yet, e.g. a site the user has not granted access to).
-No host permissions declared beyond the content script needed for
-select-to-convert, which reads the user's text selection to parse a time and
-renders a popover. No network requests are made anywhere in the add-on.
+Host permissions are declared for all sites, matching the content script that
+select-to-convert needs: the feature starts when the user highlights text on
+the page rather than by clicking the add-on, so there is no click for the
+browser to hang temporary access on. It reads the user's text selection to
+parse a time and renders a popover. No network requests are made anywhere in
+the add-on.
 
 Build: Vite + @crxjs/vite-plugin, React 18 (time zone maths uses the browser's Intl API; no time library). The Firefox manifest is
 produced by scripts/firefox-manifest.mjs, which converts the background to an
