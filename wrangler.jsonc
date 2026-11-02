@@ -1,0 +1,6 @@
+{
+  "name": "site-tz",
+  "compatibility_date": "2026-11-02",
+  "assets": { "directory": "./docs" },
+  "routes": [{ "pattern": "tz.nihal.com.np", "custom_domain": true }]
+}
