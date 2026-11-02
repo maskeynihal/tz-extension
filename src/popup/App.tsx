@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Preferences } from '../types';
 import { useSyncedPreferences } from '../lib/use-synced-prefs';
+import { SITE_CLOCK_URL } from '../lib/site';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { getBuildInfo } from '../lib/build-info';
 import { Converter } from './Converter';
@@ -33,14 +34,19 @@ export function App(): JSX.Element {
     updatePrefs({ ...prefs, theme: order[(i + 1) % order.length] ?? 'system' });
   }
 
+  /**
+   * Open the world clock on the website. The extension no longer carries its
+   * own copy of the page: it is the same app either way, and a tab on the site
+   * can be bookmarked, shared and left open.
+   */
   function openWorldClock(): void {
-    const page = 'src/clock/index.html';
-    if (typeof chrome !== 'undefined' && chrome.runtime?.getURL && chrome.tabs?.create) {
-      const url = chrome.runtime.getURL(page);
-      void Promise.resolve(chrome.tabs.create({ url })).catch(() => window.open(url, '_blank', 'noopener'));
+    if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+      void Promise.resolve(chrome.tabs.create({ url: SITE_CLOCK_URL })).catch(() =>
+        window.open(SITE_CLOCK_URL, '_blank', 'noopener'),
+      );
       return;
     }
-    window.open(new URL('../clock/index.html', window.location.href).href, '_blank', 'noopener');
+    window.open(SITE_CLOCK_URL, '_blank', 'noopener');
   }
 
   function openOptions(): void {
@@ -75,7 +81,7 @@ export function App(): JSX.Element {
             type="button"
             className="tzx-icon-btn"
             aria-label="Open world clock"
-            title="World clock"
+            title="World clock (opens tz.nihal.com.np)"
             onClick={openWorldClock}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false" style={{ display: 'block' }}>

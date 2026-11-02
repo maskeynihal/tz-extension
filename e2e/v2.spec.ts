@@ -939,34 +939,8 @@ test.describe('v2 features', () => {
     await opt.close();
   });
 
-  test('world clock opens from the popup and shows every zone', async () => {
-    await setPrefs({ homeZone: 'UTC', targetZones: ['UTC+05:45', 'abbr:PDT'] });
-    const popup = await context.newPage();
-    await popup.goto(`chrome-extension://${extId}/src/popup/index.html`);
-    const opened = context.waitForEvent('page');
-    await popup.getByRole('button', { name: 'Open world clock' }).click();
-    const clock = await opened;
-    await clock.waitForLoadState();
-    expect(clock.url()).toBe(`chrome-extension://${extId}/src/clock/index.html`);
-    await expect(clock.getByRole('heading', { level: 1, name: 'World clock' })).toBeVisible();
-    await expect(clock.locator('.tzc-card')).toHaveCount(3);
-    await expect(clock.locator('.tzc-card[data-zone="UTC+05:45"]')).toContainText('+5h 45m');
-    await expect(clock.locator('.tzc-card[data-zone="abbr:PDT"]')).toContainText('−7h');
-    // Scrub two hours ahead and back.
-    const slider = clock.getByLabel('Shift all clocks');
-    await slider.focus();
-    for (let i = 0; i < 8; i++) await clock.keyboard.press('ArrowRight');
-    await expect(clock.getByText('Planning:')).toBeVisible();
-    await clock.getByRole('button', { name: 'Back to now' }).click();
-    await expect(clock.getByText('Planning:')).toHaveCount(0);
-    const errors: string[] = [];
-    clock.on('pageerror', (e) => errors.push(e.message));
-    await clock.reload();
-    await expect(clock.locator('.tzc-card')).toHaveCount(3);
-    expect(errors).toEqual([]);
-    await clock.close();
-    await popup.close();
-  });
+  // The world clock button is covered in e2e/clock-redirect.spec.ts, which
+  // needs its own context to keep the site off the network.
 
   // --- Round 6 ---------------------------------------------------------------
 

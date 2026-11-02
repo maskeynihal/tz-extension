@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 // src/manifest.ts cannot be imported here: it calls crxjs's defineManifest,
@@ -30,5 +30,25 @@ describe('site access', () => {
   /** The Firefox rewrite only touches background, gecko and web_accessible_resources. */
   it('the Firefox manifest step leaves host permissions alone', () => {
     expect(firefoxPatch).not.toMatch(/host_permissions/);
+  });
+});
+
+describe('the world clock is a website page, not an extension page', () => {
+  const popup = readFileSync(resolve(__dirname, '../src/popup/App.tsx'), 'utf8');
+  const vite = readFileSync(resolve(__dirname, '../vite.config.ts'), 'utf8');
+  const clockDir = resolve(__dirname, '../src/clock');
+
+  it('the popup opens the site URL and no extension page', () => {
+    expect(popup).toMatch(/SITE_CLOCK_URL/);
+    expect(popup).not.toMatch(/src\/clock\/index\.html/);
+  });
+
+  it('nothing builds an extension clock page any more', () => {
+    expect(existsSync(resolve(clockDir, 'index.html'))).toBe(false);
+    expect(existsSync(resolve(clockDir, 'main.tsx'))).toBe(false);
+    expect(vite).not.toMatch(/src\/clock\/index\.html/);
+    // The shared app the website mounts is still here.
+    expect(existsSync(resolve(clockDir, 'Clock.tsx'))).toBe(true);
+    expect(existsSync(resolve(clockDir, 'mount.tsx'))).toBe(true);
   });
 });
