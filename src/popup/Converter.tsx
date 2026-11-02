@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import type { Preferences } from '../types';
 import { resolveLocalZone } from '../types';
-import { viewInZone, wallClockToEpochMs, epochMsToWallClock, isValidZone } from '../lib/tz';
+import { viewInZone, isValidZone, sameZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from './ZonePicker';
+import { SortableList } from '../options/SortableZoneList';
+import { readWallInput } from './wallnote';
 
 export interface ConverterProps {
   readonly prefs: Preferences;
@@ -12,44 +14,60 @@ export interface ConverterProps {
 
 const LOCAL_ZONE = resolveLocalZone();
 
-/** Format a Date as the value a datetime-local input expects (no seconds). */
-function toLocalInputValue(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+/**
+ * The value a datetime-local input expects (no seconds) for an instant shown
+ * as the wall clock of `zone`. Formatted in the zone itself, so the browser's
+ * own timezone (and its DST gaps) never leaks into the digits.
+ */
+function wallInputValue(epochMs: number, zone: string): string {
+  const v = viewInZone(epochMs, zone, false);
+  return `${v.date}T${v.time.slice(0, 5)}`;
 }
 
 export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element {
   const [sourceZone, setSourceZone] = useState(prefs.homeZone);
+  // Start at "now", written as the source zone's wall clock.
   const [localValue, setLocalValue] = useState<string>(() =>
-    toLocalInputValue(new Date()),
+    isValidZone(prefs.homeZone) ? wallInputValue(Date.now(), prefs.homeZone) : '',
   );
 
   const result = useMemo(() => {
-    if (!localValue) return { error: 'Pick a date and time.' as string | null, epochMs: null as number | null };
-    if (!isValidZone(sourceZone)) return { error: 'Invalid source timezone.', epochMs: null };
-    const iso = localValue.length === 16 ? `${localValue}:00` : localValue;
-    try {
-      const epochMs = wallClockToEpochMs(iso, sourceZone);
-      if (!Number.isFinite(epochMs)) return { error: 'Could not parse that time.', epochMs: null };
-      return { error: null, epochMs };
-    } catch {
-      return { error: 'Could not parse that time.', epochMs: null };
-    }
-  }, [localValue, sourceZone]);
+    if (!localValue)
+      return { error: 'Pick a date and time.' as string | null, epochMs: null as number | null, note: null as string | null };
+    if (!isValidZone(sourceZone)) return { error: 'Invalid source timezone.', epochMs: null, note: null };
+    const r = readWallInput(localValue, sourceZone, prefs.hour12);
+    if (!r) return { error: 'Could not parse that time.', epochMs: null, note: null };
+    return { error: null, epochMs: r.epochMs, note: r.note };
+  }, [localValue, sourceZone, prefs.hour12]);
 
   function setNow(): void {
-    setLocalValue(toLocalInputValue(epochMsToWallClock(Date.now(), sourceZone)));
+    if (isValidZone(sourceZone)) setLocalValue(wallInputValue(Date.now(), sourceZone));
+  }
+
+  /**
+   * Change the source zone but keep the same instant: the input is rewritten
+   * as the new zone's wall clock, so every result stays put.
+   */
+  function changeSource(zone: string): void {
+    if (!isValidZone(zone)) return;
+    if (result.epochMs !== null) setLocalValue(wallInputValue(result.epochMs, zone));
+    setSourceZone(zone);
   }
 
   function addTarget(zone: string): void {
-    if (!isValidZone(zone) || prefs.targetZones.includes(zone)) return;
+    if (!isValidZone(zone) || prefs.targetZones.some((z) => sameZone(z, zone))) return;
     onPrefsChange({ ...prefs, targetZones: [...prefs.targetZones, zone] });
   }
   function removeTarget(zone: string): void {
     onPrefsChange({ ...prefs, targetZones: prefs.targetZones.filter((z) => z !== zone) });
   }
+  function reorderTargets(next: string[]): void {
+    onPrefsChange({ ...prefs, targetZones: next });
+  }
 
-  const sourceIsLocal = sourceZone === LOCAL_ZONE;
+  // Compare through sameZone: the engine may report a legacy name
+  // ("Asia/Katmandu") for the zone the lists call "Asia/Kathmandu".
+  const sourceIsLocal = sameZone(sourceZone, LOCAL_ZONE);
 
   return (
     <section className="tzx-pane">
@@ -61,27 +79,33 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
             type="datetime-local"
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
+            aria-describedby={result.note ? 'tzx-dt-note' : undefined}
           />
           <button type="button" className="tzx-btn" onClick={setNow}>
             Now
           </button>
         </div>
+        {result.note && (
+          <p className="tzx-wall-note" id="tzx-dt-note">
+            {result.note}
+          </p>
+        )}
       </div>
 
       <div className="tzx-field">
         <span className="tzx-field-label">Source timezone</span>
         <div className="tzx-row-inline" style={{ alignItems: 'center', marginBottom: 6 }}>
-          <div className="tzx-current-zone" style={{ margin: 0, flex: 1 }}>{sourceZone}</div>
+          <div className="tzx-current-zone" style={{ margin: 0, flex: 1 }}>{zoneLabel(sourceZone)}</div>
           <button
             type="button"
             className={sourceIsLocal ? 'tzx-chip tzx-chip-on' : 'tzx-chip'}
             title={
               sourceIsLocal
-                ? `Source is your local timezone (${LOCAL_ZONE})`
-                : `Use your local timezone (${LOCAL_ZONE})`
+                ? `Source is your local timezone (${zoneLabel(LOCAL_ZONE)})`
+                : `Use your local timezone (${zoneLabel(LOCAL_ZONE)})`
             }
             aria-pressed={sourceIsLocal}
-            onClick={() => setSourceZone(LOCAL_ZONE)}
+            onClick={() => changeSource(LOCAL_ZONE)}
             disabled={!isValidZone(LOCAL_ZONE)}
           >
             Local
@@ -90,7 +114,7 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
         <ZonePicker
           label="Source timezone"
           placeholder="Change source timezone…"
-          onSelect={setSourceZone}
+          onSelect={changeSource}
         />
       </div>
 
@@ -100,24 +124,31 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
         </p>
       ) : (
         <>
-          <div className="tzx-results">
-            {prefs.targetZones.map((zone) => {
+          <SortableList
+            items={prefs.targetZones}
+            label="Converted times"
+            itemLabel={zoneLabel}
+            className="tzx-results"
+            itemClassName="tzx-result-card tzx-result-sortable"
+            onReorder={reorderTargets}
+            onRemove={removeTarget}
+            render={(zone, ctx) => {
               const v = viewInZone(result.epochMs as number, zone, prefs.hour12);
-              const isLocal = zone === LOCAL_ZONE;
+              const isLocal = sameZone(zone, LOCAL_ZONE);
               return (
-                <div className="tzx-result-card" key={zone}>
+                <div className="tzx-result-body">
                   <div className="tzx-result-head">
                     <div className="tzx-result-zone">
-                      {zone}
+                      {zoneLabel(zone)}
                       {isLocal && <span className="tzx-localtag">LOCAL</span>}{' '}
                       <span className="tzx-off">{v.offset}</span>
                     </div>
                     <button
                       type="button"
                       className="tzx-icon-btn tzx-result-del"
-                      aria-label={`Remove ${zone}`}
-                      title={`Remove ${zone}`}
-                      onClick={() => removeTarget(zone)}
+                      aria-label={`Remove ${zoneLabel(zone)}`}
+                      title={`Remove ${zoneLabel(zone)}`}
+                      onClick={ctx.remove}
                     >
                       ✕
                     </button>
@@ -128,8 +159,8 @@ export function Converter({ prefs, onPrefsChange }: ConverterProps): JSX.Element
                   <div className="tzx-result-big">{v.time}</div>
                 </div>
               );
-            })}
-          </div>
+            }}
+          />
           <div className="tzx-field" style={{ marginTop: 10, marginBottom: 0 }}>
             <ZonePicker
               label="Add a timezone"

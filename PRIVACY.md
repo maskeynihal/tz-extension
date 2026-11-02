@@ -28,6 +28,8 @@ The extension saves your preferences using the browser's own storage:
 - Any custom date formats you add, and which built-in formats you switched off
 - Whether the converter opens automatically when you select text
 
+On the website (the online converter and world clock), the same settings are kept in your browser's `localStorage` for that site.
+
 This data lives only in your browser. If you have browser sync enabled, your
 browser may sync it across your own devices through your browser account — we
 never see it and have no access to it. Uninstalling the extension removes it.

@@ -1,11 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { act, render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { Options } from '../src/options/Options';
 import { FormatsSection } from '../src/options/Formats';
 import { NoMatchCard, Popover } from '../src/content/Popover';
 import { DEFAULT_PREFERENCES, type Preferences } from '../src/types';
 import { parseTimes } from '../src/lib/parse';
+import { BUILTIN_FORMATS } from '../src/lib/builtin-formats';
 
 const base: Preferences = { ...DEFAULT_PREFERENCES, homeZone: 'UTC', hour12: false };
 
@@ -53,9 +54,9 @@ describe('FormatsSection', () => {
   it('lists every built-in format with an on/off switch and its regex', () => {
     render(<Harness initial={base} />);
     const list = screen.getByRole('list', { name: 'Built-in formats' });
-    expect(within(list).getAllByRole('listitem')).toHaveLength(7);
-    expect(within(list).getAllByRole('switch')).toHaveLength(7);
-    expect(within(list).getAllByText('Regular expression')).toHaveLength(7);
+    expect(within(list).getAllByRole('listitem')).toHaveLength(BUILTIN_FORMATS.length);
+    expect(within(list).getAllByRole('switch')).toHaveLength(BUILTIN_FORMATS.length);
+    expect(within(list).getAllByText('Regular expression')).toHaveLength(BUILTIN_FORMATS.length);
   });
 
   it('switching a built-in off stores its id and the tester stops matching it', () => {
@@ -286,5 +287,535 @@ describe('settings robustness, round 2', () => {
     });
     expect(screen.getByText(/Not enough room in browser sync storage/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add format' })).toBeDisabled();
+  });
+});
+
+// ---- Tabbed layout, new card settings and the sortable zone list ----------
+
+type SetMock = ReturnType<typeof vi.fn>;
+const syncSet = (): SetMock =>
+  (globalThis as unknown as { chrome: { storage: { sync: { set: SetMock } } } }).chrome.storage.sync.set;
+const lastSaved = (): Preferences | undefined => syncSet().mock.calls.at(-1)?.[0]['tz-extension-prefs'];
+
+/** jsdom has no PointerEvent; a MouseEvent with the pointer fields is enough for React. */
+class FakePointerEvent extends MouseEvent {
+  readonly pointerId: number;
+  readonly pointerType: string;
+  readonly isPrimary: boolean;
+  constructor(type: string, init: PointerEventInit = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 1;
+    this.pointerType = init.pointerType ?? 'mouse';
+    this.isPrimary = init.isPrimary ?? true;
+  }
+}
+
+function stubMatchMedia(reduced: boolean): void {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: reduced && query.includes('prefers-reduced-motion'),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
+/** Rows are 40px tall with a 10px gap, starting 100px down the viewport, in DOM order. */
+function mockRowRects(): void {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const rect = (top: number, height: number): DOMRect =>
+      ({ top, height, bottom: top + height, left: 0, right: 300, width: 300, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    if (this instanceof HTMLElement && this.dataset.sortKey !== undefined && this.parentElement) {
+      const rows = Array.from(this.parentElement.children).filter(
+        (c) => c instanceof HTMLElement && c.dataset.sortKey !== undefined && c.dataset.sortExit === undefined,
+      );
+      return rect(100 + rows.indexOf(this) * 50, 40);
+    }
+    if (this.classList.contains('tzx-sort-list')) return rect(100, this.children.length * 50 - 10);
+    return rect(0, 0);
+  });
+}
+
+/** A Web Animation stand-in that tests can finish by hand. */
+function stubAnimate(): { calls: SetMock; finishAll: () => void } {
+  const anims: EventTarget[] = [];
+  const calls = vi.fn((_keyframes: Keyframe[], _opts?: KeyframeAnimationOptions) => {
+    const a = new EventTarget();
+    Object.assign(a, { cancel: () => a.dispatchEvent(new Event('cancel')), finish: () => a.dispatchEvent(new Event('finish')) });
+    anims.push(a);
+    return a as unknown as Animation;
+  });
+  Object.defineProperty(Element.prototype, 'animate', {
+    configurable: true,
+    writable: true,
+    value: function (this: Element, k: Keyframe[], o?: KeyframeAnimationOptions) {
+      return calls(k, o);
+    },
+  });
+  return { calls, finishAll: () => anims.forEach((a) => a.dispatchEvent(new Event('finish'))) };
+}
+
+const ZONES = ['UTC', 'America/New_York', 'Europe/London', 'Asia/Kathmandu'];
+
+async function renderOptions(): Promise<HTMLElement> {
+  render(<Options />);
+  return screen.findByRole('list', { name: 'Target timezones' });
+}
+
+function rowKeys(list: HTMLElement): string[] {
+  return within(list)
+    .getAllByRole('listitem')
+    .map((li) => li.dataset.sortKey ?? '');
+}
+
+describe('settings layout', () => {
+  const scrollIntoView = vi.fn();
+  beforeEach(() => {
+    window.history.replaceState(null, '', '/');
+    scrollIntoView.mockClear();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, writable: true, value: scrollIntoView });
+  });
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+    vi.unstubAllGlobals();
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('has a section tab bar whose active tab follows clicks', async () => {
+    render(<Options />);
+    const nav = await screen.findByRole('navigation', { name: 'Settings sections' });
+    const links = within(nav).getAllByRole('link');
+    expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['General', '#general'],
+      ['Cards', '#cards'],
+      ['Timezones', '#timezones'],
+      ['Formats', '#formats'],
+    ]);
+    expect(within(nav).getByRole('link', { name: 'General' })).toHaveAttribute('aria-current', 'true');
+
+    fireEvent.click(within(nav).getByRole('link', { name: 'Cards' }));
+    expect(within(nav).getByRole('link', { name: 'Cards' })).toHaveAttribute('aria-current', 'true');
+    expect(within(nav).getByRole('link', { name: 'General' })).not.toHaveAttribute('aria-current');
+    expect(window.location.hash).toBe('#cards');
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('cards'));
+    expect(scrollIntoView.mock.calls.at(-1)?.[0]).toMatchObject({ behavior: 'smooth', block: 'start' });
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 2, name: 'Cards' }));
+  });
+
+  it('jumps without smooth scrolling when motion is reduced', async () => {
+    stubMatchMedia(true);
+    render(<Options />);
+    const nav = await screen.findByRole('navigation', { name: 'Settings sections' });
+    fireEvent.click(within(nav).getByRole('link', { name: 'Timezones' }));
+    expect(scrollIntoView.mock.calls.at(-1)?.[0]).toMatchObject({ behavior: 'auto' });
+  });
+
+  it('groups settings into sections with headings and ids', async () => {
+    render(<Options />);
+    await screen.findByRole('navigation', { name: 'Settings sections' });
+    for (const [id, name] of [
+      ['general', 'General'],
+      ['cards', 'Cards'],
+      ['timezones', 'Timezones'],
+      ['formats', 'Recognized formats'],
+    ] as const) {
+      const section = document.getElementById(id);
+      expect(section).not.toBeNull();
+      expect(within(section as HTMLElement).getByRole('heading', { level: 2, name })).toBeInTheDocument();
+    }
+    const general = document.getElementById('general') as HTMLElement;
+    expect(within(general).getByRole('switch', { name: 'Convert when I select text' })).toBeInTheDocument();
+    expect(within(general).getByRole('combobox', { name: 'Home timezone' })).toBeInTheDocument();
+    const cards = document.getElementById('cards') as HTMLElement;
+    expect(within(cards).getByRole('group', { name: 'Card size on open' })).toBeInTheDocument();
+    expect(within(cards).getByRole('switch', { name: 'Keep selection highlighted' })).toBeInTheDocument();
+  });
+
+  it('follows a deep link to a section after load', async () => {
+    window.history.replaceState(null, '', '#formats');
+    render(<Options />);
+    const nav = await screen.findByRole('navigation', { name: 'Settings sections' });
+    await waitFor(() => expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('formats')));
+    expect(within(nav).getByRole('link', { name: 'Formats' })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('moves the active tab with the section in view (scrollspy)', async () => {
+    let fire: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void) {
+          fire = cb;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    render(<Options />);
+    const nav = await screen.findByRole('navigation', { name: 'Settings sections' });
+    act(() => fire([{ target: document.getElementById('timezones') as Element, isIntersecting: true }]));
+    expect(within(nav).getByRole('link', { name: 'Timezones' })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('saves the card size on open and explains "Last used"', async () => {
+    render(<Options />);
+    const group = await screen.findByRole('group', { name: 'Card size on open' });
+    expect(screen.getByText(/Last used opens the card the way you last left it \(currently: Full\)/)).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole('button', { name: 'Compact' }));
+    expect(within(group).getByRole('button', { name: 'Compact' })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(lastSaved()?.cardSize).toBe('compact'));
+    fireEvent.click(within(group).getByRole('button', { name: 'Last used' }));
+    await waitFor(() => expect(lastSaved()?.cardSize).toBe('last'));
+  });
+
+  it('chooses the clock format with a labelled two-option control', async () => {
+    render(<Options />);
+    const group = await screen.findByRole('group', { name: 'Clock format' });
+    const h12 = within(group).getByRole('button', { name: /^12-hour/ });
+    const h24 = within(group).getByRole('button', { name: /^24-hour/ });
+    // Nothing stored yet: the default is 12-hour.
+    expect(h12).toHaveAttribute('aria-pressed', 'true');
+    expect(h24).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(h24);
+    expect(h24).toHaveAttribute('aria-pressed', 'true');
+    expect(h12).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() => expect(lastSaved()?.hour12).toBe(false));
+    fireEvent.click(h12);
+    await waitFor(() => expect(lastSaved()?.hour12).toBe(true));
+  });
+
+  it('saves the numeric date order', async () => {
+    render(<Options />);
+    const group = await screen.findByRole('group', { name: 'Numeric date order' });
+    fireEvent.click(within(group).getByRole('button', { name: 'Day first (22/03/1999)' }));
+    await waitFor(() => expect(lastSaved()?.numericDateOrder).toBe('dmy'));
+    fireEvent.click(within(group).getByRole('button', { name: 'Month first (03/22/1999)' }));
+    await waitFor(() => expect(lastSaved()?.numericDateOrder).toBe('mdy'));
+    expect(within(group).getByRole('button', { name: 'Month first (03/22/1999)' })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('target timezone reordering', () => {
+  beforeEach(() => {
+    vi.stubGlobal('PointerEvent', FakePointerEvent);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete (Element.prototype as Partial<Element>).animate;
+    document.documentElement.classList.remove('tzx-sort-grabbing');
+  });
+
+  it('shows each zone with its label, time and a drag handle', async () => {
+    const list = await renderOptions();
+    expect(rowKeys(list)).toEqual(ZONES);
+    const row = within(list).getAllByRole('listitem')[2] as HTMLElement;
+    expect(within(row).getByText('Europe/London')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Drag to reorder Europe/London' })).toBeInTheDocument();
+    expect(row.querySelector('.tzx-zone-time')?.textContent).toMatch(/\d/);
+  });
+
+  it('Alt+ArrowUp moves the focused row, saves, announces and keeps focus', async () => {
+    const list = await renderOptions();
+    const handle = screen.getByRole('button', { name: 'Drag to reorder Europe/London' });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: 'ArrowUp', altKey: true });
+    expect(rowKeys(list)).toEqual(['UTC', 'Europe/London', 'America/New_York', 'Asia/Kathmandu']);
+    await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['UTC', 'Europe/London', 'America/New_York', 'Asia/Kathmandu']));
+    expect(screen.getByText('Moved Europe/London to position 2 of 4')).toHaveAttribute('aria-live', 'polite');
+    expect(document.activeElement).toBe(handle);
+
+    // Alt+ArrowDown on the row itself works too; without Alt nothing moves.
+    const row = handle.closest('li') as HTMLElement;
+    fireEvent.keyDown(row, { key: 'ArrowDown' });
+    expect(rowKeys(list)[1]).toBe('Europe/London');
+    fireEvent.keyDown(row, { key: 'ArrowDown', altKey: true });
+    expect(rowKeys(list)[2]).toBe('Europe/London');
+    await waitFor(() => expect(lastSaved()?.targetZones?.[2]).toBe('Europe/London'));
+  });
+
+  it('the ↑ ↓ buttons still move rows', async () => {
+    const list = await renderOptions();
+    fireEvent.click(screen.getByRole('button', { name: 'Move UTC down' }));
+    expect(rowKeys(list)).toEqual(['America/New_York', 'UTC', 'Europe/London', 'Asia/Kathmandu']);
+    await waitFor(() => expect(lastSaved()?.targetZones?.[1]).toBe('UTC'));
+    expect(screen.getByRole('button', { name: 'Move America/New_York up' })).toBeDisabled();
+  });
+
+  it('dragging a row with the pointer reorders and saves once, on drop', async () => {
+    mockRowRects();
+    const capture = vi.fn();
+    Object.defineProperty(Element.prototype, 'setPointerCapture', { configurable: true, writable: true, value: capture });
+    const list = await renderOptions();
+    const handle = screen.getByRole('button', { name: 'Drag to reorder UTC' });
+    const dragged = handle.closest('li') as HTMLElement;
+    const london = within(list).getAllByRole('listitem')[2] as HTMLElement;
+    const savesBefore = syncSet().mock.calls.length;
+
+    fireEvent.pointerDown(handle, { pointerId: 7, clientY: 120, button: 0 });
+    expect(capture).toHaveBeenCalledWith(7);
+    expect(dragged).toHaveAttribute('data-sort-dragging');
+    fireEvent.pointerMove(handle, { pointerId: 7, clientY: 180 });
+    fireEvent.pointerMove(handle, { pointerId: 7, clientY: 230 });
+    // The dragged row follows the pointer; the rows it passed make room.
+    expect(dragged.style.transform).toContain('translateY(110px)');
+    expect(london.style.transform).toBe('translateY(-50px)');
+    expect(syncSet().mock.calls.length).toBe(savesBefore);
+
+    fireEvent.pointerUp(handle, { pointerId: 7, clientY: 230 });
+    expect(rowKeys(list)).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']);
+    await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']));
+    expect(syncSet().mock.calls.length).toBe(savesBefore + 1);
+    expect(screen.getByText('Moved UTC to position 3 of 4')).toBeInTheDocument();
+    expect(dragged.style.transform).toBe('');
+    expect(london.style.transform).toBe('');
+    expect(dragged).not.toHaveAttribute('data-sort-dragging');
+    delete (Element.prototype as Partial<Element>).setPointerCapture;
+  });
+
+  it('Escape during a drag puts the row back and saves nothing', async () => {
+    mockRowRects();
+    const list = await renderOptions();
+    const handle = screen.getByRole('button', { name: 'Drag to reorder UTC' });
+    const dragged = handle.closest('li') as HTMLElement;
+    const savesBefore = syncSet().mock.calls.length;
+    fireEvent.pointerDown(handle, { pointerId: 3, clientY: 120, button: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 3, clientY: 230 });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(dragged.style.transform).toBe('');
+    expect(screen.getByText(/Reorder cancelled\. UTC stays at position 1 of 4/)).toBeInTheDocument();
+    // The pointer coming up afterwards is not a drop.
+    fireEvent.pointerUp(handle, { pointerId: 3, clientY: 230 });
+    expect(rowKeys(list)).toEqual(ZONES);
+    expect(syncSet().mock.calls.length).toBe(savesBefore);
+    expect(document.documentElement).not.toHaveClass('tzx-sort-grabbing');
+  });
+
+  it('losing pointer capture mid-drag cancels it, and the next drag still works', async () => {
+    mockRowRects();
+    const list = await renderOptions();
+    const handle = screen.getByRole('button', { name: 'Drag to reorder UTC' });
+    const dragged = handle.closest('li') as HTMLElement;
+    const savesBefore = syncSet().mock.calls.length;
+    fireEvent.pointerDown(handle, { pointerId: 4, clientY: 120, button: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 4, clientY: 230 });
+    expect(dragged.style.transform).toContain('translateY(110px)');
+
+    fireEvent.lostPointerCapture(handle, { pointerId: 4 });
+    expect(dragged.style.transform).toBe('');
+    expect(dragged).not.toHaveAttribute('data-sort-dragging');
+    expect(screen.getByText(/Reorder cancelled\. UTC stays at position 1 of 4/)).toBeInTheDocument();
+    expect(document.documentElement).not.toHaveClass('tzx-sort-grabbing');
+    fireEvent.pointerUp(handle, { pointerId: 4, clientY: 230 });
+    expect(rowKeys(list)).toEqual(ZONES);
+    expect(syncSet().mock.calls.length).toBe(savesBefore);
+
+    fireEvent.pointerDown(handle, { pointerId: 5, clientY: 120, button: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 5, clientY: 230 });
+    fireEvent.pointerUp(handle, { pointerId: 5, clientY: 230 });
+    expect(rowKeys(list)).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']);
+    await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']));
+  });
+
+  it('a drag whose pointerup never arrived does not block the next drag', async () => {
+    mockRowRects();
+    const list = await renderOptions();
+    const utc = screen.getByRole('button', { name: 'Drag to reorder UTC' });
+    const utcRow = utc.closest('li') as HTMLElement;
+    // Stuck: pressed and moved, but the release was lost (no capture held).
+    fireEvent.pointerDown(utc, { pointerId: 8, clientY: 120, button: 0 });
+    fireEvent.pointerMove(utc, { pointerId: 8, clientY: 180 });
+
+    const kathmandu = screen.getByRole('button', { name: 'Drag to reorder Asia/Kathmandu' });
+    const kathRow = kathmandu.closest('li') as HTMLElement;
+    fireEvent.pointerDown(kathmandu, { pointerId: 9, clientY: 270, button: 0 });
+    // The stuck drag was dropped and its row put back.
+    expect(utcRow).not.toHaveAttribute('data-sort-dragging');
+    expect(utcRow.style.transform).toBe('');
+    expect(kathRow).toHaveAttribute('data-sort-dragging');
+    fireEvent.pointerMove(kathmandu, { pointerId: 9, clientY: 120 });
+    fireEvent.pointerUp(kathmandu, { pointerId: 9, clientY: 120 });
+    expect(rowKeys(list)).toEqual(['Asia/Kathmandu', 'UTC', 'America/New_York', 'Europe/London']);
+    await waitFor(() =>
+      expect(lastSaved()?.targetZones).toEqual(['Asia/Kathmandu', 'UTC', 'America/New_York', 'Europe/London']),
+    );
+  });
+
+  it('the remove button removes the zone and moves focus to the next row', async () => {
+    const list = await renderOptions();
+    const remove = screen.getByRole('button', { name: 'Remove Europe/London' });
+    remove.focus();
+    fireEvent.click(remove);
+    expect(rowKeys(list)).toEqual(['UTC', 'America/New_York', 'Asia/Kathmandu']);
+    await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['UTC', 'America/New_York', 'Asia/Kathmandu']));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Drag to reorder Asia/Kathmandu' }));
+    expect(screen.getByRole('heading', { name: 'Target timezones (3)' })).toBeInTheDocument();
+  });
+
+  it('animates moves and removals when motion is allowed', async () => {
+    stubMatchMedia(false);
+    mockRowRects();
+    const { calls, finishAll } = stubAnimate();
+    const list = await renderOptions();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Drag to reorder Europe/London' }), {
+      key: 'ArrowUp',
+      altKey: true,
+    });
+    // FLIP: both swapped rows slide from where they were.
+    const moves = calls.mock.calls.map((c) => (c[0] as Keyframe[])[0]?.transform);
+    expect(moves).toEqual(expect.arrayContaining(['translateY(50px)', 'translateY(-50px)']));
+
+    calls.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove UTC' }));
+    expect(calls).toHaveBeenCalledTimes(1);
+    // Saved only once the collapse finishes.
+    expect(rowKeys(list)).toContain('UTC');
+    act(() => finishAll());
+    expect(rowKeys(list)).not.toContain('UTC');
+    await waitFor(() => expect(lastSaved()?.targetZones).not.toContain('UTC'));
+  });
+
+  it('with reduced motion nothing is animated and changes are instant', async () => {
+    stubMatchMedia(true);
+    mockRowRects();
+    const { calls } = stubAnimate();
+    const list = await renderOptions();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Drag to reorder Europe/London' }), {
+      key: 'ArrowUp',
+      altKey: true,
+    });
+    const handle = screen.getByRole('button', { name: 'Drag to reorder UTC' });
+    fireEvent.pointerDown(handle, { pointerId: 2, clientY: 120, button: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 2, clientY: 230 });
+    fireEvent.pointerUp(handle, { pointerId: 2, clientY: 230 });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Asia/Kathmandu' }));
+    expect(rowKeys(list)).toEqual(['Europe/London', 'America/New_York', 'UTC']);
+    expect(calls).not.toHaveBeenCalled();
+    await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['Europe/London', 'America/New_York', 'UTC']));
+  });
+
+  // QA r7 G13: Space or Enter on a handle picks the row up, arrows move it,
+  // Space or Enter drops it, Escape puts it back. One save, on drop.
+  describe('keyboard pick-up (QA r7 G13)', () => {
+    const live = (list: HTMLElement): string =>
+      (list.parentElement?.querySelector('.tzx-sr-only[aria-live="polite"]')?.textContent ?? '').trim();
+    const handleOf = (zone: string): HTMLElement => screen.getByRole('button', { name: `Drag to reorder ${zone}` });
+
+    it('Space picks up, arrows move, Enter drops, saving once and keeping focus', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      const row = handle.closest('li') as HTMLElement;
+      handle.focus();
+      const savesBefore = syncSet().mock.calls.length;
+
+      const down = fireEvent.keyDown(handle, { key: ' ' });
+      expect(down).toBe(false); // default (a click) prevented
+      expect(handle).toHaveAttribute('aria-pressed', 'true');
+      expect(row).toHaveAttribute('data-sort-dragging');
+      expect(live(list)).toBe(
+        'Picked up UTC, position 1 of 4. Press Up or Down Arrow to move it, Space or Enter to drop it, Escape to cancel.',
+      );
+
+      fireEvent.keyDown(handle, { key: 'ArrowDown' });
+      expect(rowKeys(list)).toEqual(['America/New_York', 'UTC', 'Europe/London', 'Asia/Kathmandu']);
+      expect(live(list)).toBe('UTC, position 2 of 4');
+      expect(document.activeElement).toBe(handle);
+      fireEvent.keyDown(handle, { key: 'ArrowDown' });
+      expect(rowKeys(list)).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']);
+      expect(live(list)).toBe('UTC, position 3 of 4');
+      // Nothing is saved while the row is held.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(syncSet().mock.calls.length).toBe(savesBefore);
+
+      fireEvent.keyDown(handle, { key: 'Enter' });
+      expect(handle).toHaveAttribute('aria-pressed', 'false');
+      expect(row).not.toHaveAttribute('data-sort-dragging');
+      expect(live(list)).toBe('Dropped UTC at position 3 of 4');
+      expect(rowKeys(list)).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']);
+      await waitFor(() => expect(lastSaved()?.targetZones).toEqual(['America/New_York', 'Europe/London', 'UTC', 'Asia/Kathmandu']));
+      expect(syncSet().mock.calls.length).toBe(savesBefore + 1);
+      expect(document.activeElement).toBe(handle);
+
+      // Arrows without a pick-up and without Alt do nothing.
+      fireEvent.keyDown(handle, { key: 'ArrowUp' });
+      expect(rowKeys(list)[2]).toBe('UTC');
+    });
+
+    it('Escape cancels and restores the order without saving', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('Asia/Kathmandu');
+      handle.focus();
+      const savesBefore = syncSet().mock.calls.length;
+      fireEvent.keyDown(handle, { key: 'Enter' });
+      fireEvent.keyDown(handle, { key: 'ArrowUp' });
+      fireEvent.keyDown(handle, { key: 'ArrowUp', altKey: true }); // Alt+arrow moves the held row too
+      expect(rowKeys(list)).toEqual(['UTC', 'Asia/Kathmandu', 'America/New_York', 'Europe/London']);
+      const esc = fireEvent.keyDown(handle, { key: 'Escape' });
+      expect(esc).toBe(false);
+      expect(rowKeys(list)).toEqual(ZONES);
+      expect(live(list)).toBe('Reorder cancelled. Asia/Kathmandu stays at position 4 of 4');
+      expect(handle).toHaveAttribute('aria-pressed', 'false');
+      expect(document.activeElement).toBe(handle);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(syncSet().mock.calls.length).toBe(savesBefore);
+    });
+
+    it('says when the held row is at an end, and dropping in place saves nothing', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      handle.focus();
+      const savesBefore = syncSet().mock.calls.length;
+      fireEvent.keyDown(handle, { key: ' ' });
+      fireEvent.keyDown(handle, { key: 'ArrowUp' });
+      expect(live(list)).toBe('UTC is already first, position 1 of 4');
+      // A held key repeating does not drop the row.
+      fireEvent.keyDown(handle, { key: ' ', repeat: true });
+      expect(handle).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.keyDown(handle, { key: ' ' });
+      expect(live(list)).toBe('Dropped UTC. It stays at position 1 of 4');
+      expect(rowKeys(list)).toEqual(ZONES);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(syncSet().mock.calls.length).toBe(savesBefore);
+    });
+
+    it('moving focus away cancels the pick-up', async () => {
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      handle.focus();
+      fireEvent.keyDown(handle, { key: ' ' });
+      fireEvent.keyDown(handle, { key: 'ArrowDown' });
+      expect(rowKeys(list)[1]).toBe('UTC');
+      const other = screen.getByRole('button', { name: 'Remove Asia/Kathmandu' });
+      act(() => other.focus());
+      await waitFor(() => expect(rowKeys(list)).toEqual(ZONES));
+      expect(live(list)).toBe('Reorder cancelled. UTC stays at position 1 of 4');
+      expect(document.activeElement).toBe(other);
+      // The ↑ ↓ buttons and Alt+arrows work again afterwards.
+      fireEvent.keyDown(handleOf('Europe/London'), { key: 'ArrowUp', altKey: true });
+      expect(rowKeys(list)).toEqual(['UTC', 'Europe/London', 'America/New_York', 'Asia/Kathmandu']);
+    });
+
+    it('a pointer drag does not start while a row is held', async () => {
+      mockRowRects();
+      const list = await renderOptions();
+      const handle = handleOf('UTC');
+      handle.focus();
+      fireEvent.keyDown(handle, { key: 'Enter' });
+      const other = handleOf('Europe/London');
+      fireEvent.pointerDown(other, { pointerId: 11, clientY: 220, button: 0 });
+      expect(other.closest('li')).not.toHaveAttribute('data-sort-dragging');
+      fireEvent.pointerUp(other, { pointerId: 11, clientY: 120 });
+      expect(rowKeys(list)).toEqual(ZONES);
+      fireEvent.keyDown(handle, { key: 'Escape' });
+    });
   });
 });

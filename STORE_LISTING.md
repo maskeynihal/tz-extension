@@ -39,6 +39,10 @@ FEATURES
 • Select-to-convert — highlight a time, see it in your zones right there.
 • Right-click any selection → "Convert with TZ Converter". Prefer no automatic
   popups? Turn select-to-convert off and use only the menu.
+• Several times in one selection? Step through them with ‹ 1 of 3 ›, in the
+  order they appear; the card marks each one on the page.
+• Keyboard friendly — Alt+Shift+K (Ctrl+Shift+K on Mac) moves focus into the
+  open card and back. Change the key in chrome://extensions/shortcuts.
 • Pin cards to the page, each with its own colored highlight on the matched text.
 • Toolbar popup converter — pick a source zone and time, read the rest.
 • Epoch converter — Unix seconds/milliseconds to readable dates and back.

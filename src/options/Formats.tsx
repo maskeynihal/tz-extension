@@ -1,10 +1,10 @@
-import { useId, useMemo, useState } from 'react';
+import { Fragment, useId, useMemo, useState } from 'react';
 import type { CustomFormat, Preferences } from '../types';
 import { BUILTIN_FORMATS } from '../lib/builtin-formats';
 import { compileFormat, layoutMatches, matchCustomFormat, TOKEN_REFERENCE, KNOWN_GROUPS } from '../lib/custom-formats';
 import { parseTimes, SCAN_LIMIT } from '../lib/parse';
 import { MAX_CUSTOM_FORMATS, MAX_LABEL, SYNC_ITEM_LIMIT, newFormatId, syncItemBytes } from '../lib/storage';
-import { toIsoUtc, viewInZone } from '../lib/tz';
+import { toIsoUtc, viewInZone, zoneLabel } from '../lib/tz';
 
 interface Props {
   readonly prefs: Preferences;
@@ -12,6 +12,30 @@ interface Props {
 }
 
 /** An accessible on/off switch. */
+/**
+ * Split a format example at the places a line may break: before the ISO "T"
+ * between digits, before "[", and after "," or a space. "1999-03-22T05:06:07,000[Europe/Paris]"
+ * gives "1999-03-22", "T05:06:07,", "000", "[Europe/Paris]".
+ */
+export function examplePieces(text: string): string[] {
+  return text.split(/(?<=\d)(?=T\d)|(?=\[)|(?<=,)(?! )|(?<= )/).filter((p) => p.length > 0);
+}
+
+/** An example as code whose pieces never break inside (see .tzx-ex-piece). */
+function ExampleCode({ text }: { readonly text: string }): JSX.Element {
+  const pieces = examplePieces(text);
+  return (
+    <code>
+      {pieces.map((p, i) => (
+        <Fragment key={i}>
+          {i > 0 && <wbr />}
+          <span className="tzx-ex-piece">{p}</span>
+        </Fragment>
+      ))}
+    </code>
+  );
+}
+
 export function Switch({
   checked,
   label,
@@ -40,7 +64,7 @@ export function Switch({
 
 function describeInstant(epochMs: number, prefs: Preferences): string {
   const v = viewInZone(epochMs, prefs.homeZone, prefs.hour12);
-  return `${v.weekday} ${v.date} ${v.time} ${v.offset} (${prefs.homeZone}) · ${toIsoUtc(epochMs)}`;
+  return `${v.weekday} ${v.date} ${v.time} ${v.offset} (${zoneLabel(prefs.homeZone)}) · ${toIsoUtc(epochMs)}`;
 }
 
 /** Live "what would happen if I selected this?" box, using every current setting. */
@@ -55,9 +79,10 @@ function FormatTester({ prefs }: { readonly prefs: Preferences }): JSX.Element {
             dateOnlyPolicy: prefs.dateOnlyPolicy,
             customFormats: prefs.customFormats,
             disabledFormats: prefs.disabledFormats,
+            numericDateOrder: prefs.numericDateOrder,
           })
         : [],
-    [text, prefs.homeZone, prefs.dateOnlyPolicy, prefs.customFormats, prefs.disabledFormats],
+    [text, prefs.homeZone, prefs.dateOnlyPolicy, prefs.customFormats, prefs.disabledFormats, prefs.numericDateOrder],
   );
   return (
     <div className="tzx-tester">
@@ -82,7 +107,7 @@ function FormatTester({ prefs }: { readonly prefs: Preferences }): JSX.Element {
                 <li key={`${r.matchedText}-${i}`}>
                   <code>{r.matchedText}</code> → {describeInstant(r.epochMs, prefs)}{' '}
                   <span className="tzx-badge">{r.formatLabel ?? r.kind}</span>
-                  {r.assumed && <span className="tzx-muted"> · read in {r.assumedZone}</span>}
+                  {r.assumed && <span className="tzx-muted"> · read in {zoneLabel(r.assumedZone)}</span>}
                 </li>
               ))}
             </ul>
@@ -124,7 +149,7 @@ function BuiltinList({ prefs, update }: Props): JSX.Element {
                   {f.examples.map((ex, i) => (
                     <span key={ex}>
                       {i > 0 && ', '}
-                      <code>{ex}</code>
+                      <ExampleCode text={ex} />
                     </span>
                   ))}
                 </span>
@@ -451,8 +476,8 @@ export function FormatsSection({ prefs, update }: Props): JSX.Element {
   }
 
   return (
-    <section className="tzx-field" id="formats" aria-labelledby="tzx-formats-h">
-      <h2 className="tzx-section-h" id="tzx-formats-h">
+    <section className="tzx-field tzx-settings-section" id="formats" aria-labelledby="tzx-formats-h">
+      <h2 className="tzx-section-h" id="tzx-formats-h" tabIndex={-1}>
         Recognized formats
       </h2>
       <p className="tzx-hint">

@@ -2,7 +2,9 @@ import type { CustomFormat, DateOnlyPolicy, ParsedTime } from '../types';
 import {
   buildParsed,
   dateOnlyTime,
+  isWeekdayName,
   monthFromName,
+  normalizeForMatching,
   resolveZoneToken,
   to24h,
   todayIn,
@@ -23,8 +25,11 @@ import {
  *    first ADVANCED_SCAN_LIMIT characters of a selection.
  */
 
-/** A capture-group name the parser understands. */
-export type Field = 'y' | 'yy' | 'mo' | 'moName' | 'd' | 'h' | 'mi' | 's' | 'ms' | 'ap' | 'zone';
+/**
+ * A capture-group name the parser understands. `wd` (a weekday name, from
+ * the Java EEE/EEEE tokens) is checked but not offered to advanced regexes.
+ */
+export type Field = 'y' | 'yy' | 'mo' | 'moName' | 'd' | 'h' | 'mi' | 's' | 'ms' | 'ap' | 'zone' | 'wd';
 
 export const KNOWN_GROUPS: readonly Field[] = ['y', 'yy', 'mo', 'moName', 'd', 'h', 'mi', 's', 'ms', 'ap', 'zone'];
 
@@ -46,8 +51,16 @@ interface TokenDef {
   readonly example: string;
   /** 12-hour hour token: needs A. */
   readonly twelveHour?: boolean;
-  /** Kept for old saved formats; hidden from the reference table. */
+  /** Kept for old saved formats, or another spelling of a listed token; hidden from the reference table. */
   readonly legacy?: boolean;
+  /**
+   * A Java/Talend spelling (yyyy, dd, a, EEE, XXX, z...). It is a token only
+   * when no letter outside a token touches it, so the letters of a word
+   * ("today", "den", "daily") stay literal as they always were. Patterns
+   * saved before these spellings existed read as before (see
+   * compileTokenFormat).
+   */
+  readonly java?: boolean;
 }
 
 // Order matters: longer tokens first so "YYYY" is consumed before "YY",
@@ -58,6 +71,18 @@ const TOKENS: readonly TokenDef[] = [
   { token: 'MONTH', group: 'moName', frag: '(?<moName>[A-Za-z]{3,9})', meaning: 'Month name', example: 'January', legacy: true },
   { token: 'MON', group: 'moName', frag: '(?<moName>[A-Za-z]{3,9}\\.?)', meaning: 'Month name', example: 'Jan', legacy: true },
   { token: 'MMM', group: 'moName', frag: '(?<moName>[A-Za-z]{3,4}\\.?)', meaning: 'Short month name', example: 'Jan' },
+  // Fractions with more digits (Java's micro- and nanoseconds): the first
+  // three are the milliseconds.
+  ...[9, 8, 7, 6, 5, 4].map(
+    (n): TokenDef => ({
+      token: 'S'.repeat(n),
+      group: 'ms',
+      frag: `(?<ms>\\d{${n}})`,
+      meaning: `Fraction of a second, ${n} digits`,
+      example: '123456789'.slice(0, n),
+      legacy: true,
+    }),
+  ),
   { token: 'SSS', group: 'ms', frag: '(?<ms>\\d{3})', meaning: 'Milliseconds', example: '045' },
   { token: 'MM', group: 'mo', frag: '(?<mo>\\d{2})', meaning: '2-digit month', example: '01' },
   { token: 'DD', group: 'd', frag: '(?<d>\\d{2})', meaning: '2-digit day', example: '05' },
@@ -73,12 +98,110 @@ const TOKENS: readonly TokenDef[] = [
   { token: 'D', group: 'd', frag: '(?<d>\\d{1,2})', meaning: 'Day, 1-2 digits', example: '5' },
   { token: 'H', group: 'h', frag: '(?<h>\\d{1,2})', meaning: 'Hour, 0-23', example: '9' },
   { token: 'h', group: 'h', frag: '(?<h>\\d{1,2})', meaning: 'Hour, 1-12 (needs A)', example: '9', twelveHour: true },
+  // Java / Talend spellings (yyyy-MM-dd HH:mm, EEE, dd MMM yyyy HH:mm:ss z).
+  // Most mean the same as a capitalised token, so they are aliases rather
+  // than errors.
+  // moment's weekday names (before Java's dd, the day). Like EEE they stand
+  // alone, so "odd" or "address" stays literal.
+  { token: 'dddd', group: 'wd', frag: '(?<wd>[A-Za-z]{3,9})', meaning: 'Weekday name', example: 'Monday', legacy: true, java: true },
+  { token: 'ddd', group: 'wd', frag: '(?<wd>[A-Za-z]{2,4}\\.?)', meaning: 'Short weekday name', example: 'Mon', legacy: true, java: true },
+  { token: 'yyyy', group: 'y', frag: '(?<y>\\d{4})', meaning: '4-digit year', example: '2024', legacy: true, java: true },
+  { token: 'yy', group: 'yy', frag: '(?<yy>\\d{2})', meaning: '2-digit year', example: '24', legacy: true, java: true },
+  { token: 'dd', group: 'd', frag: '(?<d>\\d{2})', meaning: '2-digit day', example: '05', legacy: true, java: true },
+  { token: 'd', group: 'd', frag: '(?<d>\\d{1,2})', meaning: 'Day, 1-2 digits', example: '5', legacy: true, java: true },
+  { token: 'a', group: 'ap', frag: '(?<ap>[AaPp]\\.?[Mm]\\.?)', meaning: 'AM/PM', example: 'PM', legacy: true, java: true },
+  { token: 'EEEE', group: 'wd', frag: '(?<wd>[A-Za-z]{3,9})', meaning: 'Weekday name', example: 'Monday', legacy: true, java: true },
+  { token: 'EEE', group: 'wd', frag: '(?<wd>[A-Za-z]{2,4}\\.?)', meaning: 'Short weekday name', example: 'Mon', legacy: true, java: true },
+  { token: 'XXX', group: 'zone', frag: '(?<zone>Z|[+-]\\d{2}:\\d{2})', meaning: 'Offset', example: '+05:45, Z', legacy: true, java: true },
+  { token: 'XX', group: 'zone', frag: '(?<zone>Z|[+-]\\d{4})', meaning: 'Offset', example: '+0545, Z', legacy: true, java: true },
+  { token: 'X', group: 'zone', frag: '(?<zone>Z|[+-]\\d{2}(?:\\d{2})?)', meaning: 'Offset', example: '+05, +0545, Z', legacy: true, java: true },
+  // Java's RFC 822 offset (+0100, -0530). Z for UTC and +05:45 are read too.
+  // A Z that touches other letters ("ZZ", "Zulu") stays literal.
+  { token: 'Z', group: 'zone', frag: '(?<zone>Z|[+-]\\d{2}:?\\d{2})', meaning: 'Offset', example: '+0545, -0800, Z', legacy: true, java: true },
+  { token: 'zzz', group: 'zone', frag: ZONE_FRAG, meaning: 'Zone', example: 'UTC, PST', legacy: true, java: true },
+  { token: 'zz', group: 'zone', frag: ZONE_FRAG, meaning: 'Zone', example: 'UTC, PST', legacy: true, java: true },
+  { token: 'z', group: 'zone', frag: ZONE_FRAG, meaning: 'Zone', example: 'UTC, PST', legacy: true, java: true },
 ];
+
+/** Tokens that may touch another token's letters ("yyyyMMdd" reads yyyy before MM). */
+const PLAIN_TOKENS = TOKENS.filter((t) => !t.java);
+const isLetter = (c: string | undefined): boolean => c !== undefined && /[A-Za-z]/.test(c);
+
+/** True when `run` is made only of tokens ("HH", "mm", "h"), not a word ("clock"). */
+function tokensOnly(run: string): boolean {
+  let i = 0;
+  while (i < run.length) {
+    const def = TOKENS.find((t) => run.startsWith(t.token, i));
+    if (!def) return false;
+    i += def.token.length;
+  }
+  return run.length > 0;
+}
+
+/**
+ * A "'" between a letter and a lower-case word that is not made of tokens
+ * is an apostrophe in prose ("o'clock", "l'heure"), not the start or end of
+ * a quoted literal. "dd'T'HH" and "HH'h'mm" are quotes.
+ */
+function proseApostrophe(pattern: string, q: number): boolean {
+  if (!isLetter(pattern[q - 1]) || !/[a-z]/.test(pattern[q + 1] ?? '')) return false;
+  const run = /^[A-Za-z]+/.exec(pattern.slice(q + 1))?.[0] ?? '';
+  return !tokensOnly(run);
+}
+
+/**
+ * The Java token at `i` when nothing but tokens touches it: the letter
+ * before it ends a token, and the letter after it starts a plain token
+ * ("yyyyMMdd") or is the ISO "T". Otherwise its letters are literal: "today",
+ * "den", "daily", "(yyyy)" next to YYYY... (the last one by the fallback in
+ * compileTokenFormat).
+ */
+function javaTokenFits(pattern: string, i: number, def: TokenDef, tokenEndsAt: number): boolean {
+  if (isLetter(pattern[i - 1]) && tokenEndsAt !== i) return false;
+  const end = i + def.token.length;
+  const next = pattern[end];
+  // "a.m." written out is literal text, as before.
+  if (def.token === 'a' && next === '.') return false;
+  if (!isLetter(next) || next === 'T') return true;
+  return PLAIN_TOKENS.some((t) => pattern.startsWith(t.token, end));
+}
+
+/**
+ * Why the letters at `i` are a token this parser does not read, or null.
+ * Without this, "DDD" (day of the year) reads as DD then D and says "repeats
+ * the day", which hides the real problem.
+ */
+function unsupportedToken(pattern: string, i: number): string | null {
+  const run = (c: string): number => {
+    let j = i;
+    while (pattern[j] === c) j++;
+    return j - i;
+  };
+  const days = run('D');
+  if (days >= 3) {
+    return `"${'D'.repeat(days)}" (day of the year) is not supported. Use a month and a day (MM and DD, or MMM and D), or wrap literal letters in [ ].`;
+  }
+  const fraction = run('S');
+  if (fraction > 9) {
+    return `"${'S'.repeat(fraction)}" is not supported: fractions of a second can have at most 9 digits (SSSSSSSSS).`;
+  }
+  return null;
+}
 
 /** Token reference for the settings page. */
 export const TOKEN_REFERENCE: ReadonlyArray<{ token: string; meaning: string; example: string }> = [
   ...TOKENS.filter((t) => !t.legacy).map(({ token, meaning, example }) => ({ token, meaning, example })),
   { token: '[text]', meaning: 'Literal text (use for words like “at”)', example: '[at]' },
+  { token: "'text'", meaning: 'Literal text, Java style (two quotes for one quote)', example: "yyyy-MM-dd'T'HH:mm" },
+  { token: 'yyyy yy dd d', meaning: 'Java/Talend spellings of YYYY, YY, DD and D (only where no other letter touches them: “today” is literal)', example: 'dd/MM/yyyy' },
+  { token: 'a', meaning: 'Java/Talend AM/PM (like A)', example: 'hh:mm a' },
+  { token: 'EEE EEEE', meaning: 'Java/Talend weekday name, short or long', example: 'EEE, dd MMM yyyy' },
+  { token: 'X XX XXX', meaning: 'Java/Talend offset: +05, +0545, +05:45 or Z', example: "yyyy-MM-dd'T'HH:mm:ssXXX" },
+  { token: 'Z', meaning: 'Java/Talend offset: +0100, -0530 (or Z for UTC)', example: "yyyy-MM-dd'T'HH:mm:ssZ" },
+  { token: 'z zzz', meaning: 'Java/Talend zone name (like TZ)', example: 'HH:mm z' },
+  { token: 'ddd dddd', meaning: 'Weekday name, short or long (like EEE and EEEE)', example: 'ddd D MMM YYYY' },
+  { token: 'SSSSSS', meaning: 'Fraction of a second, 4 to 9 digits (S repeated); the first 3 are the milliseconds', example: 'HH:mm:ss.SSSSSS' },
+  { token: "''", meaning: 'A quote, Java style', example: "dd MMM ''yy" },
 ];
 
 /** Which field a group fills. Two groups for the same field is an error. */
@@ -94,6 +217,7 @@ const FIELD_OF: Readonly<Record<Field, string>> = {
   ms: 'millisecond',
   ap: 'AM/PM',
   zone: 'zone',
+  wd: 'weekday',
 };
 
 export type CompileResult =
@@ -108,6 +232,27 @@ export type CompileResult =
 
 function escapeLiteral(ch: string): string {
   return ch.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+}
+
+/**
+ * A quoted literal starting at the "'" at `i`: its text and the index after
+ * the closing quote, or null when the quote is never closed.
+ */
+function quotedLiteral(pattern: string, i: number): { text: string; end: number } | null {
+  if (pattern[i + 1] === "'") return { text: "'", end: i + 2 };
+  let text = '';
+  let j = i + 1;
+  while (j < pattern.length) {
+    if (pattern[j] === "'") {
+      if (pattern[j + 1] !== "'") return { text, end: j + 1 };
+      text += "'";
+      j += 2;
+      continue;
+    }
+    text += pattern[j];
+    j++;
+  }
+  return null;
 }
 
 /** Shared rules on which fields a format must (and must not) combine. */
@@ -132,18 +277,36 @@ function checkFields(groups: ReadonlySet<Field>, twelveHourTokens: boolean): str
   return null;
 }
 
-/** Translate a token pattern into a safe regex, or explain why it cannot be used. */
+/**
+ * Translate a token pattern into a safe regex, or explain why it cannot be
+ * used.
+ *
+ * Java spellings (yyyy, dd, a, EEE, XXX, z) and 'quoted' literals came in
+ * later than the other tokens. A pattern saved before then that only works
+ * the old way, with those letters and quotes matched literally ("YYYY-MM-DD
+ * HH:mm (yyyy)"), still compiles that way, with the literal-letters warning.
+ */
 export function compileTokenFormat(pattern: string): CompileResult {
   if (!pattern || pattern.trim().length === 0) return { ok: false, error: 'Enter a pattern.' };
   if (pattern.length > MAX_TOKEN_PATTERN) {
     return { ok: false, error: `The pattern is too long (max ${MAX_TOKEN_PATTERN} characters).` };
   }
+  const current = compilePieces(pattern, true);
+  if (current.ok) return current;
+  const before = compilePieces(pattern, false);
+  return before.ok ? before : current;
+}
+
+/** compileTokenFormat with (`java`) or without the Java spellings and quoted literals. */
+function compilePieces(pattern: string, java: boolean): CompileResult {
   const pieces: Array<{ kind: 'token' | 'literal'; src: string }> = [];
   const groups = new Set<Field>();
   const seenField = new Map<string, string>();
   let twelveHour = false;
   const literalLetters = new Set<string>();
   let i = 0;
+  // Where the last token ended: a Java token may touch its letters.
+  let tokenEndsAt = -1;
   while (i < pattern.length) {
     const ch = pattern[i] ?? '';
     if (ch === '[') {
@@ -154,7 +317,36 @@ export function compileTokenFormat(pattern: string): CompileResult {
       i = close + 1;
       continue;
     }
-    const def = TOKENS.find((t) => pattern.startsWith(t.token, i));
+    if (ch === "'" && java) {
+      // Java-style literal: 'T', 'at'; '' inside one is a quote ('It''s').
+      // Quotes around no letters ("'(.*)+$'") or an apostrophe in a word
+      // ("'YY ... o'clock") are matched as written, as they were before.
+      const quoted = quotedLiteral(pattern, i);
+      if (pattern[i + 1] === "'") {
+        // "''" on its own is Java's one quote ("dd MMM ''yy" reads
+        // "05 Mar '24"). Patterns saved before Java quotes meant two quotes,
+        // so either reads.
+        pieces.push({ kind: 'literal', src: "''?" });
+        i += 2;
+        continue;
+      }
+      const literal =
+        quoted !== null &&
+        /[A-Za-z]/.test(quoted.text) &&
+        !proseApostrophe(pattern, i) &&
+        !proseApostrophe(pattern, quoted.end - 1);
+      if (quoted && literal) {
+        for (const c of quoted.text) pieces.push({ kind: 'literal', src: /\s/.test(c) ? '\\s+' : escapeLiteral(c) });
+        i = quoted.end;
+        continue;
+      }
+      // No closing quote: a plain apostrophe ("o'clock").
+    }
+    const unsupported = unsupportedToken(pattern, i);
+    if (unsupported) return { ok: false, error: unsupported };
+    const def = TOKENS.find(
+      (t) => pattern.startsWith(t.token, i) && (!t.java || (java && javaTokenFits(pattern, i, t, tokenEndsAt))),
+    );
     if (def) {
       const field = FIELD_OF[def.group];
       const prev = seenField.get(field);
@@ -169,6 +361,7 @@ export function compileTokenFormat(pattern: string): CompileResult {
       if (def.twelveHour) twelveHour = true;
       pieces.push({ kind: 'token', src: def.frag });
       i += def.token.length;
+      tokenEndsAt = i;
       continue;
     }
     if (/\s/.test(ch)) {
@@ -539,6 +732,17 @@ export interface MatchContext {
    * parseTimes share one budget across every custom format.
    */
   readonly deadline?: number;
+  /**
+   * Called when a format stops at its match cap, with the index it had read
+   * up to: every match starting before it was found. readTimes carries on
+   * from there.
+   */
+  readonly onCapped?: (scannedTo: number) => void;
+  /**
+   * Matches per format before it stops (default 25). readTimes raises it
+   * for its re-reads; advanced regexes keep the default.
+   */
+  readonly maxMatches?: number;
 }
 
 function num(v: string | undefined): number | undefined {
@@ -557,12 +761,15 @@ function fromGroups(
   // Zone first: it decides which "today" a time-only format lands on.
   let zone: ReturnType<typeof resolveZoneToken> = null;
   if (g.zone !== undefined && g.zone !== '') {
-    zone = resolveZoneToken(g.zone);
+    // Java's X writes a whole-hour offset as "+05".
+    zone = resolveZoneToken(/^[+-]\d{2}$/.test(g.zone) ? `${g.zone}00` : g.zone);
     if (!zone) return null; // the format promised a zone and this is not one
   }
 
   // Decide from what this match captured: an advanced regex may make the date
   // or time part optional.
+  // EEE/EEEE: the word must be a weekday name ("Mon", "Tuesday", "Mi.").
+  if (g.wd !== undefined && !isWeekdayName(g.wd)) return null;
   const hasDate = g.mo !== undefined || g.moName !== undefined || g.d !== undefined;
   const hasTime = g.h !== undefined;
   if (!hasDate && !hasTime) return null;
@@ -624,9 +831,18 @@ export function matchCustomFormat(
   if (!fmt.enabled) return [];
   const compiled = compiledFor(fmt);
   if (!compiled.ok) return [];
-  return fmt.advanced
-    ? matchWindowed(text.slice(0, ADVANCED_SCAN_LIMIT), compiled.regex.source, fmt, ctx)
-    : matchGlobal(text, compiled.regex.source, fmt, ctx);
+  // Offsets read with ASCII signs ("UTC−5" -> "UTC-5") and no-break spaces as
+  // spaces; the replacement keeps every index, so the matched text is cut
+  // back out of the original.
+  const src = normalizeForMatching(text);
+  const found = fmt.advanced
+    ? matchWindowed(src.slice(0, ADVANCED_SCAN_LIMIT), compiled.regex.source, fmt, ctx)
+    : matchGlobal(src, compiled.regex.source, fmt, ctx);
+  if (src === text) return found;
+  return found.map((c) => {
+    const original = text.slice(c.index, c.index + c.parsed.matchedText.length);
+    return original === c.parsed.matchedText ? c : { ...c, parsed: { ...c.parsed, matchedText: original } };
+  });
 }
 
 function toCandidate(
@@ -678,7 +894,8 @@ function matchGlobal(src: string, source: string, fmt: CustomFormat, ctx: MatchC
   const out: Candidate[] = [];
   let guard = 0;
   let m: RegExpExecArray | null;
-  while (out.length < MAX_MATCHES_PER_FORMAT && guard++ <= src.length + 1) {
+  const cap = ctx.maxMatches ?? MAX_MATCHES_PER_FORMAT;
+  while (out.length < cap && guard++ <= src.length + 1) {
     try {
       m = re.exec(src);
     } catch {
@@ -694,6 +911,7 @@ function matchGlobal(src: string, source: string, fmt: CustomFormat, ctx: MatchC
     // On invalid values a valid match may still start inside this one.
     else re.lastIndex = m.index + 1;
   }
+  if (out.length >= cap) ctx.onCapped?.(re.lastIndex);
   return out;
 }
 
@@ -736,6 +954,7 @@ function matchWindowed(src: string, source: string, fmt: CustomFormat, ctx: Matc
     }
     i++;
   }
+  if (out.length >= MAX_MATCHES_PER_FORMAT) ctx.onCapped?.(i);
   return out;
 }
 

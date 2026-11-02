@@ -48,6 +48,9 @@ jobs:
           npm run typecheck
           npm run lint
           npm test
+          # Again with the runner in a DST zone: time maths must never
+          # depend on the host's own timezone.
+          TZ=America/New_York npm test
 
       - name: Decide version bump
         id: bump

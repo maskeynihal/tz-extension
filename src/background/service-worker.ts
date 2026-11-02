@@ -6,6 +6,7 @@ import {
   type Ack,
   type ConvertSelectionMessage,
 } from '../lib/messages';
+import { FOCUS_COMMAND, isGetShortcutMessage, type FocusCardMessage, type ShortcutReply } from './commands';
 
 export const MENU_ID = 'tzx-convert-selection';
 const MENU_TITLE = 'Convert “%s” with TZ Converter';
@@ -131,8 +132,55 @@ function openSettings(section: string | undefined): void {
   void chrome.runtime.openOptionsPage();
 }
 
+/** What the focus command is bound to now ('' when unbound or unreadable). */
+async function focusShortcut(): Promise<string> {
+  try {
+    if (typeof chrome.commands?.getAll !== 'function') return '';
+    const all = await chrome.commands.getAll();
+    return all.find((c) => c.name === FOCUS_COMMAND)?.shortcut ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The focus command: tell the tab's content scripts to move focus into the
+ * open card or back. Every frame gets it; only the one showing a card acts.
+ */
+async function focusCardInTab(tabId: number | undefined): Promise<void> {
+  let id = tabId;
+  if (id === undefined || id < 0) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      id = tab?.id;
+    } catch {
+      return;
+    }
+  }
+  if (id === undefined || id < 0) return;
+  const msg: FocusCardMessage = { type: 'tzx/focus-card' };
+  try {
+    await chrome.tabs.sendMessage(id, msg);
+  } catch {
+    /* no content script (browser page, web store): nothing to focus */
+  }
+}
+
+// The e2e suite cannot press a browser-level command; it calls this instead.
+(globalThis as unknown as { tzxFocusCard?: typeof focusCardInTab }).tzxFocusCard = focusCardInTab;
+
+chrome.commands?.onCommand.addListener((command, tab) => {
+  if (command !== FOCUS_COMMAND) return;
+  void focusCardInTab(tab?.id);
+});
+
 chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
-  if (!fromThisExtension(sender) || !isOpenOptionsMessage(msg)) return;
+  if (!fromThisExtension(sender)) return;
+  if (isGetShortcutMessage(msg)) {
+    void focusShortcut().then((shortcut) => sendResponse({ shortcut } satisfies ShortcutReply));
+    return true;
+  }
+  if (!isOpenOptionsMessage(msg)) return;
   try {
     openSettings(msg.section === 'formats' ? 'formats' : undefined);
     sendResponse({ ok: true } satisfies Ack);

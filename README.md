@@ -28,7 +28,17 @@ https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/demo-real.mp4
 4. **Right-click to convert.** Select text, right-click, and choose **Convert “…” with TZ Converter**. Works even when automatic select-to-convert is off, and says so when the selection holds no time it recognizes.
 5. **Formats you control.** The settings page lists every built-in format (with its regular expression) and lets you switch any of them off. Add your own formats with tokens such as `DD/MM/YYYY HH:mm`, `MMM D, YYYY h:mm A` or `DD.MM.YYYY [um] HH:mm`, or with a raw regex using named groups. A live tester shows which format matches a piece of text.
 
-Settings also cover: home zone, target zones (add, reorder, remove), 12/24-hour clock, theme, the date-only time policy, keeping the selection highlighted, and **Convert when I select text** (turn it off to convert only from the right-click menu). Everything is persisted via `chrome.storage`.
+6. **Hundreds of date layouts.** Every layout in the [Talend/Qlik date format list](https://help.qlik.com/talend/en-US/data-preparation-user-guide/8.0/list-of-date-and-date-time-formats) is recognized: numeric dates in any order and separator (`22/03/1999`, `3/22/99 5:06 AM`, `22.03.1999 um 05:06 MEZ`, `1999.03.22.`), compact (`19990322`), ISO ordinal and week dates, `[Europe/Paris]` zones, the Unix `date` output, written dates in English, German, French, Spanish, Italian, Portuguese and Dutch, and Chinese/Japanese dates. When a date like `03/04/2024` could be read day-first or month-first, the card lets you pick and remembers the choice.
+7. **Copy-friendly.** Your selection is never removed: select a paragraph that contains a time and you can still copy all of it.
+   - **Several times in one selection.** The card shows a stepper, `‹ 2 of 3 ›` (`‹ 2/3 ›` on a compact card). Times are numbered in the order they appear in the text; the card opens on the most specific one (a full timestamp before a bare `9:00`), so it may open on "2 of 3". Next and Previous wrap around, the mark on the page moves to the time shown, and stepping to a time off screen scrolls it into view and moves the card next to it. Repeated identical times (same text, same instant) count once. Text you can't see (positioned off the page, screen-reader-only, `opacity: 0` or a transparent colour) is skipped; text scrolled out of view inside a scrolling pane or code block still counts, either way (a bottom-anchored chat scrolled up, a right-to-left page or pane scrolled sideways). Up to 500 times are listed; the count ends in `+` ("1 of 500+") when there are more, or when the selection is very long: only its first 50,000 characters are read, and then even a single time shows "1 of 1+". When the card's best time is off screen, it opens on the visible time nearest where you released the mouse. Pinning a card pins the time it shows, and a pinned card keeps the stepper.
+   - **Where pins go.** Pinning a card never moves the cards already pinned. The new one takes the first free spot (one that covers no other pin, no other pin's text and not its own text), preferring spots wholly on screen: right below its text, else to the right of it when the screen has room, else the nearest free spot around it (the empty columns right of other pins included). When there is none, it stacks below the lowest card in the way, further down the page (on a narrow screen, pins stack one under another), and the page scrolls so the new pin is in view. On a page whose window doesn't scroll (an app shell with its own scrolling pane, such as web mail or chat), pins always stay on screen, overlapping if they must, and the page is never scrolled. "Pin all to page" puts floating cards back one by one in the order their text appears, by the same rule; a card whose text is scrolled away goes back by its text rather than on screen. A pin that steps to a time under itself moves to a free spot on screen just above, below or beside that time, or stays put when there is none; it can still sit over another pin's time.
+   - **Keyboard.** A card that opens while you type does not take your focus. Press **Alt+Shift+K** (**Ctrl+Shift+K** on macOS) to move focus into the open card, Tab through its buttons, and press the key again to go back to where you were; **Escape** closes the card and returns focus. The key is a browser extension shortcut, so it never blocks a page's own keys. To change it, open `chrome://extensions/shortcuts` (Chrome, Edge: `edge://extensions/shortcuts`) or, in Firefox, Add-ons and themes → ⚙ → Manage Extension Shortcuts, and set "Move focus to the open conversion card and back". If the browser left it unassigned (another extension already uses the key), the card's hint says to set one there.
+   - Open cards follow settings changed elsewhere (Settings, another tab): day/month order, 12/24-hour clock, target and home zones, and formats, staying on the same time.
+8. **Zones your way.** Every zone list is searchable and grouped: IANA cities, fixed offsets (`UTC+05:45`, `UTC−08:00`), abbreviations (`PDT`, `EDT`, `CET`, `IST`, `AEST`…) and the DST-aware `PT`, `MT`, `CT`, `ET`.
+9. **Pins with a dock.** Pin cards to compare times; once something is pinned, a small dock offers Minimize all, Expand all, Unpin all (float the cards on screen so they stay in view) and Close all with Undo.
+10. **World clock.** A full-page board of all your zones: live times, difference from home, today/tomorrow, day or night, working hours, and a scrubber to plan a time across zones. Open it from the popup, or [online](https://maskeynihal.github.io/tz-extension/clock.html).
+
+Settings (tabbed: General · Cards · Timezones · Formats) also cover: home zone, target zones (drag to reorder, add, remove), 12/24-hour clock, theme, card size on open (compact, full or last used), numeric date order, the date-only time policy, highlighting the matched text, and **Convert when I select text** (turn it off to convert only from the right-click menu). Everything is persisted via `chrome.storage`; the website keeps the same settings in `localStorage`.
 
 ### Custom format tokens
 
@@ -39,8 +49,21 @@ Settings also cover: home zone, target zones (add, reorder, remove), 12/24-hour 
 | `MMMM` / `MMM` | month name / short name | `mm`, `ss`, `SSS` | minutes, seconds, milliseconds |
 | `DD` / `D` / `Do` | day 01-31 / 1-31 / 5th | `A` | AM/PM, any case, `a.m.` too |
 | `TZ` | `UTC`, `EST`, `+05:45`, `GMT+1` | `[text]` | literal text, e.g. `[at]` |
+| `dddd` / `ddd` | weekday name / short name (must be a weekday name; not checked against the date) | `SSSS`…`SSSSSSSSS` | 4 to 9 fraction digits (the first 3 are read) |
 
-Zones after a time can be `Z`, an offset (`+05:45`), `GMT+5:30` / `UTC-8`, or an abbreviation written in capitals (`EST`, `CET`, `IST`, `AEST`, `NPT`…; `UTC`/`GMT` in any case). `ET`, `CT`, `MT` and `PT` follow US daylight saving. Lower-case words are never read as zones, so "12:30 eat" stays in your home zone.
+Java and Talend patterns (`yyyy-MM-dd'T'HH:mm:ssXXX`, `dd MMM yyyy HH:mm:ss z`) work too:
+
+| Token | Meaning | Token | Meaning |
+|---|---|---|---|
+| `yyyy` / `yy` | 4- / 2-digit year | `a` | AM/PM, like `A` |
+| `dd` / `d` | day 01-31 / 1-31 | `EEEE` / `EEE` | weekday name / short name (must be a weekday name; not checked against the date) |
+| `X` / `XX` / `XXX` | `+05` / `+0545` / `+05:45`, or `Z` | `Z` | `+0545`, `-0800` (`+05:45` and `Z` too) |
+| `z` / `zzz` | zone, like `TZ` | `'text'` | literal text, e.g. `'T'`, `'at'` |
+| `''` | one quote, e.g. `dd MMM ''yy` for `05 Mar '24` | | |
+
+The Java letters are tokens only where no other letter touches them, so the letters of a word ("today", "den", "daily", "Zulu") are matched as written. A pattern saved earlier that is not valid with these letters read as tokens (`HH:mm TZ (Z)` would set the zone twice) is read the old way, with them as plain text. `DDD` (day of the year) and more than 9 fraction digits are not supported, and say so.
+
+Zones after a time can be `Z`, an offset (`+05:45`), `GMT+5:30` / `UTC-8`, or an abbreviation written in capitals (`EST`, `CET`, `IST`, `AEST`, `NPT`…; `UTC`/`GMT` in any case). `ET`, `CT`, `MT` and `PT` follow US daylight saving. Lower-case words are never read as zones, so "12:30 eat" stays in your home zone. The same goes for `TZ`, `z` and `zzz` in a custom format: a lower-case abbreviation such as `est` or `pst` is not read.
 
 A format needs a month and a day, or just a time (it then means today). The year is optional (defaults to this year). When formats overlap, the longest match wins; on a tie, custom formats beat built-ins. Raw regexes must use the groups `y yy mo moName d h mi s ms ap zone`. To keep every page responsive they may not repeat a group that itself repeats or branches (`(a+)+`, `(a|b)+`), may use only a couple of open-ended repeats (`+`, `*`; prefer bounded ones like `\d{1,4}`), may not use backreferences, can look behind at most 32 characters, match at most 80 characters, and scan the first 500 characters of a selection. Each selection also has a hard time budget, so a slow regex is cut short instead of freezing the page. A time right after a date that no enabled format reads is not shown as "today"; add a custom format for that date instead.
 
@@ -106,7 +129,7 @@ npm run e2e          # playwright smoke test
 
 - **Build:** Vite 5 + `@crxjs/vite-plugin` 2
 - **UI:** React 18 + TypeScript (strict)
-- **Time:** `date-fns` + `date-fns-tz` (DST-correct, fractional offsets)
+- **Time:** the browser's `Intl` time zone data, no time library (DST-correct, fractional offsets)
 - **Tests:** Vitest + Testing Library (unit), Playwright (e2e)
 
 ## Permissions

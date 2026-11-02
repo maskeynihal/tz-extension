@@ -29,9 +29,15 @@ describe('built-in registry', () => {
       'epoch-seconds',
       'epoch-millis',
       'iso-8601',
+      'iso-ordinal',
+      'iso-week',
+      'compact-date',
       'ymd-slash',
+      'numeric-date',
+      'unix-date',
       'long-form',
       'day-month-name',
+      'cjk-date',
       'time-of-day',
     ]);
     for (const f of BUILTIN_FORMATS) {
@@ -67,15 +73,18 @@ describe('disabling built-in formats', () => {
 
   it('does not fall back to "today" for the time part of a disabled date format', () => {
     // With ISO off, "15:04" belongs to a date nothing reads; showing it as
-    // today would be confidently wrong.
-    expect(parseTimes('2024-01-02 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601'] })).toHaveLength(0);
-    expect(parseTimes('2024/01/02 15:04', { assumedZone: 'UTC', disabledFormats: ['ymd-slash'] })).toHaveLength(0);
+    // today would be confidently wrong. Numeric dates also read these
+    // shapes, so both formats are off.
+    expect(parseTimes('2024-01-02 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601', 'numeric-date'] })).toHaveLength(0);
+    expect(parseTimes('2024/01/02 15:04', { assumedZone: 'UTC', disabledFormats: ['ymd-slash', 'numeric-date'] })).toHaveLength(0);
+    // With only ISO off, numeric-date reads the whole value.
+    expect(parseTimes('2024-01-02 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601'] })[0]?.formatId).toBe('numeric-date');
     expect(parseTimes('2 Jan 2024 15:00', { assumedZone: 'UTC', disabledFormats: ['day-month-name'] })).toHaveLength(0);
     expect(parseTimes('Oct 28 2026 4:24 PM', { assumedZone: 'UTC', disabledFormats: ['long-form'] })).toHaveLength(0);
   });
 
   it('lets another format take over for a different value', () => {
-    const [r] = parseTimes('2024-01-02 and later 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601'] });
+    const [r] = parseTimes('2024-01-02 and later 15:04', { assumedZone: 'UTC', disabledFormats: ['iso-8601', 'numeric-date'] });
     expect(r?.formatId).toBe('time-of-day');
   });
 
@@ -364,8 +373,30 @@ describe('QA regressions', () => {
   });
 
   it('does not show the time of an unrecognized date as today', () => {
-    for (const text of ['31/12/2024 10:30', '12/25/2024 3pm EST', '2024/02/31 10:00', '24.12.2024 um 18:30', '24.12.2024 um 18:00 CET', '2024/02/31 10:00 UTC', '31/12/2024 10:30:15 UTC', '2-Jan 15:04', 'Dec 31 10:30', '31 Dec at 10:30']) {
+    for (const text of ['2024/02/31 10:00', '2024/02/31 10:00 UTC', '2-Jan 15:04', 'Dec 31 10:30', '31 Dec at 10:30']) {
       expect(parseTimes(text, 'UTC'), text).toHaveLength(0);
+    }
+    // Numeric dates are now read in full; with that format off they still
+    // produce nothing (never "today").
+    for (const text of ['31/12/2024 10:30', '12/25/2024 3pm EST', '24.12.2024 um 18:30', '24.12.2024 um 18:00 CET', '31/12/2024 10:30:15 UTC']) {
+      expect(parseTimes(text, { assumedZone: 'UTC', disabledFormats: ['numeric-date'] }), text).toHaveLength(0);
+    }
+  });
+
+  it('reads numeric dates with their time and zone', () => {
+    const cases: [string, string][] = [
+      ['31/12/2024 10:30', '2024-12-31T10:30:00.000Z'],
+      ['12/25/2024 3pm EST', '2024-12-25T20:00:00.000Z'],
+      ['24.12.2024 um 18:30', '2024-12-24T18:30:00.000Z'],
+      ['24.12.2024 um 18:00 CET', '2024-12-24T17:00:00.000Z'],
+      ['31/12/2024 10:30:15 UTC', '2024-12-31T10:30:15.000Z'],
+    ];
+    for (const [text, expected] of cases) {
+      const rs = parseTimes(text, 'UTC');
+      expect(rs, text).toHaveLength(1);
+      expect(rs[0]?.formatId, text).toBe('numeric-date');
+      expect(rs[0]?.matchedText, text).toBe(text);
+      expect(iso(rs[0]!.epochMs), text).toBe(expected);
     }
   });
 
