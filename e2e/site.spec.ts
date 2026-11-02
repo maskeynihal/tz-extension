@@ -101,7 +101,7 @@ for (const how of ['https', 'file'] as const) {
       test(`at ${width} px the header is the same on every page and links to both tools`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
         const spots: string[] = [];
-        for (const name of ['index.html', 'app.html', 'clock.html', 'privacy.html']) {
+        for (const name of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
           const errors = await open(page, name);
           const nav = page.getByRole('navigation', { name: 'Site' });
           for (const label of ['Converter', 'World clock']) {
