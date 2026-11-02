@@ -409,6 +409,17 @@ ul.tzx-results { list-style: none; margin: 0; padding: 0; }
 }
 .tzx-access-btn:hover { background: var(--tz-brand-strong); border-color: var(--tz-brand-strong); }
 .tzx-access-btn:disabled { opacity: 0.6; cursor: progress; }
+/* The grant is the one accent-filled control; stopping the message is quiet
+   but still a real button, and wraps instead of overflowing at 400px. */
+.tzx-access-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tzx-access-dismiss {
+  border: 1px solid var(--tz-border-brand); background: transparent; color: var(--tz-body);
+  border-radius: var(--tz-radius-md); padding: 7px 12px;
+  font: inherit; font-size: var(--tz-fs-sm); font-weight: var(--tz-fw-medium);
+  cursor: pointer; white-space: nowrap;
+  transition: background 0.12s;
+}
+.tzx-access-dismiss:hover { background: var(--tz-surface); }
 .tzx-access-ok {
   margin: 0 0 12px; padding: 8px 12px;
   border: 1px solid var(--tz-success); border-radius: var(--tz-radius-md);
@@ -423,5 +434,5 @@ ul.tzx-results { list-style: none; margin: 0; padding: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   .tzx-access { animation: none; }
-  .tzx-access-btn { transition: none; }
+  .tzx-access-btn, .tzx-access-dismiss { transition: none; }
 }

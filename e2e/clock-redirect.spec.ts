@@ -2,7 +2,8 @@ import { test, expect, chromium, type BrowserContext } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { SITE_CLOCK_URL } from '../src/lib/site';
+import { CLOCK_HANDOFF_PARAM, SITE_CLOCK_URL, readClockHandoff } from '../src/lib/site';
+import { PREFS_KEY } from '../src/lib/storage';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(__dirname, '../dist');
@@ -57,6 +58,51 @@ test.describe('world clock button', () => {
     // so the tab lands on a network error page and page.url() is that error.
     expect(clock).not.toBe(popup);
     expect(popup.url()).toContain('/src/popup/index.html');
+    await clock.close();
+    await popup.close();
+  });
+
+  /*
+   * The site clock reads the site origin's localStorage, so the zones
+   * configured in the extension only reach it if the link carries them
+   * (review r8 #1). Playwright cannot intercept the first navigation of a tab
+   * chrome.tabs.create opens, and the host is blackholed here, so the URL is
+   * read back from the browser's own tab list through the extension — which
+   * is the one place that sees exactly what was asked for.
+   */
+  test('the tab it opens carries the configured zones in the fragment', async () => {
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${extId}/src/popup/index.html`);
+    await popup.evaluate(
+      ([key, prefs]) => chrome.storage.sync.set({ [key as string]: prefs }),
+      [PREFS_KEY, { homeZone: 'Asia/Kathmandu', targetZones: ['UTC', 'UTC+05:45', 'abbr:PDT'], hour12: false }] as const,
+    );
+    await popup.reload();
+    const button = popup.getByRole('button', { name: 'Open world clock' });
+    await expect(button).toBeVisible();
+    // Wait for the stored preferences to be in hand: before that the popup
+    // deliberately hands nothing over.
+    await expect(popup.locator('.tzx-loading')).toHaveCount(0);
+    const opened = context.waitForEvent('page');
+    await button.click();
+    const clock = await opened;
+
+    const url = await popup.evaluate(
+      async (param) => {
+        const tabs = await chrome.tabs.query({});
+        return tabs.map((t) => t.url ?? t.pendingUrl ?? '').find((u) => u.includes(param)) ?? '';
+      },
+      CLOCK_HANDOFF_PARAM,
+    );
+    expect(url.startsWith(`${SITE_CLOCK_URL}#`), `asked for ${url}`).toBe(true);
+    // A fragment, never a query string: a query string would be sent to the
+    // server, and nothing about the user's zones may leave the device.
+    expect(new URL(url).search).toBe('');
+    expect(readClockHandoff(new URL(url).hash)).toEqual({
+      homeZone: 'Asia/Kathmandu',
+      targetZones: ['UTC', 'UTC+05:45', 'abbr:PDT'],
+      hour12: false,
+    });
     await clock.close();
     await popup.close();
   });

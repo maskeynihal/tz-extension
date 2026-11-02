@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Preferences } from '../types';
 import { useSyncedPreferences } from '../lib/use-synced-prefs';
-import { SITE_CLOCK_URL } from '../lib/site';
+import { SITE_CLOCK_URL, clockUrlForPreferences } from '../lib/site';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { getBuildInfo } from '../lib/build-info';
 import { AccessBanner } from './AccessBanner';
@@ -39,15 +39,22 @@ export function App(): JSX.Element {
    * Open the world clock on the website. The extension no longer carries its
    * own copy of the page: it is the same app either way, and a tab on the site
    * can be bookmarked, shared and left open.
+   *
+   * The site keeps its settings in its own origin's localStorage, so the
+   * zones configured here would not be there. They travel in the URL
+   * fragment, which is never sent to the server; see src/lib/site.ts.
    */
   function openWorldClock(): void {
+    // Before the stored preferences have been read, `prefs` is still the
+    // defaults; handing those over would overwrite whatever the site had
+    // saved with settings the user never chose. Send nothing instead, which
+    // leaves the site on its own preferences.
+    const url = loaded ? clockUrlForPreferences(prefs) : SITE_CLOCK_URL;
     if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
-      void Promise.resolve(chrome.tabs.create({ url: SITE_CLOCK_URL })).catch(() =>
-        window.open(SITE_CLOCK_URL, '_blank', 'noopener'),
-      );
+      void Promise.resolve(chrome.tabs.create({ url })).catch(() => window.open(url, '_blank', 'noopener'));
       return;
     }
-    window.open(SITE_CLOCK_URL, '_blank', 'noopener');
+    window.open(url, '_blank', 'noopener');
   }
 
   function openOptions(): void {

@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, cleanup } from '@testing-library/react';
 import { AccessBanner } from '../src/popup/AccessBanner';
 import { App } from '../src/popup/App';
+import { loadAccessDismissed, saveAccessDismissed } from '../src/popup/access-dismissal';
 
 type Listener = () => void;
 
 interface PermMock {
   contains: Mock;
   request: Mock;
+  getAll: Mock;
   added: Listener[];
   removed: Listener[];
 }
@@ -16,11 +18,16 @@ interface PermMock {
 /**
  * tests/setup.ts rebuilds `chrome` for every test and other suites depend on
  * it, so the permissions API is grafted on here instead of there.
+ *
+ * `getAll` reports what a real Chromium reports: the granted origin patterns,
+ * which is the only thing that tells "allowed a few sites" apart from
+ * "allowed nothing" — `contains({origins:['<all_urls>']})` is false for both.
  */
-function installPermissions(granted: boolean): PermMock {
+function installPermissions(granted: boolean, origins?: string[]): PermMock {
   const m: PermMock = {
     contains: vi.fn(async () => granted),
     request: vi.fn(async () => false),
+    getAll: vi.fn(async () => ({ origins: origins ?? (granted ? ['<all_urls>'] : []), permissions: ['storage'] })),
     added: [],
     removed: [],
   };
@@ -28,6 +35,7 @@ function installPermissions(granted: boolean): PermMock {
   c.permissions = {
     contains: m.contains,
     request: m.request,
+    getAll: m.getAll,
     onAdded: {
       addListener: (l: Listener) => m.added.push(l),
       removeListener: (l: Listener) => {
@@ -79,12 +87,17 @@ describe('popup access banner', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('appears with one button when access is withheld', async () => {
+  it('appears when access is withheld, offering the grant and a way to stop asking', async () => {
     installPermissions(false);
     await mount(<AccessBanner />);
     await waitFor(() => expect(banner()).not.toBeNull());
     expect(banner()?.textContent).toMatch(/won’t convert until you allow/i);
-    expect(banner()?.querySelectorAll('button')).toHaveLength(1);
+    // Two: the grant, and "don't show again". The banner used to offer only
+    // the grant, which left a user who kept saying no with a permanent notice
+    // (review r8 #7).
+    expect(banner()?.querySelectorAll('button')).toHaveLength(2);
+    expect(allow()).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Don’t show again' })).toBeInTheDocument();
   });
 
   it('asks for every site at once, from the click', async () => {
@@ -119,14 +132,34 @@ describe('popup access banner', () => {
     expect(document.querySelector('.tzx-access-hint')?.textContent).toMatch(/later/i);
   });
 
-  it('a rejected request is treated as "not granted"', async () => {
+  /*
+   * A rejected request means this browser will not let the extension ask at
+   * all (a refusal resolves `false` instead). Offering the button again would
+   * be offering one that does nothing, so the banner degrades to telling the
+   * user where to grant it by hand (review r8 #6).
+   */
+  it('a rejected request stops offering the button and says where to grant it by hand', async () => {
     const p = installPermissions(false);
-    p.request.mockRejectedValue(new Error('no user gesture'));
+    p.request.mockRejectedValue(new Error('not an optional permission'));
     await mount(<AccessBanner />);
     await waitFor(() => expect(banner()).not.toBeNull());
     await settle(() => fireEvent.click(allow()));
     await waitFor(() => expect(document.querySelector('.tzx-access-hint')).not.toBeNull());
     expect(banner()).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Allow on all sites' })).toBeNull();
+    expect(document.querySelector('.tzx-access-hint')?.textContent).toMatch(/won’t let the extension ask/i);
+    expect(document.querySelector('.tzx-access-hint')?.textContent).toMatch(/Site access/);
+  });
+
+  it('offers no grant button at all where the browser has no request()', async () => {
+    const p = installPermissions(false);
+    delete (globalThis.chrome.permissions as unknown as Record<string, unknown>).request;
+    await mount(<AccessBanner />);
+    await waitFor(() => expect(banner()).not.toBeNull());
+    expect(screen.queryByRole('button', { name: 'Allow on all sites' })).toBeNull();
+    expect(p.request).not.toHaveBeenCalled();
+    // The user can still stop being told about it.
+    expect(screen.getByRole('button', { name: 'Don’t show again' })).toBeInTheDocument();
   });
 
   it('a grant that lands while the popup is open hides the banner', async () => {
@@ -150,6 +183,70 @@ describe('popup access banner', () => {
     p.contains.mockResolvedValue(false);
     await settle(() => p.removed.forEach((l) => l()));
     await waitFor(() => expect(banner()).not.toBeNull());
+  });
+
+  /*
+   * A user who chose "on specific sites" does get conversions there, so the
+   * old copy ("times on pages won't convert") was simply false for them, on
+   * every popup open, with no way out (review r8 #7). Verified against a real
+   * Chromium: withholding reports `origins: []`, a per-site grant reports
+   * exactly those patterns, and contains(<all_urls>) is false for both.
+   */
+  it('tells a partial grant apart from no access, and words it honestly', async () => {
+    const p = installPermissions(false, ['https://example.com/*']);
+    await mount(<AccessBanner />);
+    await waitFor(() => expect(banner()).not.toBeNull());
+    expect(p.getAll).toHaveBeenCalled();
+    const text = banner()?.textContent ?? '';
+    expect(text).toMatch(/convert on the sites you’ve allowed/i);
+    // The false claim, specifically: not for someone who allowed some sites.
+    expect(text).not.toMatch(/Times on pages won’t convert until you allow/);
+    // Widening is still on offer, because other pages really are dead.
+    expect(allow()).toBeInTheDocument();
+  });
+
+  it('says nothing is granted only when nothing is', async () => {
+    installPermissions(false, []);
+    await mount(<AccessBanner />);
+    await waitFor(() => expect(banner()).not.toBeNull());
+    expect(banner()?.textContent).toMatch(/Times on pages won’t convert until you allow/);
+  });
+
+  it('falls back to the no-access wording where getAll is missing or broken', async () => {
+    const p = installPermissions(false, ['https://example.com/*']);
+    p.getAll.mockRejectedValue(new Error('unsupported'));
+    await mount(<AccessBanner />);
+    await waitFor(() => expect(banner()).not.toBeNull());
+    expect(banner()?.textContent).toMatch(/Times on pages won’t convert until you allow/);
+  });
+
+  it('stops telling the user once, and keeps quiet on the next popup', async () => {
+    installPermissions(false);
+    await mount(<AccessBanner />);
+    await waitFor(() => expect(banner()).not.toBeNull());
+    await settle(() => fireEvent.click(screen.getByRole('button', { name: 'Don’t show again' })));
+    await waitFor(() => expect(banner()).toBeNull());
+    // Persisted, so the next popup (a fresh mount) stays quiet too.
+    expect(await loadAccessDismissed()).toBe(true);
+    cleanup();
+    installPermissions(false);
+    await mount(<AccessBanner />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(banner()).toBeNull());
+  });
+
+  it('a dismissal does not hide a later grant confirmation, and is forgotten once access lands', async () => {
+    await saveAccessDismissed(true);
+    const p = installPermissions(false);
+    await mount(<AccessBanner />);
+    await waitFor(() => expect(banner()).toBeNull());
+    p.contains.mockResolvedValue(true);
+    await settle(() => p.added.forEach((l) => l()));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/reading pages now/i));
+    // The user is no longer being nagged, so a future revoke may say so once.
+    await waitFor(async () => expect(await loadAccessDismissed()).toBe(false));
   });
 
   it('renders nothing and does not crash when chrome.permissions is absent', async () => {

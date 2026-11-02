@@ -122,14 +122,97 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
   void convertInTab(tab.id, info.frameId ?? 0, info.selectionText ?? '');
 });
 
+/*
+ * Which tabs a fresh grant applies to
+ * -----------------------------------
+ * executeScript is not bound by the manifest's match patterns, so passing it
+ * every open tab hands it pages the content script would never have run on:
+ * the extension's own options page, chrome:// tabs, about:blank, data: URLs.
+ * Chrome rejects all of those ("Cannot access contents of the page", "Cannot
+ * access a chrome:// URL") and nothing is injected, so this was never a
+ * security hole — but it is a round trip per tab for a call that cannot
+ * succeed, and relying on another browser refusing the same way is not worth
+ * it when the manifest already says which URLs we run on. So the patterns are
+ * read back out of the manifest and matched here.
+ */
+
+/** Schemes `<all_urls>` covers (MV3). Never chrome-extension: or chrome:. */
+const ALL_URLS_SCHEMES = ['http', 'https', 'file', 'ftp'];
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** One match pattern as a regular expression, or null when unparseable. */
+function patternToRegExp(pattern: string): RegExp | null {
+  if (pattern === '<all_urls>') return new RegExp(`^(?:${ALL_URLS_SCHEMES.join('|')}):`, 'i');
+  const m = /^(\*|[a-z][a-z0-9+.-]*):\/\/([^/]*)(\/.*)$/i.exec(pattern);
+  if (!m) return null;
+  const [, scheme = '', host = '', path = ''] = m;
+  const schemeRe = scheme === '*' ? '(?:http|https)' : escapeRe(scheme);
+  // "*" = any host; "*.example.com" = that domain or any subdomain.
+  const hostRe =
+    host === '*'
+      ? '[^/]+'
+      : host.startsWith('*.')
+        ? `(?:[^/]+\\.)?${escapeRe(host.slice(2))}`
+        : escapeRe(host);
+  const pathRe = escapeRe(path).replace(/\\\*/g, '.*');
+  return new RegExp(`^${schemeRe}://${hostRe}${pathRe}$`, 'i');
+}
+
+let csMatchers: readonly RegExp[] | null = null;
+
+/** The manifest content script's match patterns, compiled once. */
+function contentScriptMatchers(): readonly RegExp[] {
+  if (csMatchers) return csMatchers;
+  let patterns: string[] = [];
+  try {
+    patterns = (chrome.runtime.getManifest().content_scripts ?? []).flatMap((c) => c.matches ?? []);
+  } catch {
+    patterns = [];
+  }
+  const compiled = patterns.map(patternToRegExp).filter((r): r is RegExp => r !== null);
+  // An unreadable manifest must not silently stop every injection; fall back
+  // to what this manifest declares, which is every ordinary web page.
+  csMatchers = compiled.length > 0 ? compiled : [patternToRegExp('<all_urls>') as RegExp];
+  return csMatchers;
+}
+
+/** True when the manifest's content script would have run on this URL. */
+function wouldRunOn(url: string | undefined): boolean {
+  if (!url) return false;
+  return contentScriptMatchers().some((re) => re.test(url));
+}
+
+/** Run `fn` over `items`, `limit` of them in flight at once. */
+async function inParallel<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<unknown>): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const item = items[next++];
+      if (item !== undefined) await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+}
+
+/** How many executeScript calls are in flight at once (a session can hold hundreds of tabs). */
+const INJECT_CONCURRENCY = 8;
+
 /**
  * A fresh all-sites grant reaches only future navigations: manifest content
  * scripts are not applied retroactively, so every tab the user already has
  * open stays dead until it is reloaded. Inject into each one instead. The
  * content script keeps a single live copy per page (see its INSTANCE_KEY
  * guard), so landing on a tab that already runs it is a no-op.
+ *
+ * `covers`, when given, are the origin patterns the grant just added: only
+ * tabs inside them need anything, since every other tab either already had
+ * the script or still has no access. Without it (a browser that reports no
+ * origins) every tab the content script matches is tried.
  */
-async function injectIntoOpenTabs(): Promise<void> {
+async function injectIntoOpenTabs(covers?: readonly RegExp[]): Promise<void> {
   if (contentScriptFiles().length === 0 || typeof chrome.tabs?.query !== 'function') return;
   let tabs: chrome.tabs.Tab[];
   try {
@@ -137,18 +220,37 @@ async function injectIntoOpenTabs(): Promise<void> {
   } catch {
     return;
   }
-  for (const tab of tabs) {
-    if (tab.id === undefined || tab.id < 0) continue;
-    // inject() swallows restricted pages (browser UI, the web store) itself.
-    await inject(tab.id, 0);
-  }
+  const targets = tabs.filter((tab) => {
+    if (tab.id === undefined || tab.id < 0) return false;
+    // Without host access to a tab the browser withholds its URL; such a tab
+    // could not be injected into either.
+    const url = tab.url ?? tab.pendingUrl;
+    if (!wouldRunOn(url)) return false;
+    return !covers || covers.some((re) => re.test(url as string));
+  });
+  // inject() swallows restricted pages (browser UI, the web store) itself.
+  await inParallel(targets, INJECT_CONCURRENCY, (tab) => inject(tab.id as number, 0));
 }
 
 // Exposed for the e2e suite, which cannot drive a permission prompt.
 (globalThis as unknown as { tzxInjectIntoOpenTabs?: typeof injectIntoOpenTabs }).tzxInjectIntoOpenTabs =
   injectIntoOpenTabs;
 
-chrome.permissions?.onAdded?.addListener(() => {
+/**
+ * Only a grant that widens *host* access can bring a tab to life. Any other
+ * optional permission (a named one, now or in some later feature) leaves
+ * every page exactly as it was, so walking the whole tab list for it is pure
+ * waste. A browser that reports no detail at all still gets the full walk.
+ */
+chrome.permissions?.onAdded?.addListener((added?: chrome.permissions.Permissions) => {
+  if (added && typeof added === 'object') {
+    const origins = Array.isArray(added.origins) ? added.origins : [];
+    if (origins.length === 0) return;
+    const covers = origins.map(patternToRegExp).filter((r): r is RegExp => r !== null);
+    // Unparseable patterns: fall back to every tab we match rather than none.
+    void injectIntoOpenTabs(covers.length === origins.length ? covers : undefined);
+    return;
+  }
   void injectIntoOpenTabs();
 });
 
