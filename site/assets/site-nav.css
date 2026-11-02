@@ -1,0 +1,55 @@
+/* The site header, shared by index.html, app.html and clock.html so it sits
+   in the same place on every page. Each page sets --ground, --border, --ink,
+   --body and --accent / --accent-ink for its light and dark themes. */
+.site-nav {
+  position: sticky; top: 0; z-index: 30;
+  background: color-mix(in srgb, var(--ground) 86%, transparent);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  border-bottom: 1px solid var(--border);
+  /* Same text metrics on every page, whatever the page body sets. */
+  font-family: var(--font); font-size: 15px; line-height: 1.5;
+}
+.site-nav-inner {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  height: 64px; max-width: 1200px; margin: 0 auto; padding: 0 clamp(16px, 3vw, 32px);
+  box-sizing: border-box;
+}
+.site-brand {
+  display: flex; align-items: center; gap: 10px; flex: none;
+  font-weight: 700; font-size: 18px; color: var(--ink); white-space: nowrap; text-decoration: none;
+}
+.site-brand:hover { text-decoration: none; }
+.site-brand-dot {
+  width: 22px; height: 22px; border-radius: 6px; background: var(--accent); color: var(--accent-ink);
+  display: inline-grid; place-items: center; font-size: 12px; font-weight: 800;
+}
+.site-links { display: flex; align-items: center; gap: 24px; font-size: 15px; min-width: 0; }
+.site-links a { color: var(--body); white-space: nowrap; text-decoration: none; }
+.site-links a:hover { color: var(--ink); text-decoration: none; }
+.site-links a[aria-current='page'] { color: var(--ink); font-weight: 600; }
+.site-links a:focus-visible, .site-brand:focus-visible {
+  outline: none; border-radius: 6px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.site-links a.site-cta {
+  display: inline-flex; align-items: center; font-weight: 600; padding: 9px 16px; border-radius: 9px;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+}
+.site-links a.site-cta:hover { filter: brightness(1.06); color: var(--accent-ink); }
+.site-cta-short { display: none; }
+
+/* Tablets and phones: the page links stay (Converter, World clock); in-page
+   anchors go. Phones: the logo keeps its mark only and the button says Install. */
+@media (max-width: 720px) {
+  .site-links { gap: 16px; }
+  .site-links .site-extra { display: none; }
+}
+@media (max-width: 480px) {
+  .site-nav-inner { gap: 12px; }
+  .site-links { gap: 14px; font-size: 14px; }
+  .site-brand-name { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .site-links a.site-cta { padding: 7px 12px; }
+  .site-cta-long { display: none; }
+  .site-cta-short { display: inline; }
+}

@@ -10,14 +10,14 @@
     <style>
       :root {
         --ground: #ffffff; --raised: #f7f8fa; --border: #e6e7ec;
-        --ink: #16181d; --body: #3a3d46; --muted: #767983; --accent: #4f46e5;
+        --ink: #16181d; --body: #3a3d46; --muted: #62656f; --accent: #4f46e5; --accent-ink: #ffffff;
         --maxw: 760px;
         --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --ground: #0f1115; --raised: #16181d; --border: #262930;
-          --ink: #f3f4f6; --body: #c3c6ce; --muted: #8b8e98; --accent: #8b8bf0;
+          --ink: #f3f4f6; --body: #c3c6ce; --muted: #8b8e98; --accent: #8b8bf0; --accent-ink: #0b0b16;
         }
       }
       * { box-sizing: border-box; }
@@ -37,22 +37,24 @@
       }
       ul { padding-left: 22px; }
       li { margin: 6px 0; }
-      .back { display: inline-block; color: var(--accent); text-decoration: none; font-weight: 500; }
-      .top-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-bottom: 28px; font-size: 0.95rem; }
-      .top-links a:not(.back) { color: var(--body); text-decoration: none; }
-      .top-links a:not(.back):hover { color: var(--accent); text-decoration: underline; }
       footer { color: var(--muted); font-size: 0.9rem; margin-top: 48px; border-top: 1px solid var(--border); padding-top: 20px; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--raised); padding: 1px 5px; border-radius: 5px; }
     </style>
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./assets/site-nav.css" />
   </head>
   <body>
+    <header class="site-nav">
+      <div class="site-nav-inner">
+        <a class="site-brand" href="./index.html"><span class="site-brand-dot" aria-hidden="true">TZ</span><span class="site-brand-name">TZ Converter</span></a>
+        <nav class="site-links" aria-label="Site">
+          <a href="./app.html">Converter</a>
+          <a href="./clock.html">World clock</a>
+          <a class="site-cta" id="nav-add" href="./index.html#install"><span class="site-cta-long">Add to browser</span><span class="site-cta-short">Install</span></a>
+        </nav>
+      </div>
+    </header>
     <main>
-      <nav class="top-links" aria-label="Site">
-        <a class="back" href="./index.html">← TZ Converter</a>
-        <a href="./app.html">Converter</a>
-        <a href="./clock.html">World clock</a>
-        <a href="./terms.html">Terms</a>
-      </nav>
       <h1>Privacy Policy</h1>
       <p class="updated">Last updated: 1 November 2026</p>
 
@@ -146,6 +148,7 @@
       <footer>
         TZ Converter is free and open source.
         <a href="https://github.com/maskeynihal/tz-extension">View the source on GitHub</a>.
+        See also our <a href="./terms.html">Terms of Service</a>.
       </footer>
     </main>
   </body>

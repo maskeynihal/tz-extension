@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const siteDir = resolve(root, 'site');
 const outDir = resolve(root, 'docs');
-const PAGES = ['index.html', 'app.html', 'clock.html', 'privacy.html'];
+const PAGES = ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html'];
 
 mkdirSync(outDir, { recursive: true });
 

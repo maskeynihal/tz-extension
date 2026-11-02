@@ -11,7 +11,7 @@
       :root {
         --ground: #ffffff; --raised: #f7f8fa; --sunken: #f1f2f5;
         --border: #e6e7ec; --border-strong: #dcdee4;
-        --ink: #16181d; --body: #3a3d46; --muted: #767983;
+        --ink: #16181d; --body: #3a3d46; --muted: #62656f;
         --accent: #4f46e5; --accent-ink: #ffffff; --amber: #f5c518;
         --maxw: 780px; --radius: 12px;
         --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -31,15 +31,6 @@
       a:hover { text-decoration: underline; }
       .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
       h1 { color: var(--ink); letter-spacing: -0.02em; line-height: 1.12; margin: 0; }
-
-      header.nav { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--ground) 86%, transparent); backdrop-filter: saturate(140%) blur(10px); border-bottom: 1px solid var(--border); }
-      .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; max-width: 980px; margin: 0 auto; padding: 0 24px; }
-      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--ink); font-size: 18px; }
-      .brand .dot { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-grid; place-items: center; color: var(--accent-ink); font-size: 12px; font-weight: 800; }
-      .nav-links { display: flex; align-items: center; gap: 24px; font-size: 15px; }
-      .nav-links a { color: var(--body); }
-      .nav-links a[aria-current="page"] { color: var(--ink); font-weight: 600; }
-      @media (max-width: 720px) { .nav-links a:not(.btn) { display: none; } .nav-links a[href="./clock.html"] { display: inline; } }
       .btn { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); cursor: pointer; }
       .btn:hover { border-color: var(--accent); text-decoration: none; }
       .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
@@ -51,7 +42,8 @@
       .app-main { padding: 28px 0 80px; }
 
       .demo-card { border: 1px solid var(--border); border-radius: 16px; background: var(--raised); padding: 24px; box-shadow: 0 1px 0 var(--border), 0 24px 60px -40px rgba(20,24,40,0.5); }
-      .demo-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+      .demo-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+      .demo-tab, .demo-seg-btn { white-space: nowrap; }
       .demo-tabs { display: flex; gap: 4px; background: var(--sunken); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
       .demo-tab { border: none; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; padding: 7px 14px; border-radius: 7px; cursor: pointer; }
       .demo-tab.is-on { background: var(--ground); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
@@ -82,6 +74,16 @@
       .demo-off { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
       .demo-del { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
       .demo-del:hover { color: #d14343; border-color: var(--border-strong); }
+      /* Phones: the zone on its own line, then the date, time and offset, so
+         a time never wraps ("2:05:00" / "PM") and a name never splits. */
+      @media (max-width: 560px) {
+        .demo-row { flex-direction: column; align-items: stretch; gap: 4px; padding: 12px 40px 12px 14px; }
+        .demo-row.is-local { padding-right: 14px; }
+        .demo-val { justify-content: flex-start; text-align: left; gap: 10px; }
+        /* The time on a line of its own, then the date and offset, the same in every row. */
+        .demo-time { white-space: nowrap; font-size: 18px; order: -1; flex-basis: 100%; }
+        .demo-del { top: 10px; transform: none; }
+      }
       .demo-format { font-size: 13px; color: var(--muted); margin: -8px 2px 12px; }
       .demo-format:empty { display: none; }
       .demo-order { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 2px 14px; font-size: 14px; }
@@ -102,7 +104,7 @@
       /* Searchable zone picker (the extension's component). */
       .demo-picker { margin-top: 14px; }
       .tzx-picker { position: relative; }
-      .tzx-picker input { width: 100%; font: inherit; font-size: 15px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); }
+      .tzx-picker input { text-overflow: ellipsis; width: 100%; font: inherit; font-size: 15px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--ground); color: var(--ink); }
       .tzx-picker input::placeholder { color: var(--muted); }
       .tzx-picker input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
       .tzx-listbox { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 6px); margin: 0; padding: 4px; list-style: none; max-height: 300px; overflow-y: auto; background: var(--ground); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 18px 40px -16px rgba(20,24,40,0.45); }
@@ -118,17 +120,17 @@
       .app-tip { margin-top: 20px; font-size: 14px; color: var(--muted); text-align: center; }
       footer { border-top: 1px solid var(--border); padding: 32px 0; color: var(--muted); font-size: 14px; text-align: center; }
     </style>
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./assets/site-nav.css" />
   </head>
   <body>
-    <header class="nav">
-      <div class="nav-inner">
-        <a class="brand" href="./index.html"><span class="dot">TZ</span> TZ Converter</a>
-        <nav class="nav-links">
-          <a href="./index.html">Home</a>
+    <header class="site-nav">
+      <div class="site-nav-inner">
+        <a class="site-brand" href="./index.html"><span class="site-brand-dot" aria-hidden="true">TZ</span><span class="site-brand-name">TZ Converter</span></a>
+        <nav class="site-links" aria-label="Site">
           <a href="./app.html" aria-current="page">Converter</a>
           <a href="./clock.html">World clock</a>
-          <a href="./index.html#install">Get the extension</a>
-          <a class="btn primary" href="./index.html#install">Add to browser</a>
+          <a class="site-cta" id="nav-add" href="./index.html#install"><span class="site-cta-long">Add to browser</span><span class="site-cta-short">Install</span></a>
         </nav>
       </div>
     </header>

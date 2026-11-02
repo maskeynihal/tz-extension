@@ -65,6 +65,14 @@ describe('website storage opt-in', () => {
 });
 
 describe('website pages', () => {
+  it('the home page and the privacy policy link to the terms', () => {
+    for (const page of ['index.html', 'privacy.html']) {
+      const footer = /<footer[\s\S]*?<\/footer>/.exec(read(`site/${page}`))?.[0] ?? '';
+      expect(footer, page).toContain('href="./terms.html"');
+    }
+    expect(read('site/terms.html')).toContain('href="./privacy.html"');
+  });
+
   it('every page footer links to the privacy policy', () => {
     for (const page of ['index.html', 'app.html', 'clock.html']) {
       const footer = /<footer[\s\S]*?<\/footer>/.exec(read(`site/${page}`))?.[0] ?? '';
@@ -75,7 +83,7 @@ describe('website pages', () => {
   it('built pages and scripts only reference files that exist in docs/', () => {
     const docs = resolve(root, 'docs');
     const missing: string[] = [];
-    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html']) {
+    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
       const html = readFileSync(resolve(docs, page), 'utf8');
       for (const m of html.matchAll(/(?:src|href)="(\.\/[^"#?]+)"/g)) {
         const ref = m[1] as string;
@@ -94,7 +102,7 @@ describe('website pages', () => {
   // disk. The site ships classic, self-contained scripts instead.
   it('pages load classic scripts that import nothing, so they also work from file://', () => {
     const docs = resolve(root, 'docs');
-    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html']) {
+    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
       for (const dir of ['site', 'docs']) {
         expect(readFileSync(resolve(root, dir, page), 'utf8'), `${dir}/${page}`).not.toMatch(/<script[^>]*type=["']module["']/);
       }

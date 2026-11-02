@@ -23,10 +23,13 @@ for (const how of ['https', 'file'] as const) {
       const errors: string[] = [];
       page.on('pageerror', (e) => errors.push(e.message));
       page.on('console', (m) => {
-        if (m.type() === 'error' && !/rsms\.me|Failed to load resource/.test(m.text())) errors.push(m.text());
+        // Any failed load counts (a missing favicon once logged a 404 on every page).
+        if (m.type() === 'error') errors.push(m.text());
       });
       // The web font is not needed here and must not slow the test down.
       await page.route('https://rsms.me/**', (r) => r.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+      // A server answers /favicon.ico; file:// has none. Pages must name their icon.
+      if (how === 'https') await page.route(`${ORIGIN}/favicon.ico`, (r) => r.fulfill({ status: 404, body: '' }));
       if (how === 'https') {
         await page.route(`${ORIGIN}/**`, (route) => {
           const path = new URL(route.request().url()).pathname.replace(/^\//, '') || 'index.html';
@@ -80,5 +83,48 @@ for (const how of ['https', 'file'] as const) {
       await expect(page.locator('#clock-root').getByText('Asia/Tokyo')).toBeVisible();
       expect(errors).toEqual([]);
     });
+    test('planning a time tags days from home’s real today', async ({ page }) => {
+      const errors = await open(page, 'clock.html');
+      const app = page.locator('#clock-root .tzc-app');
+      const homeCard = app.locator('.tzc-card.is-home');
+      await expect(homeCard.locator('.tzc-day')).toHaveText('Today');
+      // +36h is always a later calendar day at home.
+      await app.getByRole('button', { name: /36 hours/i }).click();
+      await expect(homeCard.locator('.tzc-day')).not.toHaveText('Today');
+      await expect(homeCard.locator('.tzc-day')).toHaveText(/Tomorrow|In 2 days/);
+      await app.getByRole('button', { name: 'Back to now' }).click();
+      await expect(homeCard.locator('.tzc-day')).toHaveText('Today');
+      expect(errors).toEqual([]);
+    });
+
+    for (const width of [1280, 390]) {
+      test(`at ${width} px the header is the same on every page and links to both tools`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        const spots: string[] = [];
+        for (const name of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
+          const errors = await open(page, name);
+          const nav = page.getByRole('navigation', { name: 'Site' });
+          for (const label of ['Converter', 'World clock']) {
+            const link = nav.getByRole('link', { name: label, exact: true });
+            await expect(link).toBeVisible();
+            const box = (await link.boundingBox())!;
+            expect(box.height, `${name} ${label} stays one line`).toBeLessThan(30);
+          }
+          const cta = nav.locator('.site-cta');
+          const header = (await page.locator('.site-nav').boundingBox())!;
+          const btn = (await cta.boundingBox())!;
+          expect(btn.y).toBeGreaterThanOrEqual(header.y);
+          expect(btn.y + btn.height).toBeLessThanOrEqual(header.y + header.height);
+          const brand = (await page.locator('.site-brand').boundingBox())!;
+          spots.push(`${Math.round(brand.x)},${Math.round(brand.y)},${Math.round(header.height)}`);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+          expect(errors).toEqual([]);
+          page.removeAllListeners('pageerror');
+          page.removeAllListeners('console');
+          await page.unrouteAll({ behavior: 'ignoreErrors' });
+        }
+        expect(new Set(spots).size, spots.join(' ')).toBe(1);
+      });
+    }
   });
 }
