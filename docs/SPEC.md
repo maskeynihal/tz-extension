@@ -1,7 +1,8 @@
 # TZ Extension — Spec & Tickets (source of truth)
 
 A Manifest V3 browser extension for timezone conversion. TypeScript (strict),
-Vite + @crxjs/vite-plugin, React 19, date-fns-tz. Target: Chrome/Edge (Chromium MV3).
+Vite + @crxjs/vite-plugin, React 18. No date library: all timezone maths uses the
+browser's own `Intl` API (src/lib/wallclock.ts). Target: Chrome/Edge (Chromium MV3).
 
 ## Problem statement
 
@@ -36,20 +37,23 @@ Users work across timezones. They need to:
 - AC1: Enter/pick a date+time and a source timezone; see it in N target zones.
 - AC2: Add/remove target timezones from the full IANA list with typeahead search.
 - AC3: "Now" button fills current instant. Live-updating clock optional but must not leak timers.
-- AC4: 12h/24h toggle. DST-correct (date-fns-tz, not fixed offsets).
+- AC4: 12h/24h toggle. DST-correct (per-instant offsets from `Intl`, not fixed offsets).
 - AC5: Invalid input shows an inline error, never crashes.
 
 ### F3 — Epoch converter (popup tab)
-- AC1: Paste epoch; auto-detect seconds (10) vs milliseconds (13) with manual override.
+- AC1: Paste epoch; auto-detect seconds (up to 11 digits) vs milliseconds (12 or more)
+  with manual override. Range 1900-01-01 to 9999-12-31 UTC.
 - AC2: Show the instant in all target zones + ISO-8601 UTC.
-- AC3: Reverse: pick a datetime → show its epoch (s and ms).
+- AC3: Reverse: pick a date and time, read as the home zone's wall clock (labelled with
+  the zone, pre-filled with now in that zone, with a "Now" button) → show its epoch (s and ms).
 - AC4: Non-numeric / out-of-range input shows inline error.
 
 ### Cross-cutting
 - Preferences (target zones, 12/24h, home zone) persist via chrome.storage.sync,
   with chrome.storage.local fallback; sane defaults on first run (home = resolved
   local zone via Intl.DateTimeFormat().resolvedOptions().timeZone).
-- No `any`. Strict TS. ESLint clean. All timezone math via date-fns-tz.
+- No `any`. Strict TS. ESLint clean. All timezone maths via src/lib/wallclock.ts
+  (`Intl.DateTimeFormat` with `timeZone`, read to the second); no date library.
 - Unit tests (Vitest) for the parser and conversion lib with a table of edge cases.
 - One Playwright/puppeteer smoke test that loads the built extension and opens the popup.
 
@@ -59,7 +63,8 @@ Users work across timezones. They need to:
 src/
   manifest.ts              # MV3 manifest (crxjs reads this)
   lib/
-    tz.ts                  # IANA zone list, conversion/format helpers (date-fns-tz)
+    wallclock.ts           # Intl-only offsets, wall clock <-> instant, DST gaps/overlaps
+    tz.ts                  # IANA zone list, conversion/format helpers (on wallclock.ts)
     parse.ts               # robust time/date string parser -> ParsedTime[]
     epoch.ts               # epoch<->date, s/ms detection
     storage.ts             # typed chrome.storage wrapper + defaults
@@ -81,7 +86,13 @@ e2e/        # playwright smoke
 - Empty / whitespace-only selection.
 - Multiple candidate times in one selection → parse the first clear one, note count.
 - Epoch boundary: 0, negative, year > 9999, 32-bit overflow.
-- DST transitions (spring-forward gap, fall-back overlap) — date-fns-tz semantics, documented.
+- DST transitions, resolved in src/lib/wallclock.ts (`wallFieldsToInstant`) the way
+  java.time and Temporal's "compatible" mode do:
+  - Spring-forward gap (a time that never happened): read with the offset in force
+    before the jump, so 02:30 on the New York spring-forward night is shown as 03:30 EDT.
+  - Fall-back overlap (a time that happened twice): the earlier instant, so 01:30 on
+    the New York fall-back night is 01:30 EDT.
+  - Both are flagged (`wallClock: 'gap' | 'ambiguous'`) and the UI says so in a note.
 - Half-hour / 45-min offset zones (Asia/Kathmandu +05:45, Australia/Eucla +08:45).
 - `chrome.storage` unavailable (content script on restricted pages) → graceful no-op.
 - Shadow DOM style isolation from hostile page CSS.

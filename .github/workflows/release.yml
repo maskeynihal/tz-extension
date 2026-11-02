@@ -2,22 +2,31 @@ name: Release
 
 # On every merge to main: verify, bump the version from conventional commits,
 # tag, build both browser zips, write funny release notes, and publish a release.
+# Then hand the release's zips to publish-stores.yml, which submits them to the
+# Chrome Web Store and Firefox Add-ons (skipped per store until secrets exist).
 on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+permissions: {}
 
 jobs:
   release:
     runs-on: ubuntu-latest
     # Skip the bot's own release commit so we never loop.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    # Serialize releases (version bump + tag) only. The publish job is left out
+    # so a store submission waiting for approval or polling the store does not
+    # hold up the next release; publish-stores.yml has its own per-store groups.
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # push the version bump + tag, create the GitHub release
+    outputs:
+      released: ${{ steps.bump.outputs.released }}
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
     steps:
       - name: Checkout (full history for tag/commit analysis)
         uses: actions/checkout@v4
@@ -39,6 +48,9 @@ jobs:
           npm run typecheck
           npm run lint
           npm test
+          # Again with the runner in a DST zone: time maths must never
+          # depend on the host's own timezone.
+          TZ=America/New_York npm test
 
       - name: Decide version bump
         id: bump
@@ -69,11 +81,29 @@ jobs:
           npm run zip:chrome
           npm run zip:firefox
 
+      - name: Build source archive for AMO review
+        if: ${{ steps.bump.outputs.released == 'true' }}
+        run: npm run zip:source
+
+      - name: Upload packages as workflow artifacts
+        if: ${{ steps.bump.outputs.released == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: |
+            tz-extension-chrome.zip
+            tz-extension-firefox.zip
+            tz-extension-source.zip
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Generate funny release notes
         if: ${{ steps.bump.outputs.released == 'true' }}
         run: node scripts/release-notes.mjs "${{ steps.bump.outputs.version }}"
 
-      - name: Create GitHub release with both zips
+      # The source archive is attached too, so a manual re-publish to AMO
+      # (publish-stores.yml) can use the exact file from the release.
+      - name: Create GitHub release with the zips and source archive
         if: ${{ steps.bump.outputs.released == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,5 +111,21 @@ jobs:
           gh release create "${{ steps.bump.outputs.tag }}" \
             tz-extension-chrome.zip \
             tz-extension-firefox.zip \
+            tz-extension-source.zip \
             --title "${{ steps.bump.outputs.tag }}" \
             --notes-file RELEASE_NOTES.md
+
+  publish:
+    name: Publish to stores
+    needs: release
+    if: ${{ needs.release.outputs.released == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish-stores.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      store: both
+      artifact: release-packages
+    # Store secrets live in the store-publish environment, which the called job
+    # declares; inherit also covers secrets added at repository level.
+    secrets: inherit

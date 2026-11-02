@@ -15,6 +15,11 @@ const prefs: Preferences = {
   keepSelection: true,
   theme: 'system',
   customFormats: [],
+  disabledFormats: [],
+  selectToConvert: true,
+  cardSize: 'full',
+  lastCardSize: 'full',
+  numericDateOrder: 'dmy',
 };
 
 describe('EpochTab', () => {
@@ -158,20 +163,21 @@ describe('Popover', () => {
     expect(screen.queryByLabelText('Pin to page')).toBeNull();
   });
 
-  it('adds a timezone row via the dropdown', () => {
+  it('adds a timezone row via the searchable picker (city, abbreviation, offset)', () => {
     const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
-    render(
-      <Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={vi.fn()} />,
-    );
+    render(<Popover parsed={parsed!} matchCount={1} prefs={prefs} pinned={false} onClose={vi.fn()} />);
     const dialog = screen.getByRole('dialog');
-    const before = dialog.querySelectorAll('.tzx-zone').length;
-    fireEvent.change(screen.getByLabelText('Add a timezone'), {
-      target: { value: 'Asia/Tokyo' },
-    });
+    const input = within(dialog).getByRole('combobox', { name: 'Add a timezone' });
+    fireEvent.change(input, { target: { value: 'tokyo' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.change(input, { target: { value: 'pdt' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.change(input, { target: { value: 'utc+5:30' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
     const labels = Array.from(dialog.querySelectorAll('.tzx-zone')).map((n) => n.textContent);
-    expect(labels).toContain('Asia/Tokyo');
-    expect(dialog.querySelectorAll('.tzx-zone').length).toBe(before + 1);
+    expect(labels).toEqual(expect.arrayContaining(['Asia/Tokyo', 'PDT', 'UTC+05:30']));
   });
+
 
   it('removes a timezone row via its × button', () => {
     const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
@@ -207,9 +213,9 @@ describe('Popover compact mode', () => {
     expect(dialog.classList.contains('compact')).toBe(true);
   });
 
-  it('a transient card offers both a full-pin and a compact-pin button', () => {
+  it('a transient card offers pin and a size toggle', () => {
     const onPin = vi.fn();
-    const onPinCompact = vi.fn();
+    const onToggleCompact = vi.fn();
     const [parsed] = parseTimes('2024-01-02T12:00:00Z', 'UTC');
     render(
       <Popover
@@ -218,14 +224,17 @@ describe('Popover compact mode', () => {
         prefs={prefs}
         pinned={false}
         onPin={onPin}
-        onPinCompact={onPinCompact}
+        onToggleCompact={onToggleCompact}
         onClose={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByLabelText('Pin compact'));
-    expect(onPinCompact).toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Make compact'));
+    expect(onToggleCompact).toHaveBeenCalledTimes(1);
     expect(onPin).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Pin to page'));
+    expect(onPin).toHaveBeenCalledTimes(1);
   });
+
 });
 
 describe('Converter source + target editing', () => {

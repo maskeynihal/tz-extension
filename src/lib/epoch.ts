@@ -5,17 +5,36 @@ export interface EpochParse {
   readonly unit: EpochUnit;
 }
 
-/** Reasonable bounds: years roughly 1900..9999 in milliseconds. */
-const MIN_EPOCH_MS = -2208988800000; // 1900-01-01
-const MAX_EPOCH_MS = 253402300799000; // 9999-12-31T23:59:59
+/**
+ * Accepted instants: 1900-01-01T00:00:00.000Z to 9999-12-31T23:59:59.999Z.
+ * Earlier values are refused on purpose (calendar and offset data before
+ * 1900 is unreliable, and such numbers are rarely timestamps).
+ */
+export const MIN_EPOCH_MS = -2208988800000; // 1900-01-01T00:00:00.000Z
+export const MAX_EPOCH_MS = 253402300799999; // 9999-12-31T23:59:59.999Z
+
+/**
+ * The largest value auto mode reads as seconds: 11 digits,
+ * 5138-11-16T09:46:39Z. A 12-digit value is read as milliseconds.
+ */
+export const MAX_AUTO_SECONDS = 99999999999;
 
 /**
  * Parse an epoch string. Auto-detects seconds vs milliseconds by digit count
  * unless `forceUnit` is given. Returns null for non-numeric or out-of-range.
  *
- * Detection rule: a bare integer with <= 11 significant digits is treated as
- * seconds; 12+ digits as milliseconds. This keeps present-day timestamps
- * (10-digit seconds / 13-digit ms) unambiguous while staying sane at the edges.
+ * Detection rule: a bare integer with <= 11 digits (sign not counted) is
+ * seconds; 12+ digits are milliseconds. So in auto mode:
+ * - seconds cover -2208988800 (1900-01-01) to 99999999999 (5138-11-16);
+ * - milliseconds are 12 to 15 digits, -2208988800000 (1900-01-01) to
+ *   253402300799999 (9999-12-31). 12-digit values are 1973-03-03 to
+ *   2001-09-09, or 1938-04-24 to 1966-10-31 when negative.
+ * (Text on a page is only read as an epoch at 10-11 digits for seconds and
+ * 12-13 for milliseconds; see builtin-formats.ts.)
+ * A 12-digit value is never read as seconds even when it could be
+ * (253402300799 is 9999-12-31 in seconds, 1978-01-11 in milliseconds):
+ * 1973-2001 millisecond stamps are real data, years 5138-9999 almost never
+ * are. Choose seconds explicitly (`forceUnit`) for those.
  */
 export function parseEpoch(
   raw: string,

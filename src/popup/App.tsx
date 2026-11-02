@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { DEFAULT_PREFERENCES, type Preferences } from '../types';
-import { loadPreferences, savePreferences, onPreferencesChanged } from '../lib/storage';
+import type { Preferences } from '../types';
+import { useSyncedPreferences } from '../lib/use-synced-prefs';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { getBuildInfo } from '../lib/build-info';
 import { Converter } from './Converter';
@@ -11,26 +11,9 @@ type Tab = 'converter' | 'epoch';
 const BUILD = getBuildInfo();
 
 export function App(): JSX.Element {
-  const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFERENCES);
+  // Own-write echoes are skipped, so quick reorders never jump back.
+  const { prefs, loaded, saveError, update: updatePrefs } = useSyncedPreferences();
   const [tab, setTab] = useState<Tab>('converter');
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    void loadPreferences().then((p) => {
-      if (alive) {
-        setPrefs(p);
-        setLoaded(true);
-      }
-    });
-    const unsub = onPreferencesChanged((p) => {
-      if (alive) setPrefs(p);
-    });
-    return () => {
-      alive = false;
-      unsub();
-    };
-  }, []);
 
   // Paint the chosen theme; when following the OS, re-apply on OS flips.
   useEffect(() => {
@@ -39,23 +22,25 @@ export function App(): JSX.Element {
     return watchSystemTheme(() => applyThemeToDocument('system'));
   }, [prefs.theme]);
 
-  function toggleHour12(): void {
-    const next: Preferences = { ...prefs, hour12: !prefs.hour12 };
-    setPrefs(next);
-    void savePreferences(next);
+  function setHour12(hour12: boolean): void {
+    if (prefs.hour12 === hour12) return;
+    updatePrefs({ ...prefs, hour12 });
   }
 
   function cycleTheme(): void {
     const order: Preferences['theme'][] = ['system', 'light', 'dark'];
     const i = order.indexOf(prefs.theme);
-    const next: Preferences = { ...prefs, theme: order[(i + 1) % order.length] ?? 'system' };
-    setPrefs(next);
-    void savePreferences(next);
+    updatePrefs({ ...prefs, theme: order[(i + 1) % order.length] ?? 'system' });
   }
 
-  function updatePrefs(next: Preferences): void {
-    setPrefs(next);
-    void savePreferences(next);
+  function openWorldClock(): void {
+    const page = 'src/clock/index.html';
+    if (typeof chrome !== 'undefined' && chrome.runtime?.getURL && chrome.tabs?.create) {
+      const url = chrome.runtime.getURL(page);
+      void Promise.resolve(chrome.tabs.create({ url })).catch(() => window.open(url, '_blank', 'noopener'));
+      return;
+    }
+    window.open(new URL('../clock/index.html', window.location.href).href, '_blank', 'noopener');
   }
 
   function openOptions(): void {
@@ -89,20 +74,39 @@ export function App(): JSX.Element {
           <button
             type="button"
             className="tzx-icon-btn"
+            aria-label="Open world clock"
+            title="World clock"
+            onClick={openWorldClock}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false" style={{ display: 'block' }}>
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="tzx-icon-btn"
             aria-label={`Theme: ${prefs.theme}. Click to change.`}
             title={`Theme: ${prefs.theme === 'system' ? 'System' : prefs.theme === 'light' ? 'Light' : 'Dark'} (click to cycle)`}
             onClick={cycleTheme}
           >
             {prefs.theme === 'system' ? '◐' : prefs.theme === 'light' ? '☀' : '☾'}
           </button>
-          <button
-            type="button"
-            className="tzx-chip"
-            aria-label="Toggle 12 or 24 hour clock"
-            onClick={toggleHour12}
-          >
-            {prefs.hour12 ? '12h' : '24h'}
-          </button>
+          <div className="tzx-segment tzx-segment-sm" role="group" aria-label="Clock format">
+            {([true, false] as const).map((h12) => (
+              <button
+                key={String(h12)}
+                type="button"
+                className={`tzx-seg-btn${prefs.hour12 === h12 ? ' active' : ''}`}
+                aria-pressed={prefs.hour12 === h12}
+                aria-label={h12 ? '12-hour clock' : '24-hour clock'}
+                title={h12 ? '12-hour clock' : '24-hour clock'}
+                onClick={() => setHour12(h12)}
+              >
+                {h12 ? '12h' : '24h'}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="tzx-icon-btn"
@@ -115,12 +119,19 @@ export function App(): JSX.Element {
         </div>
       </header>
 
+      {saveError && (
+        // A failed save goes back to what is stored; say why it snapped back.
+        <p className="tzx-error" role="alert">
+          {saveError}
+        </p>
+      )}
+
       {!loaded ? (
         <p className="tzx-loading">Loading…</p>
       ) : tab === 'converter' ? (
         <Converter prefs={prefs} onPrefsChange={updatePrefs} />
       ) : (
-        <EpochTab prefs={prefs} />
+        <EpochTab prefs={prefs} onPrefsChange={updatePrefs} />
       )}
 
       <footer className="tzx-foot" title={BUILD.builtAt ? `Built ${BUILD.builtAt}` : undefined}>

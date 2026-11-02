@@ -25,7 +25,10 @@ The extension saves your preferences using the browser's own storage:
 - 12- or 24-hour clock preference
 - Theme (System / Light / Dark)
 - How to treat a date with no time
-- Any custom date formats you add
+- Any custom date formats you add, and which built-in formats you switched off
+- Whether the converter opens automatically when you select text
+
+On the website (the online converter and world clock), the same settings are kept in your browser's `localStorage` for that site.
 
 This data lives only in your browser. If you have browser sync enabled, your
 browser may sync it across your own devices through your browser account — we
@@ -34,10 +37,17 @@ never see it and have no access to it. Uninstalling the extension removes it.
 ## Permissions
 
 - `storage` — to remember the preferences listed above, locally.
+- `contextMenus` — adds the right-click item **Convert “…” with TZ Converter**
+  for selected text.
+- `activeTab` and `scripting` — when you click that item in a tab where the
+  extension is not running yet (for example a tab opened before you installed
+  or updated it), the extension loads its converter into that one tab. This
+  only happens after your click, only in that tab.
 - **Access to web pages** — the "select to convert" feature needs to run on the
   page you are reading so it can read the text you select and show a popover. It
   reads only your active selection to parse a time; it does not read, collect,
-  or send page content.
+  or send page content. You can turn automatic select-to-convert off in
+  Settings and use only the right-click item.
 
 ## Third parties
 

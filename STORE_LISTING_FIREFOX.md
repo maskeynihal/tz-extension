@@ -40,17 +40,26 @@ in every timezone you care about. No tab-switching, no mental arithmetic.
 
 FEATURES
 • Select-to-convert — highlight a time, see it in your zones right there.
+• Right-click any selection → "Convert with TZ Converter". Prefer no automatic
+  popups? Turn select-to-convert off and use only the menu.
+• Several times in one selection? Step through them with ‹ 1 of 3 ›, in the
+  order they appear; the card marks each one on the page.
+• Keyboard friendly — Alt+Shift+K (Ctrl+Shift+K on Mac) moves focus into the
+  open card and back. Change the key in Add-ons → ⚙ → Manage Extension
+  Shortcuts.
 • Pin cards to the page, each with its own colored highlight on the matched text.
 • Toolbar popup converter — pick a source zone and time, read the rest.
 • Epoch converter — Unix seconds/milliseconds to readable dates and back.
-• Custom formats — teach it the date layouts your sites use.
+• Every recognized format listed in Settings — switch off any that misfire.
+• Custom formats — teach it the date layouts your sites use, with a live tester.
 • Light / Dark / System theme, with a quick toggle in the popup.
 • 12- or 24-hour clock, your home zone, and your target zones — all configurable.
 
 PRIVATE BY DESIGN
 Everything runs locally in your browser. The add-on makes no network requests,
-collects no data, and sends nothing off your device. Its only permission is
-local storage, used to remember your preferences.
+collects no data, and sends nothing off your device. Your preferences are saved
+in the browser's own storage, and synced only by the browser's account sync if
+you have it turned on. It adds one right-click menu item.
 
 Free and open source: https://github.com/maskeynihal/tz-extension
 ```
@@ -76,12 +85,15 @@ is verifiable in the repository. The add-on never renders remote or
 user-supplied HTML: it parses the text the user selected into a date and
 displays computed times as plain React text nodes.
 
-Permissions: only "storage" (for user preferences). No host permissions declared
-beyond the content script needed for select-to-convert, which reads the user's
-text selection to parse a time and renders a popover. No network requests are
-made anywhere in the add-on.
+Permissions: "storage" (user preferences), "contextMenus" (one right-click
+"Convert" item for selected text), and "activeTab" + "scripting" (after that
+menu click, inject the add-on's own packaged content script into the current tab
+if it is not running there yet, e.g. a site the user has not granted access to).
+No host permissions declared beyond the content script needed for
+select-to-convert, which reads the user's text selection to parse a time and
+renders a popover. No network requests are made anywhere in the add-on.
 
-Build: Vite + @crxjs/vite-plugin, React 18, date-fns-tz. The Firefox manifest is
+Build: Vite + @crxjs/vite-plugin, React 18 (time zone maths uses the browser's Intl API; no time library). The Firefox manifest is
 produced by scripts/firefox-manifest.mjs, which converts the background to an
 event-page script list, adds the gecko id and strict_min_version, declares
 data_collection_permissions (none), and strips the Chrome-only use_dynamic_url
