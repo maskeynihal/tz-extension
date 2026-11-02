@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Builds the marketing site, the online converter and the world clock into
-// docs/ for GitHub Pages.
+// docs/, which Cloudflare Workers serves as static assets (see wrangler.jsonc).
 //   - site/demo.ts          -> docs/demo.js   (converter on app.html)
 //   - site/clock.ts         -> docs/clock.js + docs/clock.css (clock.html; the
 //                              same React app the extension opens, mounted via
@@ -10,11 +10,11 @@
 // Both import the extension's real libs. Each entry is one self-contained
 // classic script (IIFE, no ES modules, no shared chunks): browsers refuse
 // module scripts on file:// pages, so with modules the converter and the clock
-// stayed blank when docs/*.html was opened from disk. HTML pages and assets are
-// copied verbatim, and a .nojekyll marker is written. This does not
-// type-check; `npm run build:site` runs tsc first.
+// stayed blank when docs/*.html was opened from disk. HTML pages and assets
+// are copied verbatim. This does not type-check; `npm run build:site` runs
+// tsc first.
 import { build } from 'esbuild';
-import { mkdirSync, copyFileSync, writeFileSync, cpSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, copyFileSync, cpSync, existsSync, rmSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,7 +52,5 @@ for (const page of PAGES) copyFileSync(resolve(siteDir, page), resolve(outDir, p
 if (existsSync(resolve(siteDir, 'assets'))) {
   cpSync(resolve(siteDir, 'assets'), resolve(outDir, 'assets'), { recursive: true });
 }
-// GitHub Pages: skip Jekyll so files/underscores are served verbatim.
-writeFileSync(resolve(outDir, '.nojekyll'), '');
 
 console.log(`[site] built to docs/ (${PAGES.join(' + ')} + demo.js + clock.js/css + assets)`);
