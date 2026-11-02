@@ -183,14 +183,78 @@ for (const how of ['https', 'file'] as const) {
       await expect(app.locator('.tzc-card.is-home .tzc-day')).not.toHaveText('Today');
       await expect(trigger).toBeFocused();
 
-      // Escape closes, returns to live and leaves focus on the trigger.
+      // Escape dismisses the popover and leaves focus on the trigger. It does
+      // not clear the plan that was already applied: opening the picker to
+      // look at a plan must not be a way to lose it.
       await trigger.press('Enter');
       await expect(pop).toBeVisible();
       await page.keyboard.press('Escape');
       await expect(pop).toBeHidden();
       await expect(trigger).toBeFocused();
+      await expect(app.locator('.tzc-plan-chip')).toBeVisible();
+      await expect(app.locator('.tzc-card.is-home .tzc-day')).not.toHaveText('Today');
+
+      // Tab stays inside the dialog: it used to leave it open with focus on
+      // the page behind it.
+      await trigger.press('Enter');
+      await expect(pop).toBeVisible();
+      for (let i = 0; i < 9; i += 1) await page.keyboard.press('Tab');
+      expect(await pop.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+      await page.keyboard.press('Escape');
+
+      // Clearing is left to the controls that say they clear.
+      await app.getByRole('button', { name: 'Back to now' }).click();
       await expect(app.locator('.tzc-live-chip')).toBeVisible();
       await expect(app.locator('.tzc-card.is-home .tzc-day')).toHaveText('Today');
+      expect(errors).toEqual([]);
+    });
+
+    test('the scrubber cannot throw away a picked date', async ({ page }) => {
+      const errors = await open(page, 'clock.html');
+      const app = page.locator('#clock-root .tzc-app');
+      await app.getByRole('button', { name: '24-hour clock' }).click();
+      const homeCard = app.locator('.tzc-card.is-home');
+      const trigger = app.locator('[data-dp-trigger]');
+      const slider = app.getByLabel('Shift all clocks');
+
+      // A date well out of the scrubber's +36 h reach: the 15th of next month.
+      await trigger.click();
+      const pop = app.getByRole('dialog');
+      await pop.getByRole('button', { name: 'Next month' }).click();
+      await pop.locator('button[data-day]').nth(14).click();
+      await pop.getByLabel('Hour').fill('14');
+      await pop.getByLabel('Minute').fill('15');
+      await pop.getByRole('button', { name: 'Apply' }).click();
+      await expect(pop).toBeHidden();
+      await expect(homeCard.locator('.tzc-time')).toHaveText('14:15');
+      const planned = await app.locator('.tzc-plan-chip').innerText();
+      const label = await trigger.innerText();
+      expect(planned).toMatch(/\+\d+d/);
+
+      // The slider is locked at its "now" mark while the pick is applied, and
+      // says so, instead of sitting at 0 and discarding the pick on the first
+      // arrow key.
+      await expect(slider).toBeDisabled();
+      await expect(slider).toHaveValue('0');
+      await expect(slider).toHaveAttribute('aria-valuetext', 'Now');
+      await expect(app.locator('.tzc-hint-locked')).toContainText('slider is paused while a picked date is planned');
+
+      // Trying to touch it anyway: a disabled range takes neither the click
+      // nor the keys, so the plan is exactly where it was.
+      await slider.click({ force: true });
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('End');
+      await expect(app.locator('.tzc-plan-chip')).toHaveText(planned);
+      await expect(trigger).toHaveText(label);
+      await expect(homeCard.locator('.tzc-time')).toHaveText('14:15');
+      await expect(homeCard.locator('.tzc-day')).toHaveText(/In \d+ days/);
+
+      // A jump button is an explicit instruction, so that does take over —
+      // and then the slider holds the plan again.
+      await app.getByRole('button', { name: 'Plan 6 hours ahead', exact: true }).click();
+      await expect(slider).toBeEnabled();
+      await expect(slider).toHaveValue('24');
+      await expect(trigger).toHaveText('Pick date & time');
       expect(errors).toEqual([]);
     });
 

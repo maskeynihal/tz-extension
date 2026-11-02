@@ -173,11 +173,24 @@ describe('ClockApp', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     expect(timeOf('UTC-08:00')).toBe('12:00');
     expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Mon, Jan 22 12:00 in UTC-08:00/);
-    // The slider sits at its "now" mark: no position stands for a date days out.
+    // The slider sits at its "now" mark: no position stands for a date days
+    // out. So it is locked there and announces that mark, rather than reading
+    // 0 while claiming a date, and a stray nudge cannot discard the pick.
     expect(slider.value).toBe('0');
+    expect(slider).toBeDisabled();
+    expect(slider).toHaveAttribute('aria-valuetext', 'Now');
+    fireEvent.change(slider, { target: { value: '-4' } });
+    expect(timeOf('UTC-08:00')).toBe('12:00');
+    expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Mon, Jan 22 12:00 in UTC-08:00/);
+
+    // Taking the scrubber back over is a deliberate press, after which the
+    // slider holds the plan again.
+    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours back' }));
+    expect(slider).toBeEnabled();
+    expect(timeOf('UTC')).toBe('14:00');
+    expect(picker).toHaveTextContent('Pick date & time');
     fireEvent.change(slider, { target: { value: '-4' } });
     expect(timeOf('UTC')).toBe('19:00');
-    expect(picker).toHaveTextContent('Pick date & time');
   });
 
   it('removes a zone and persists it', async () => {

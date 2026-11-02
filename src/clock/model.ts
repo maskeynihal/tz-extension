@@ -329,14 +329,21 @@ export function planInstant(nowMs: number, plan: Plan): number {
 }
 
 /**
- * Whole minutes from the current minute to the planned instant, for every
- * kind of plan: the same honest "from now" figure minutesFromNow gives the
- * scrubber, so a pick two weeks out reports its real distance.
+ * Whole minutes from now to the planned instant, for every kind of plan: the
+ * same honest "from now" figure minutesFromNow gives the scrubber, so a pick
+ * two weeks out reports its real distance.
+ *
+ * An absolute pick counts from the *nearest* minute, not the one just gone.
+ * Flooring was asymmetric — it pushed future distances up by the seconds
+ * already elapsed (a pick 3 d 0 h 34.03 m away read "+3d 35m") while past
+ * ones rounded toward zero — so the same gap read differently depending on
+ * its sign. Rounding keeps the seconds out of the figure, as the scrubber
+ * does, and is wrong by at most 30 s in either direction.
  */
 export function planMinutesFromNow(nowMs: number, plan: Plan): number {
   if (plan.kind === 'live') return 0;
   if (plan.kind === 'offset') return minutesFromNow(nowMs, plan.steps, plan.exact);
-  return Math.round((plan.epochMs - Math.floor(nowMs / MINUTE_MS) * MINUTE_MS) / MINUTE_MS);
+  return Math.round((plan.epochMs - Math.round(nowMs / MINUTE_MS) * MINUTE_MS) / MINUTE_MS);
 }
 
 const DAY_MINUTES = 1440;
@@ -355,7 +362,10 @@ export function formatSpan(minutes: number): string | null {
   const parts = [`${Math.floor(abs / DAY_MINUTES)}d`];
   const h = Math.floor((abs % DAY_MINUTES) / 60);
   const m = abs % 60;
-  if (h) parts.push(`${h}h`);
+  // A unit is only dropped off the end, never out of the middle: "+3d 35m"
+  // read as if an hours figure had gone missing, so once minutes are shown a
+  // zero hours is shown with them ("+3d 0h 35m"). "+10d" still stops at days.
+  if (h || m) parts.push(`${h}h`);
   if (m) parts.push(`${m}m`);
   return `${sign}${parts.join(' ')}`;
 }

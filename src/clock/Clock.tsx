@@ -237,6 +237,31 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
     [pick, home, hour12],
   );
 
+  // A pick is held twice over: as wall fields (the trigger's label, the DST
+  // note) and as the instant every card shows. Changing home afterwards — a
+  // card's "Make home", or Settings — re-renders the first half for the new
+  // zone, so the second half has to follow or the board sits on an instant
+  // nothing on screen describes. The written date and time is what the user
+  // chose, so that is what is kept: it is re-read against the new home, and
+  // the move is announced.
+  const homeRef = useRef(home);
+  useEffect(() => {
+    const prev = homeRef.current;
+    homeRef.current = home;
+    if (sameZone(prev, home) || !pick) return;
+    const r = readWallPick(pick, home, hour12);
+    if (!r) {
+      setPick(null);
+      setPlan(LIVE);
+      setStatus(`Home is now ${zonePlace(home)}; the planned time could not be read there, so the clocks are live again.`);
+      return;
+    }
+    setPlan(absolutePlan(r.epochMs));
+    setStatus(`Home is now ${zonePlace(home)}; the planned time is now read as ${zonePlace(home)}'s wall clock.`);
+    // `pick` and `hour12` are read, not reacted to: only a home change acts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [home]);
+
   // --- FLIP animation + focus restore after reorders. ---
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const gridRef = useRef<HTMLUListElement>(null);
@@ -710,10 +735,19 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
   const planLabel = useMemo(() => planText(instant, home, hour12, withDate), [instant, home, hour12, withDate]);
   // The real distance from now: a snapped slider plan is not a round number,
   // and a picked one can be days out.
-  const fromNow = formatSpan(planMinutesFromNow(minuteMs, plan));
+  // nowMs, not minuteMs: planMinutesFromNow rounds an absolute pick to the
+  // nearest minute itself, and a pre-floored "now" would defeat that. An
+  // offset plan floors internally, so it reads the same either way.
+  const fromNow = formatSpan(planMinutesFromNow(nowMs, plan));
   // A pick can land on the current minute, where there is no distance to give.
   const distance = fromNow ? `, ${fromNow} from now` : '';
-  const valueText = planning ? `${planLabel}${distance}` : 'Now';
+  // The slider cannot hold a picked date: no position stands for one. So
+  // while a pick is applied it is locked at its "now" mark and says so,
+  // rather than reading 0 while announcing a date it does not hold — and
+  // rather than discarding the pick the moment an arrow key reaches it. The
+  // plan itself is announced by the chip and the live region below.
+  const locked = plan.kind === 'absolute';
+  const valueText = plan.kind === 'offset' ? `${planLabel}${distance}` : 'Now';
   const live = planning
     ? `Planning ${planLabel}${distance}.`
     : scrubbed
@@ -788,16 +822,22 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
           max={SCRUB_MAX_STEPS}
           step={1}
           value={steps}
+          disabled={locked}
           aria-valuetext={valueText}
-          aria-describedby={`${idBase}-scrub-hint`}
+          aria-describedby={locked ? `${idBase}-scrub-locked` : `${idBase}-scrub-hint`}
           onChange={(e) => {
             // The two ends are the −12h / +36h presets: exact from the
             // current minute, not snapped to a quarter hour (Home/End, or a
             // drag to the end).
+            // `disabled` stops a real user, but not a synthesised event: the
+            // guard is what makes "a locked slider cannot discard the pick"
+            // true rather than merely unreachable.
+            if (locked) return;
             const v = Number(e.currentTarget.value);
             onChange(offsetPlan(v, v === SCRUB_MIN_STEPS || v === SCRUB_MAX_STEPS));
           }}
           onKeyDown={(e) => {
+            if (locked) return;
             if (e.key === 'Home' || e.key === 'End') {
               e.preventDefault();
               onChange(offsetPlan(e.key === 'Home' ? SCRUB_MIN_STEPS : SCRUB_MAX_STEPS, true));
@@ -832,9 +872,16 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
           );
         })}
       </ul>
-      <p className="tzc-hint" id={`${idBase}-scrub-hint`}>
-        Arrow keys move 15 minutes, Page Up/Down one hour, Escape returns to now.
-      </p>
+      {locked ? (
+        <p className="tzc-hint tzc-hint-locked" id={`${idBase}-scrub-locked`}>
+          The slider is paused while a picked date is planned: no slider position stands for one. Press Now, or one of
+          the jump buttons, to plan from the current time again.
+        </p>
+      ) : (
+        <p className="tzc-hint" id={`${idBase}-scrub-hint`}>
+          Arrow keys move 15 minutes, Page Up/Down one hour. Escape, while this planner has focus, returns to now.
+        </p>
+      )}
       <p className="tzc-sr-only" aria-live="polite">
         {live}
       </p>
@@ -879,6 +926,25 @@ function pickLabel(p: WallPick, hour12: boolean): string {
 
 /** 4 Jan 1970 was a Sunday, so the headers read in the reader's locale from a known week. */
 const FIRST_SUNDAY_MS = Date.UTC(1970, 0, 4);
+
+/**
+ * A whole number typed into one of the time fields, or null when what is
+ * there cannot be read as one. Deliberately stricter than Number(): "1.5",
+ * "-3", "1e1" and "" are all refused, so Apply can be blocked on them
+ * instead of quietly planning whatever the field held before.
+ */
+function parseTimeField(text: string, min: number, max: number): number | null {
+  const t = text.trim();
+  if (!/^\d+$/.test(t)) return null;
+  const n = Number(t);
+  return n >= min && n <= max ? n : null;
+}
+
+/**
+ * The popover's own tab stops. Day buttons outside the roving one carry
+ * tabindex="-1" and must not count, or Tab would walk 31 days.
+ */
+const POPOVER_TAB_STOPS = 'button:not([disabled]):not([tabindex="-1"]), input:not([disabled])';
 
 interface DateTimePickerProps {
   /** The applied pick, or null when the board is live or on a scrubber offset. */
@@ -988,21 +1054,15 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
 
   const setHour = (text: string): void => {
     setHourText(text);
-    const n = Number(text);
-    if (text.trim() === '' || !Number.isInteger(n)) return;
-    if (hour12) {
-      if (n < 1 || n > 12) return;
-      setDraft({ ...draft, h: (n % 12) + (draft.h >= 12 ? 12 : 0) });
-    } else {
-      if (n < 0 || n > 23) return;
-      setDraft({ ...draft, h: n });
-    }
+    const n = parseTimeField(text, hour12 ? 1 : 0, hour12 ? 12 : 23);
+    if (n === null) return;
+    setDraft({ ...draft, h: hour12 ? (n % 12) + (draft.h >= 12 ? 12 : 0) : n });
   };
 
   const setMinute = (text: string): void => {
     setMinuteText(text);
-    const n = Number(text);
-    if (text.trim() === '' || !Number.isInteger(n) || n < 0 || n > 59) return;
+    const n = parseTimeField(text, 0, 59);
+    if (n === null) return;
     setDraft({ ...draft, mi: n });
   };
 
@@ -1010,6 +1070,40 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
     const next = { ...draft, h: (draft.h % 12) + (pm ? 12 : 0) };
     setDraft(next);
     resyncTime(next);
+  };
+
+  // What the applied pick actually resolved to on home's wall clock. The
+  // trigger is labelled from that, not from the written fields: 02:30 on a
+  // spring-forward day is never on any clock, and the trigger must not be
+  // the one surface still claiming it while every card reads 03:30.
+  const resolvedLabel = useMemo(() => {
+    if (!value) return null;
+    const r = readWallPick(value, home, hour12);
+    return r ? pickLabel(wallPick(r.epochMs, home), hour12) : pickLabel(value, hour12);
+  }, [value, home, hour12]);
+
+  // Out-of-range or non-integer text used to leave the draft alone, so Apply
+  // planned the previous value while the field showed something else. The
+  // field is marked invalid instead and Apply is blocked until it reads.
+  const hourOk = parseTimeField(hourText, hour12 ? 1 : 0, hour12 ? 12 : 23) !== null;
+  const minuteOk = parseTimeField(minuteText, 0, 59) !== null;
+  const timeOk = hourOk && minuteOk;
+  const errorId = `${idBase}-dp-err`;
+
+  /**
+   * Tab stays inside the popover while it is open. It is a `role="dialog"`,
+   * and tabbing past Apply used to leave it open with focus on the page
+   * behind it.
+   */
+  const trapTab = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    const pop = popRef.current;
+    if (!pop) return;
+    const stops = Array.from(pop.querySelectorAll<HTMLElement>(POPOVER_TAB_STOPS));
+    if (stops.length === 0) return;
+    const i = stops.indexOf(document.activeElement as HTMLElement);
+    const next = e.shiftKey ? (i <= 0 ? stops.length - 1 : i - 1) : i === stops.length - 1 ? 0 : i + 1;
+    e.preventDefault();
+    stops[next]?.focus();
   };
 
   const today = wallPick(nowMs, home);
@@ -1035,7 +1129,7 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
         onClick={() => (open ? close() : openPopover())}
       >
         <CalendarIcon size={15} />
-        <span>{value ? pickLabel(value, hour12) : 'Pick date & time'}</span>
+        <span>{resolvedLabel ?? 'Pick date & time'}</span>
       </button>
       {open && (
         <div
@@ -1045,13 +1139,18 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
           role="dialog"
           aria-label={`Pick a date and time in ${zonePlace(home)}`}
           onKeyDown={(e) => {
+            if (e.key === 'Tab') {
+              trapTab(e);
+              return;
+            }
             if (e.key !== 'Escape') return;
-            // Handled here, not by the planner's panel: this also has to put
-            // focus back on the trigger. Returning to live matches the
-            // panel's own Escape, and Clear.
+            // Dismiss only, and stop the planner panel's own Escape from
+            // seeing it. Opening the picker to look at a plan and pressing
+            // Escape used to wipe that plan, where clicking outside only
+            // dropped the draft; the same "I'm done looking" gesture must not
+            // mean two different things. Clearing is Clear's job, and Now's.
             e.preventDefault();
             e.stopPropagation();
-            onClear();
             close();
           }}
         >
@@ -1130,6 +1229,8 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
               min={hour12 ? 1 : 0}
               max={hour12 ? 12 : 23}
               value={hourText}
+              aria-invalid={!hourOk || undefined}
+              aria-describedby={hourOk ? undefined : errorId}
               onChange={(e) => setHour(e.currentTarget.value)}
               onBlur={() => resyncTime(draft)}
             />
@@ -1144,6 +1245,8 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
               min={0}
               max={59}
               value={minuteText}
+              aria-invalid={!minuteOk || undefined}
+              aria-describedby={minuteOk ? undefined : errorId}
               onChange={(e) => setMinute(e.currentTarget.value)}
               onBlur={() => resyncTime(draft)}
             />
@@ -1169,9 +1272,17 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
             )}
           </div>
 
-          <p className="tzc-dp-hint">
-            Arrow keys move a day, Page Up/Down a month, Escape closes and returns to now.
-          </p>
+          {!timeOk && (
+            <p className="tzc-dp-error" id={errorId} role="alert">
+              {!hourOk && !minuteOk
+                ? `Enter an hour from ${hour12 ? 1 : 0} to ${hour12 ? 12 : 23} and a minute from 0 to 59.`
+                : !hourOk
+                  ? `Enter an hour from ${hour12 ? 1 : 0} to ${hour12 ? 12 : 23}.`
+                  : 'Enter a minute from 0 to 59.'}
+            </p>
+          )}
+
+          <p className="tzc-dp-hint">Arrow keys move a day, Page Up/Down a month, Escape closes the picker.</p>
 
           <div className="tzc-dp-actions">
             <button
@@ -1187,6 +1298,7 @@ function DateTimePicker({ value, nowMs, home, hour12, onApply, onClear, idBase }
             <button
               type="button"
               className="tzc-btn tzc-btn-primary"
+              disabled={!timeOk}
               onClick={() => {
                 onApply(draft);
                 close();

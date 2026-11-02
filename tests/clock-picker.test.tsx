@@ -250,22 +250,113 @@ describe('date & time picker: picking a time', () => {
     await flush();
     expect(planChip()).toHaveTextContent('Tue, Jan 2 12:00 in UTC-08:00');
     expect(planChip()?.textContent).not.toContain('from now');
-    expect(screen.getByLabelText('Shift all clocks')).toHaveAttribute(
-      'aria-valuetext',
-      'Tue, Jan 2 12:00 in UTC-08:00',
-    );
+    // The slider holds no picked date, so it must not announce one: its value
+    // is its "now" mark and that is what a screen reader is told it is. The
+    // plan itself is announced by the chip and the planner's live region.
+    const slider = screen.getByLabelText('Shift all clocks');
+    expect(slider).toHaveAttribute('aria-valuetext', 'Now');
+    expect((slider as HTMLInputElement).value).toBe('0');
   });
 
-  it('refuses an out-of-range or empty time without losing the pick', async () => {
+  it('marks an out-of-range or empty time invalid and will not apply it', async () => {
     await mount();
     await open();
     const hour = within(popover()).getByLabelText('Hour') as HTMLInputElement;
+    const minute = within(popover()).getByLabelText('Minute') as HTMLInputElement;
+    const apply = within(popover()).getByRole('button', { name: 'Apply' });
+    expect(apply).toBeEnabled();
+
     fireEvent.change(hour, { target: { value: '31' } });
-    fireEvent.change(within(popover()).getByLabelText('Minute'), { target: { value: '99' } });
+    fireEvent.change(minute, { target: { value: '99' } });
+    // The fields say so, and Apply cannot plan the value they no longer show.
+    expect(hour).toHaveAttribute('aria-invalid', 'true');
+    expect(minute).toHaveAttribute('aria-invalid', 'true');
+    expect(apply).toBeDisabled();
+    expect(within(popover()).getByRole('alert')).toHaveTextContent(
+      'Enter an hour from 0 to 23 and a minute from 0 to 59.',
+    );
+    fireEvent.click(apply);
+    await flush();
+    // Nothing was planned at all: the clocks are still live, seconds and all.
+    expect(planChip()).toBeNull();
+    expect(timeOf('UTC-08:00')).toBe('12:00:00');
+
+    // A readable value clears it, and Apply plans what the fields now show.
+    fireEvent.change(hour, { target: { value: '9' } });
+    fireEvent.change(minute, { target: { value: '30' } });
+    expect(hour).not.toHaveAttribute('aria-invalid');
+    expect(within(popover()).queryByRole('alert')).toBeNull();
+    expect(within(popover()).getByRole('button', { name: 'Apply' })).toBeEnabled();
     fireEvent.click(within(popover()).getByRole('button', { name: 'Apply' }));
     await flush();
-    // The last readable values stand: noon, as home was when the popover opened.
-    expect(timeOf('UTC-08:00')).toBe('12:00');
+    expect(timeOf('UTC-08:00')).toBe('09:30');
+  });
+
+  it('refuses a non-integer hour, and an empty field, the same way', async () => {
+    await mount();
+    await open();
+    const hour = within(popover()).getByLabelText('Hour') as HTMLInputElement;
+    for (const bad of ['1.5', '-3', '', ' ']) {
+      fireEvent.change(hour, { target: { value: bad } });
+      expect(within(popover()).getByRole('button', { name: 'Apply' }), bad).toBeDisabled();
+      expect(hour, bad).toHaveAttribute('aria-invalid', 'true');
+    }
+    // Leaving the field puts back the time the draft actually holds.
+    fireEvent.blur(hour);
+    expect(hour.value).toBe('12');
+    expect(within(popover()).getByRole('button', { name: 'Apply' })).toBeEnabled();
+  });
+
+  it('labels the trigger from the instant the pick resolved to, never a wall time that never was', async () => {
+    await mount({ ...base, homeZone: 'America/New_York', targetZones: ['UTC'] });
+    await open();
+    for (let i = 0; i < 2; i += 1) fireEvent.click(within(popover()).getByRole('button', { name: 'Next month' }));
+    fireEvent.click(day('2024-03-10'));
+    fireEvent.change(within(popover()).getByLabelText('Hour'), { target: { value: '2' } });
+    fireEvent.change(within(popover()).getByLabelText('Minute'), { target: { value: '30' } });
+    fireEvent.click(within(popover()).getByRole('button', { name: 'Apply' }));
+    await flush();
+    // 02:30 does not exist on 10 Mar in New York; every card shows 03:30, and
+    // the trigger is the one surface that used to keep claiming 02:30.
+    expect(timeOf('America/New_York')).toBe('03:30');
+    expect(trigger()).toHaveTextContent('Mar 10, 2024, 03:30');
+    expect(trigger()).not.toHaveTextContent('02:30');
+  });
+});
+
+describe('date & time picker: a home-zone change under an applied pick', () => {
+  it('re-reads the picked date and time against the new home, and says it did', async () => {
+    await mount();
+    await open();
+    fireEvent.click(day('2024-01-05'));
+    fireEvent.change(within(popover()).getByLabelText('Hour'), { target: { value: '9' } });
+    fireEvent.change(within(popover()).getByLabelText('Minute'), { target: { value: '30' } });
+    fireEvent.click(within(popover()).getByRole('button', { name: 'Apply' }));
+    await flush();
+    // 09:30 at UTC-08:00 is 17:30 UTC.
+    expect(timeOf('UTC')).toBe('17:30');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make UTC+05:45 home' }));
+    await flush();
+    // The written date and time is what was chosen, so it is what is kept:
+    // 09:30 on 5 Jan, now read on the new home's wall clock (03:45 UTC). The
+    // board used to sit on the old instant while the trigger and the DST note
+    // described the new zone.
+    expect(timeOf('UTC+05:45')).toBe('09:30');
+    expect(timeOf('UTC')).toBe('03:45');
+    expect(trigger()).toHaveTextContent('Jan 5, 2024, 09:30');
+    expect(planChip()).toHaveTextContent('Fri, Jan 5 09:30 in UTC+05:45');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      "Home is now UTC+05:45; the planned time is now read as UTC+05:45's wall clock.",
+    );
+  });
+
+  it('leaves a live board alone when home changes', async () => {
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Make UTC+05:45 home' }));
+    await flush();
+    expect(planChip()).toBeNull();
+    expect(timeOf('UTC')).toBe('20:00:00');
   });
 });
 
@@ -299,7 +390,7 @@ describe('date & time picker: returning to live', () => {
     expect(trigger()).toHaveTextContent('Pick date & time');
   });
 
-  it('the scrubber takes over from a picked plan, and the presets stop looking pressed', async () => {
+  it('locks the scrubber while a picked plan is applied, so it cannot discard it', async () => {
     await mount();
     await open();
     fireEvent.click(day('2024-01-20'));
@@ -307,12 +398,46 @@ describe('date & time picker: returning to live', () => {
     await flush();
     // No slider position stands for a date days out, so no preset is pressed.
     expect(screen.getByRole('button', { name: 'Plan the current time' })).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.change(screen.getByLabelText('Shift all clocks'), { target: { value: '8' } });
-    expect(timeOf('UTC')).toBe('22:00');
-    expect(trigger()).toHaveTextContent('Pick date & time');
+
+    const slider = screen.getByLabelText('Shift all clocks') as HTMLInputElement;
+    expect(slider).toBeDisabled();
+    expect(slider.value).toBe('0');
+    // The panel says why, rather than leaving a live-looking control that
+    // throws the pick away on the first arrow key.
+    expect(slider).toHaveAccessibleDescription(/slider is paused while a picked date is planned/);
+
+    // Even a synthesised nudge leaves the plan exactly where it was.
+    fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    fireEvent.change(slider, { target: { value: '1' } });
+    fireEvent.keyDown(slider, { key: 'PageUp' });
+    fireEvent.change(slider, { target: { value: '8' } });
+    await flush();
+    expect(planChip()).toHaveTextContent('Sat, Jan 20 12:00 in UTC-08:00');
+    expect(timeOf('UTC-08:00')).toBe('12:00');
+    expect(trigger()).toHaveTextContent('Jan 20, 2024, 12:00');
   });
 
-  it('Escape closes the popover, returns to live and puts focus back on the trigger', async () => {
+  it('a jump preset deliberately takes the plan back to an offset from now, and frees the slider', async () => {
+    await mount();
+    await open();
+    fireEvent.click(day('2024-01-20'));
+    fireEvent.click(within(popover()).getByRole('button', { name: 'Apply' }));
+    await flush();
+
+    // A labelled "plan 6 hours ahead" is an explicit instruction, so it does
+    // replace the pick — and then the slider is live again.
+    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours ahead' }));
+    await flush();
+    const slider = screen.getByLabelText('Shift all clocks') as HTMLInputElement;
+    expect(slider).toBeEnabled();
+    expect(slider.value).toBe('24');
+    expect(timeOf('UTC')).toBe('02:00');
+    expect(trigger()).toHaveTextContent('Pick date & time');
+    // And now the slider's value and its announcement are the same plan.
+    expect(slider).toHaveAttribute('aria-valuetext', expect.stringContaining('18:00 in UTC-08:00'));
+  });
+
+  it('Escape dismisses the popover and keeps an applied plan, leaving focus on the trigger', async () => {
     await mount();
     await open();
     fireEvent.click(day('2024-01-20'));
@@ -320,13 +445,47 @@ describe('date & time picker: returning to live', () => {
     await flush();
     expect(planChip()).not.toBeNull();
 
+    // Opening the picker to look at a plan and pressing Escape must not wipe
+    // it; clicking outside never did. Clearing is Clear's job, and Now's.
     await open();
     fireEvent.keyDown(popover(), { key: 'Escape' });
     await flush();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(trigger()).toHaveFocus();
+    expect(planChip()).toHaveTextContent('Sat, Jan 20 12:00 in UTC-08:00');
+    expect(timeOf('UTC-08:00')).toBe('12:00');
+
+    // The planner's own Escape still returns to now, from its own controls.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Back to now' }), { key: 'Escape' });
+    await flush();
     expect(planChip()).toBeNull();
     expect(timeOf('UTC')).toBe('20:00:00');
+  });
+
+  it('Escape on a popover with a draft drops the draft and nothing else', async () => {
+    await mount();
+    await open();
+    fireEvent.click(day('2024-01-20'));
+    fireEvent.keyDown(popover(), { key: 'Escape' });
+    await flush();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Nothing was applied, so the clocks are live, and the draft is gone:
+    // reopening seeds from home's today again.
+    expect(planChip()).toBeNull();
+    expect(timeOf('UTC')).toBe('20:00:00');
+    await open();
+    expect(day('2024-01-02').className).toContain('is-selected');
+  });
+
+  it('the picker’s hint says what Escape does, and the planner’s says where it works', async () => {
+    await mount();
+    await open();
+    expect(within(popover()).getByText(/Escape closes the picker\./)).toBeInTheDocument();
+    expect(within(popover()).queryByText(/returns to now/)).toBeNull();
+    fireEvent.keyDown(popover(), { key: 'Escape' });
+    await flush();
+    // The planner's Escape is scoped to the planner, and its copy says so.
+    expect(screen.getByText(/Escape, while this planner has focus, returns to now\./)).toBeInTheDocument();
   });
 
   it('a click outside dismisses the popover', async () => {
@@ -391,6 +550,37 @@ describe('date & time picker: keyboard', () => {
     fireEvent.keyDown(day('2024-01-29'), { key: 'Home' });
     await flush();
     expect(day('2024-01-01')).toHaveFocus();
+  });
+
+  it('keeps Tab inside the dialog, both ways round', async () => {
+    await mount();
+    await open();
+    const pop = popover();
+    const prevMonth = within(pop).getByRole('button', { name: 'Previous month' });
+    const apply = within(pop).getByRole('button', { name: 'Apply' });
+
+    // Tab off the last control used to leave the dialog open with focus on
+    // the page behind it.
+    apply.focus();
+    fireEvent.keyDown(pop, { key: 'Tab' });
+    expect(pop).toContainElement(document.activeElement as HTMLElement);
+    expect(prevMonth).toHaveFocus();
+
+    // And back round the other way.
+    fireEvent.keyDown(pop, { key: 'Tab', shiftKey: true });
+    expect(pop).toContainElement(document.activeElement as HTMLElement);
+    expect(apply).toHaveFocus();
+
+    // In between, Tab still walks the dialog's own controls in order, and
+    // never through all 31 days.
+    fireEvent.keyDown(pop, { key: 'Tab' });
+    expect(prevMonth).toHaveFocus();
+    fireEvent.keyDown(pop, { key: 'Tab' });
+    expect(within(pop).getByRole('button', { name: 'Next month' })).toHaveFocus();
+    fireEvent.keyDown(pop, { key: 'Tab' });
+    expect(day('2024-01-02')).toHaveFocus();
+    fireEvent.keyDown(pop, { key: 'Tab' });
+    expect(within(pop).getByLabelText('Hour')).toHaveFocus();
   });
 
   it('Enter on a day picks it, and Apply plans it', async () => {

@@ -52,13 +52,39 @@ describe('plans', () => {
 
   it('“from now” for an absolute plan counts from the current minute, across days', () => {
     // Seconds into the minute must not count, as for the scrubber.
-    const now = NOW + 31_000;
+    const now = NOW + 20_000;
     expect(planMinutesFromNow(now, LIVE)).toBe(0);
     expect(planMinutesFromNow(now, absolutePlan(Date.UTC(2024, 0, 5, 20, 0)))).toBe(3 * 1440);
     expect(planMinutesFromNow(now, absolutePlan(Date.UTC(2023, 11, 30, 20, 0)))).toBe(-3 * 1440);
     expect(planMinutesFromNow(now, absolutePlan(Date.UTC(2024, 0, 2, 20, 45)))).toBe(45);
     // The scrubber's own figure is unchanged.
     expect(planMinutesFromNow(now, offsetPlan(96, true))).toBe(24 * 60);
+  });
+
+  it('rounds “from now” the same way in both directions', () => {
+    // Half a minute into the minute, a pick three days out is thirty seconds
+    // short of three days, and one three days back is thirty seconds over.
+    // The figure must be wrong by the same amount either way: it used to
+    // count from the minute just gone, which pushed every future distance up
+    // (a pick 3 d 0 h 34 m away read "+3d 35m") and left past ones exact.
+    const ahead = Date.UTC(2024, 0, 5, 20, 0);
+    const behind = Date.UTC(2023, 11, 30, 20, 0);
+    for (const secs of [31_000, 45_000, 59_000]) {
+      const now = NOW + secs;
+      const fwd = planMinutesFromNow(now, absolutePlan(ahead));
+      const back = planMinutesFromNow(now, absolutePlan(behind));
+      // Both figures move by the same signed amount, because both instants
+      // are the same distance the same side of a whole minute from now.
+      expect(fwd - 3 * 1440).toBe(back + 3 * 1440);
+      // Never flattered: a distance short of three days does not read as three.
+      expect(fwd).toBeLessThan(3 * 1440);
+    }
+    // And never more than half a minute out in either direction.
+    for (const secs of [0, 1_000, 29_000, 31_000, 59_999]) {
+      const now = NOW + secs;
+      expect(Math.abs(planMinutesFromNow(now, absolutePlan(ahead)) * 60_000 - (ahead - now))).toBeLessThanOrEqual(30_000);
+      expect(Math.abs(planMinutesFromNow(now, absolutePlan(behind)) * 60_000 - (behind - now))).toBeLessThanOrEqual(30_000);
+    }
   });
 
   it('formats a span in hours within two days and in days beyond', () => {
@@ -70,8 +96,13 @@ describe('plans', () => {
     expect(formatSpan(-2880)).toBe('−2d');
     expect(formatSpan(4410)).toBe('+3d 1h 30m');
     expect(formatSpan(14_400)).toBe('+10d');
-    // A zero part is dropped, as formatDiff drops it.
-    expect(formatSpan(-5775)).toBe('−4d 15m');
+    // A unit is only dropped off the end, never out of the middle: "−4d 15m"
+    // read as if the hours had gone missing.
+    expect(formatSpan(-5775)).toBe('−4d 0h 15m');
+    expect(formatSpan(4335)).toBe('+3d 0h 15m');
+    // Still dropped off the end: whole days stop at days, whole hours at hours.
+    expect(formatSpan(4320)).toBe('+3d');
+    expect(formatSpan(4500)).toBe('+3d 3h');
   });
 
   it('day tags for an absolute plan still count from home’s real today', () => {

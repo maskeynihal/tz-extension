@@ -263,6 +263,12 @@ body:has(> #root > .tzc-app) {
 .tzc-scale-btn:hover { color: var(--tzc-ink); border-color: var(--tz-border-brand); }
 .tzc-scale-btn[aria-pressed='true'] { color: var(--tz-brand); font-weight: 600; }
 .tzc-hint { margin: 8px 0 0; font-size: 0.75rem; color: var(--tzc-sub); }
+/* While a picked date is planned the slider has no position to hold, so it is
+   locked and the hint says why. */
+.tzc-range:disabled { cursor: default; opacity: 0.45; }
+.tzc-range:disabled::-webkit-slider-thumb { border-color: var(--tzc-sub); }
+.tzc-range:disabled::-moz-range-thumb { border-color: var(--tzc-sub); }
+.tzc-hint-locked { color: var(--tzc-ink); }
 
 /* ---------- Date & time picker ---------- */
 .tzc-dp { position: relative; }
@@ -326,6 +332,13 @@ body:has(> #root > .tzc-app) {
 .tzc-dp-num:focus-visible { border-color: var(--tz-brand); box-shadow: var(--tzc-ring); outline: none; }
 .tzc-dp-colon { color: var(--tzc-sub); font-weight: var(--tz-fw-bold); }
 .tzc-dp-mer { margin-left: auto; }
+
+.tzc-dp-num[aria-invalid='true'] { border-color: var(--tz-danger); background: var(--tz-danger-soft); }
+.tzc-dp-error {
+  margin: 8px 0 0; padding: 6px 9px; border-radius: 9px;
+  font-size: 0.75rem; line-height: 1.45; color: var(--tzc-ink);
+  background: var(--tz-danger-soft); border: 1px solid var(--tz-danger);
+}
 
 .tzc-dp-hint { margin: 10px 0 0; font-size: 0.6875rem; line-height: 1.45; color: var(--tzc-sub); }
 .tzc-dp-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
