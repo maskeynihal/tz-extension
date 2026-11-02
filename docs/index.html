@@ -16,7 +16,7 @@
         --border-strong: #dcdee4;
         --ink: #16181d;
         --body: #3a3d46;
-        --muted: #767983;
+        --muted: #62656f;
         --accent: #4f46e5;
         --accent-ink: #ffffff;
         --amber: #f5c518;
@@ -44,19 +44,6 @@
       a:hover { text-decoration: underline; }
       .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
       h1, h2, h3 { color: var(--ink); letter-spacing: -0.02em; line-height: 1.12; margin: 0; }
-
-      /* NAV */
-      header.nav {
-        position: sticky; top: 0; z-index: 10;
-        background: color-mix(in srgb, var(--ground) 86%, transparent);
-        backdrop-filter: saturate(140%) blur(10px);
-        border-bottom: 1px solid var(--border);
-      }
-      .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
-      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--ink); font-size: 18px; }
-      .brand .dot { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-grid; place-items: center; color: var(--accent-ink); font-size: 12px; font-weight: 800; }
-      .nav-links { display: flex; align-items: center; gap: 26px; font-size: 15px; }
-      .nav-links a { color: var(--body); }
       .btn {
         display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px;
         padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border-strong);
@@ -66,7 +53,6 @@
       .btn:active { transform: translateY(1px); }
       .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
       .btn.primary:hover { filter: brightness(1.06); }
-      @media (max-width: 720px) { .nav-links a:not(.btn) { display: none; } }
 
       /* HERO */
       .hero { padding: 92px 0 56px; }
@@ -139,17 +125,19 @@
       .foot-links { display: flex; gap: 20px; }
       .foot-links a { color: var(--muted); }
     </style>
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./assets/site-nav.css" />
   </head>
   <body>
-    <header class="nav">
-      <div class="wrap nav-inner">
-        <a class="brand" href="#top"><span class="dot">TZ</span> TZ Converter</a>
-        <nav class="nav-links">
+    <header class="site-nav">
+      <div class="site-nav-inner">
+        <a class="site-brand" href="#top"><span class="site-brand-dot" aria-hidden="true">TZ</span><span class="site-brand-name">TZ Converter</span></a>
+        <nav class="site-links" aria-label="Site">
           <a href="./app.html">Converter</a>
           <a href="./clock.html">World clock</a>
-          <a href="#features">Features</a>
-          <a href="#install">Install</a>
-          <a class="btn primary" id="nav-add" href="#install">Add to browser</a>
+          <a class="site-extra" href="#features">Features</a>
+          <a class="site-extra" href="#install">Install</a>
+          <a class="site-cta" id="nav-add" href="./index.html#install"><span class="site-cta-long">Add to browser</span><span class="site-cta-short">Install</span></a>
         </nav>
       </div>
     </header>
@@ -283,13 +271,15 @@
       (function () {
         var a = document.getElementById('nav-add');
         if (!a) return;
+        var long = a.querySelector('.site-cta-long');
+        function setLabel(text) { if (long) long.textContent = text; }
         var ua = navigator.userAgent;
         if (/Firefox\//.test(ua)) {
           a.href = 'https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/';
-          a.textContent = 'Add to Firefox';
+          setLabel('Add to Firefox');
         } else if (/Chrome\//.test(ua)) {
           a.href = 'https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk';
-          a.textContent = 'Add to Chrome';
+          setLabel('Add to Chrome');
         }
       })();
     </script>

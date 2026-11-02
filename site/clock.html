@@ -35,33 +35,24 @@
       a { color: var(--accent); text-decoration: none; }
       a:hover { text-decoration: underline; }
       a:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; }
-
-      header.nav { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--ground) 86%, transparent); backdrop-filter: saturate(140%) blur(10px); border-bottom: 1px solid var(--border); }
-      .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; max-width: 1440px; margin: 0 auto; padding: 0 clamp(16px, 3vw, 40px); }
-      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--ink); font-size: 18px; }
-      .brand:hover { text-decoration: none; }
-      .brand .dot { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-grid; place-items: center; color: var(--accent-ink); font-size: 12px; font-weight: 800; }
-      .nav-links { display: flex; align-items: center; gap: 24px; font-size: 15px; }
-      .nav-links a { color: var(--body); }
-      .nav-links a[aria-current="page"] { color: var(--ink); font-weight: 600; }
-      .nav-links a.btn, .btn { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+      .btn { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
       .btn:hover { text-decoration: none; filter: brightness(1.06); }
-      @media (max-width: 720px) { .nav-links a:not(.btn):not([aria-current]) { display: none; } }
 
       #clock-root .tzc-app { min-height: calc(100vh - 65px); min-height: calc(100dvh - 65px); }
       footer { border-top: 1px solid var(--border); background: var(--ground); padding: 28px clamp(16px, 3vw, 40px); color: var(--muted); font-size: 14px; text-align: center; }
       noscript p { max-width: 640px; margin: 48px auto; padding: 0 24px; color: var(--body); }
     </style>
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./assets/site-nav.css" />
   </head>
   <body>
-    <header class="nav">
-      <div class="nav-inner">
-        <a class="brand" href="./index.html"><span class="dot" aria-hidden="true">TZ</span> TZ Converter</a>
-        <nav class="nav-links" aria-label="Site">
-          <a href="./index.html">Home</a>
+    <header class="site-nav">
+      <div class="site-nav-inner">
+        <a class="site-brand" href="./index.html"><span class="site-brand-dot" aria-hidden="true">TZ</span><span class="site-brand-name">TZ Converter</span></a>
+        <nav class="site-links" aria-label="Site">
           <a href="./app.html">Converter</a>
           <a href="./clock.html" aria-current="page">World clock</a>
-          <a class="btn" href="./index.html#install">Add to browser</a>
+          <a class="site-cta" id="nav-add" href="./index.html#install"><span class="site-cta-long">Add to browser</span><span class="site-cta-short">Install</span></a>
         </nav>
       </div>
     </header>

@@ -348,7 +348,7 @@ function mountDemo(): void {
     pickerRoot.render(
       createElement(ZonePicker, {
         label: 'Add a timezone',
-        placeholder: '+ Add a timezone: search a city, UTC+5:45, PDT…',
+        placeholder: '+ Add a city, UTC+5:45 or PDT',
         exclude: shownZones(prefs),
         suggested: SUGGESTED,
         onSelect: (z: string) => {

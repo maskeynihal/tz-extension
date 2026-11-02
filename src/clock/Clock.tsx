@@ -20,6 +20,7 @@ import {
   minutesFromNow,
   moveItem,
   relativeDay,
+  homeDayNumber,
   shownInstant,
   utcOffsetLabel,
   visibleZones,
@@ -181,6 +182,8 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
 
   const instant = shownInstant(now, steps, exact);
   const planning = steps !== 0;
+  // Day tags count from home's real today, so a plan for tomorrow says so.
+  const homeToday = homeDayNumber(now, home);
 
   // --- FLIP animation + focus restore after reorders. ---
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
@@ -568,6 +571,7 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
                   position={i}
                   count={others.length + 1}
                   instant={instant}
+                  homeToday={homeToday}
                   home={home}
                   hour12={hour12}
                   planning={planning}
@@ -760,6 +764,8 @@ interface ZoneCardProps {
   readonly position: number;
   readonly count: number;
   readonly instant: number;
+  /** Home's real calendar day now (homeDayNumber), for the Today / Tomorrow tag. */
+  readonly homeToday: number;
   readonly home: string;
   readonly hour12: boolean;
   readonly planning: boolean;
@@ -782,13 +788,13 @@ interface ZoneCardProps {
  * seconds digits and nothing else does.
  */
 const ZoneCard = memo(function ZoneCard(props: ZoneCardProps): JSX.Element {
-  const { zone, isHome, position, count, instant, home, hour12, planning, dragging, registerRef } = props;
+  const { zone, isHome, position, count, instant, homeToday, home, hour12, planning, dragging, registerRef } = props;
   const uid = useId();
   const refCb = useCallback((el: HTMLLIElement | null) => registerRef(zone, el), [registerRef, zone]);
   const parts = wallParts(instant, zone);
   const face = clockText(parts, hour12);
   const phase = dayPhase(parts.hour + parts.minute / 60);
-  const rel = relativeDay(instant, zone, home);
+  const rel = relativeDay(instant, zone, home, homeToday);
   const diff = diffFromHome(instant, zone, home);
   const diffText = formatDiff(diff) ?? 'same time';
   const work = workStatus(parts.hour, parts.minute, parts.weekday);
@@ -838,7 +844,7 @@ const ZoneCard = memo(function ZoneCard(props: ZoneCardProps): JSX.Element {
 
       <p className="tzc-date">
         <span>{date}</span>
-        <span className={`tzc-day tzc-day-${rel.toLowerCase()}`}>{rel}</span>
+        <span className={`tzc-day${rel === 'Today' ? ' tzc-day-today' : ' tzc-day-other'}`}>{rel}</span>
       </p>
 
       <dl className="tzc-facts">
