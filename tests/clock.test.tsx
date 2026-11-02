@@ -381,3 +381,35 @@ describe('clock model', () => {
     expect(makeHome(base, 'UTC').targetZones).toEqual(['UTC+05:45', 'UTC-08:00', 'UTC']);
   });
 });
+
+describe('day tags while planning (site QA M1)', () => {
+  it('count from home’s real today, not from home’s planned day', () => {
+    // Home UTC-08:00 is Tue 12:00 at NOW. +18h is Wed 06:00 at home.
+    const today = model.homeDayNumber(NOW, 'UTC-08:00');
+    const plan = NOW + 18 * 3_600_000;
+    expect(relativeDay(plan, 'UTC-08:00', 'UTC-08:00', today)).toBe('Tomorrow');
+    // UTC is Wed 14:00 then. At +36h (Thu 00:00 at home) home is two days on.
+    expect(relativeDay(plan, 'UTC', 'UTC-08:00', today)).toBe('Tomorrow');
+    expect(relativeDay(NOW + 36 * 3_600_000, 'UTC-08:00', 'UTC-08:00', today)).toBe('In 2 days');
+    // −12h: home Tue 00:00 is still today; UTC-11 would be Mon.
+    expect(relativeDay(NOW - 12 * 3_600_000, 'UTC-11:00', 'UTC-08:00', today)).toBe('Yesterday');
+    expect(relativeDay(NOW - 36 * 3_600_000, 'UTC-11:00', 'UTC-08:00', today)).toBe('2 days ago');
+    // Live, the default is home's day at that instant, as before.
+    expect(relativeDay(NOW, 'UTC+05:45', 'UTC-08:00')).toBe('Tomorrow');
+  });
+
+  it('a +18h plan tags the home card Tomorrow, +36h In 2 days, and Now goes back to Today', async () => {
+    await mount();
+    expect(within(card('UTC-08:00')).getByText('Today')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Shift all clocks'), { target: { value: '72' } }); // +18h
+    expect(within(card('UTC-08:00')).getByText('Tomorrow')).toBeInTheDocument();
+    expect(within(card('UTC')).getByText('Tomorrow')).toBeInTheDocument();
+    expect(within(card('UTC+05:45')).getByText('Tomorrow')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Shift all clocks'), { target: { value: '144' } }); // +36h
+    expect(within(card('UTC-08:00')).getByText('In 2 days')).toBeInTheDocument();
+    expect(within(card('UTC+05:45')).getByText('In 2 days')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Shift all clocks'), { target: { value: '0' } });
+    expect(within(card('UTC-08:00')).getByText('Today')).toBeInTheDocument();
+    expect(within(card('UTC')).getByText('Today')).toBeInTheDocument();
+  });
+});

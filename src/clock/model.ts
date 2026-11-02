@@ -68,7 +68,8 @@ export function diffFromHome(epochMs: number, zone: string, home: string): numbe
   return offsetMinutesAt(epochMs, zone) - offsetMinutesAt(epochMs, home);
 }
 
-export type RelativeDay = 'Yesterday' | 'Today' | 'Tomorrow';
+/** "Today", "Tomorrow", "Yesterday", or "In 2 days" / "2 days ago" further out. */
+export type RelativeDay = 'Yesterday' | 'Today' | 'Tomorrow' | `In ${number} days` | `${number} days ago`;
 
 /**
  * A zone's wall clock at an instant, as a Date whose UTC fields are the local
@@ -92,11 +93,24 @@ function dayNumber(d: Date): number {
   return Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 86_400_000);
 }
 
-/** The zone's calendar day relative to home's at the same instant. */
-export function relativeDay(epochMs: number, zone: string, home: string): RelativeDay {
-  const diff = dayNumber(wallDate(epochMs, zone)) - dayNumber(wallDate(epochMs, home));
+/** Home's calendar day at an instant, as a day count (changes only at home's midnight). */
+export function homeDayNumber(epochMs: number, home: string): number {
+  return dayNumber(wallDate(epochMs, home));
+}
+
+/**
+ * The zone's calendar day at `epochMs`, relative to home's real today.
+ * `homeToday` is homeDayNumber(now, home); left out, it is home's day at
+ * `epochMs` itself, which is the same thing while live. While planning it
+ * must be given: a time planned for tomorrow at home is "Tomorrow", not
+ * "Today".
+ */
+export function relativeDay(epochMs: number, zone: string, home: string, homeToday?: number): RelativeDay {
+  const diff = dayNumber(wallDate(epochMs, zone)) - (homeToday ?? homeDayNumber(epochMs, home));
   if (diff === 0) return 'Today';
-  return diff > 0 ? 'Tomorrow' : 'Yesterday';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  return diff > 0 ? `In ${diff} days` : `${-diff} days ago`;
 }
 
 export type DayPhase = 'night' | 'dawn' | 'day' | 'dusk';

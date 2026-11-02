@@ -262,6 +262,11 @@ body:has(> #root > .tzc-app) {
 .tzc-scale-btn:hover { color: var(--tzc-ink); border-color: var(--tz-border-brand); }
 .tzc-scale-btn[aria-pressed='true'] { color: var(--tz-brand); font-weight: 600; }
 .tzc-hint { margin: 8px 0 0; font-size: 0.75rem; color: var(--tzc-sub); }
+/* Phones: every other preset (−12h, Now, +12h, +24h, +36h), so the labels
+   don't run together; the slider still reaches every quarter hour. */
+@media (max-width: 480px) {
+  .tzc-scale li:nth-child(even) { display: none; }
+}
 
 /* ---------- Board ---------- */
 .tzc-loading { color: var(--tzc-sub); }
@@ -329,7 +334,7 @@ body:has(> #root > .tzc-app) {
   font-size: 0.6875rem; font-weight: var(--tz-fw-bold); letter-spacing: 0.04em; text-transform: uppercase;
   padding: 1px 7px; border-radius: 999px; border: 1px solid var(--tzc-line); color: var(--tzc-sub);
 }
-.tzc-day-tomorrow, .tzc-day-yesterday {
+.tzc-day-other {
   color: var(--tz-brand-strong); border-color: var(--tz-border-brand); background: var(--tz-brand-softer);
 }
 
@@ -362,12 +367,10 @@ body:has(> #root > .tzc-app) {
   background: var(--tzc-card); border: 2px solid var(--tz-brand);
 }
 
-/* Card tools appear on hover / focus, and always on touch screens. */
+/* Card tools are always shown at full strength, so their labels stay readable (AA). */
 .tzc-card-tools {
   display: flex; align-items: center; gap: 4px; margin-top: 8px;
-  opacity: 0.75; transition: opacity 0.15s;
 }
-.tzc-card:hover .tzc-card-tools, .tzc-card:focus-within .tzc-card-tools { opacity: 1; }
 .tzc-tool {
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   height: 30px; min-width: 30px; padding: 0 8px; border-radius: 8px;
