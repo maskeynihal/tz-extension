@@ -18,7 +18,7 @@ import { fromSyncItems } from '../src/lib/storage';
 // Pass-through spy on the one model call each ZoneCard render makes, to count card renders.
 vi.mock('../src/clock/model', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/clock/model')>();
-  return { ...real, dayProgress: vi.fn(real.dayProgress) };
+  return { ...real, workStatus: vi.fn(real.workStatus) };
 });
 
 const KEY = 'tz-extension-prefs';
@@ -173,20 +173,26 @@ describe('ClockApp', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     expect(timeOf('UTC-08:00')).toBe('12:00');
     expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Mon, Jan 22 12:00 in UTC-08:00/);
-    // The slider sits at its "now" mark: no position stands for a date days
-    // out. So it is locked there and announces that mark, rather than reading
-    // 0 while claiming a date, and a stray nudge cannot discard the pick.
+    // The slider counts from the pick: its centre is the picked time, and a
+    // nudge shifts the pick rather than discarding it for "now + 15 min"
+    // (the bug the slider was once locked to avoid).
     expect(slider.value).toBe('0');
-    expect(slider).toBeDisabled();
-    expect(slider).toHaveAttribute('aria-valuetext', 'Now');
-    fireEvent.change(slider, { target: { value: '-4' } });
-    expect(timeOf('UTC-08:00')).toBe('12:00');
-    expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Mon, Jan 22 12:00 in UTC-08:00/);
-
-    // Taking the scrubber back over is a deliberate press, after which the
-    // slider holds the plan again.
-    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours back' }));
     expect(slider).toBeEnabled();
+    expect(slider).toHaveAttribute('aria-valuetext', expect.stringContaining('Mon, Jan 22 12:00 in UTC-08:00'));
+    expect(screen.getByRole('button', { name: 'Plan the picked time' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.change(slider, { target: { value: '-4' } });
+    expect(timeOf('UTC-08:00')).toBe('11:00');
+    expect(screen.getByText('Planning:').parentElement).toHaveTextContent(/Mon, Jan 22 11:00 in UTC-08:00/);
+    // The picker's trigger follows what the board shows.
+    expect(picker).toHaveTextContent('Jan 22, 2024, 11:00');
+    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours before the picked time' }));
+    expect(timeOf('UTC-08:00')).toBe('06:00');
+    fireEvent.click(screen.getByRole('button', { name: 'Plan the picked time' }));
+    expect(timeOf('UTC-08:00')).toBe('12:00');
+
+    // Back to now, and the presets count from now again.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours back' }));
     expect(timeOf('UTC')).toBe('14:00');
     expect(picker).toHaveTextContent('Pick date & time');
     fireEvent.change(slider, { target: { value: '-4' } });
@@ -307,7 +313,7 @@ describe('ClockApp rendering cost', () => {
 
   it('cards re-render only when what they show changes', async () => {
     await mount();
-    const renders = vi.mocked(model.dayProgress);
+    const renders = vi.mocked(model.workStatus);
     renders.mockClear();
     // Live: each card shows seconds, so each re-renders once per tick.
     await act(async () => {

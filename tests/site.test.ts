@@ -51,9 +51,11 @@ describe('website storage opt-in', () => {
   });
 
   it('the site build uses the website clock entry, not the extension one', () => {
-    const build = read('scripts/build-site.mjs');
-    expect(build).toContain("clock: resolve(siteDir, 'clock.ts')");
-    expect(build).not.toContain('src/clock/main.tsx');
+    // The entries live in site-config.mjs, shared by build:site and dev:site.
+    const config = read('scripts/site-config.mjs');
+    expect(config).toContain("clock: resolve(siteDir, 'clock.ts')");
+    expect(config).not.toContain('src/clock/main.tsx');
+    expect(read('scripts/build-site.mjs')).toContain('siteBuildOptions(outDir)');
   });
 
   it('the extension clock page never opts in', () => {

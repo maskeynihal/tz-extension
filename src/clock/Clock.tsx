@@ -16,7 +16,7 @@ import {
   clockText,
   dateText,
   dayPhase,
-  dayProgress,
+  daySlider,
   daysInMonth,
   describeDiff,
   diffFromHome,
@@ -26,10 +26,12 @@ import {
   makeHome,
   monthGrid,
   moveItem,
-  offsetPlan,
   planInstant,
   planMinutesFromNow,
+  planSteps,
   readWallPick,
+  retimePlan,
+  shiftPlan,
   relativeDay,
   homeDayNumber,
   utcOffsetLabel,
@@ -237,6 +239,20 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
     [pick, home, hour12],
   );
 
+  // A card's own slider names an instant on that zone's clock. It keeps the
+  // pick (and the scrubber counts on from it) when it can; when it cannot,
+  // the target is the new pick, and the picker's wall fields no longer
+  // describe it, so they go.
+  const planRef = useRef(plan);
+  planRef.current = plan;
+  const retime = useCallback((target: number) => {
+    const prev = planRef.current;
+    const next = retimePlan(prev, target);
+    setScrubbed(true);
+    if (prev.kind !== 'absolute' || next.kind !== 'absolute' || next.epochMs !== prev.epochMs) setPick(null);
+    setPlan(next);
+  }, []);
+
   // A pick is held twice over: as wall fields (the trigger's label, the DST
   // note) and as the instant every card shows. Changing home afterwards — a
   // card's "Make home", or Settings — re-renders the first half for the new
@@ -256,7 +272,8 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
       setStatus(`Home is now ${zonePlace(home)}; the planned time could not be read there, so the clocks are live again.`);
       return;
     }
-    setPlan(absolutePlan(r.epochMs));
+    // The scrubber's shift from the pick is kept: it was counted from the pick.
+    setPlan((p) => absolutePlan(r.epochMs, p.kind === 'absolute' ? p.steps : 0));
     setStatus(`Home is now ${zonePlace(home)}; the planned time is now read as ${zonePlace(home)}'s wall clock.`);
     // `pick` and `hour12` are read, not reacted to: only a home change acts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -650,6 +667,7 @@ export function ClockApp({ embedded = false }: ClockAppProps): JSX.Element {
                   home={home}
                   hour12={hour12}
                   planning={planning}
+                  onRetime={retime}
                   dragging={draggingZone === zone}
                   registerRef={registerRef}
                   onMove={moveZone}
@@ -705,9 +723,13 @@ interface ScrubberProps {
 
 const SCALE_HOURS = [-12, -6, 0, 6, 12, 18, 24, 30, 36];
 
-/** Accessible name of a scale preset: "Plan 12 hours ahead", "Plan 6 hours back". */
-function scaleLabel(h: number): string {
-  if (h === 0) return 'Plan the current time';
+/**
+ * Accessible name of a scale preset: "Plan 12 hours ahead", "Plan 6 hours
+ * back", or, counted from a pick, "Plan 6 hours after the picked time".
+ */
+function scaleLabel(h: number, fromPick: boolean): string {
+  if (h === 0) return fromPick ? 'Plan the picked time' : 'Plan the current time';
+  if (fromPick) return `Plan ${Math.abs(h)} hours ${h > 0 ? 'after' : 'before'} the picked time`;
   return `Plan ${Math.abs(h)} hours ${h > 0 ? 'ahead' : 'back'}`;
 }
 
@@ -723,15 +745,18 @@ function planText(instant: number, home: string, hour12: boolean, withDate: bool
 
 function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChange, onPick, idBase }: ScrubberProps): JSX.Element {
   const planning = isPlanning(plan);
-  // An absolute plan leaves the slider at its "now" mark: no slider position
-  // can stand for a date days away.
-  const steps = plan.kind === 'offset' ? plan.steps : 0;
+  // With a pick applied the slider counts from the pick, not from now: its
+  // centre mark is the picked time and it shifts −12 h … +36 h around it.
+  // It used to lock instead, because the one thing it could do then was
+  // discard the pick; counting from it keeps the pick and keeps the slider.
+  const fromPick = plan.kind === 'absolute';
+  const steps = planSteps(plan);
   const exact = plan.kind === 'offset' && plan.exact;
   // Minute precision is all the summary needs, so it only changes when the
   // slider moves or a new minute starts, never every second.
   const minuteMs = Math.floor(nowMs / 60_000) * 60_000;
   const instant = planInstant(minuteMs, plan);
-  const withDate = plan.kind === 'absolute';
+  const withDate = fromPick;
   const planLabel = useMemo(() => planText(instant, home, hour12, withDate), [instant, home, hour12, withDate]);
   // The real distance from now: a snapped slider plan is not a round number,
   // and a picked one can be days out.
@@ -741,13 +766,7 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
   const fromNow = formatSpan(planMinutesFromNow(nowMs, plan));
   // A pick can land on the current minute, where there is no distance to give.
   const distance = fromNow ? `, ${fromNow} from now` : '';
-  // The slider cannot hold a picked date: no position stands for one. So
-  // while a pick is applied it is locked at its "now" mark and says so,
-  // rather than reading 0 while announcing a date it does not hold — and
-  // rather than discarding the pick the moment an arrow key reaches it. The
-  // plan itself is announced by the chip and the live region below.
-  const locked = plan.kind === 'absolute';
-  const valueText = plan.kind === 'offset' ? `${planLabel}${distance}` : 'Now';
+  const valueText = planning ? `${planLabel}${distance}` : 'Now';
   const live = planning
     ? `Planning ${planLabel}${distance}.`
     : scrubbed
@@ -756,6 +775,10 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
   const span = SCRUB_MAX_STEPS - SCRUB_MIN_STEPS;
   const frac = (s: number): string => String((s - SCRUB_MIN_STEPS) / span);
   const inputId = `${idBase}-scrub`;
+  // The two ends are the −12h / +36h presets: from now they are exact from
+  // the current minute, not snapped to a quarter hour.
+  const shift = (v: number, exactEnd = v === SCRUB_MIN_STEPS || v === SCRUB_MAX_STEPS): void =>
+    onChange(shiftPlan(plan, v, exactEnd));
 
   return (
     <section
@@ -786,7 +809,9 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
         )}
         <div className="tzc-scrub-tools">
           <DateTimePicker
-            value={plan.kind === 'absolute' ? pick : null}
+            // What the board shows, on home's wall clock: once the slider
+            // has moved off a pick, the trigger follows it.
+            value={fromPick ? (steps === 0 && pick ? pick : wallPick(instant, home)) : null}
             nowMs={nowMs}
             home={home}
             hour12={hour12}
@@ -805,14 +830,20 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
           </button>
         </div>
       </div>
-      {pickNote && plan.kind === 'absolute' && (
+      {/* The note describes the picked wall time, so only while it is shown. */}
+      {pickNote && fromPick && steps === 0 && (
         <p className="tzc-dst-note" aria-live="polite">
           {pickNote}
         </p>
       )}
-      <label className="tzc-sr-only" htmlFor={inputId}>
-        Shift all clocks
-      </label>
+      <div className="tzc-range-head">
+        <label className="tzc-range-label" htmlFor={inputId}>
+          Shift all clocks
+        </label>
+        <span className="tzc-range-zone" id={`${idBase}-scrub-zone`}>
+          {zonePlace(home)} time (home)
+        </span>
+      </div>
       <div className="tzc-range-wrap" style={{ '--tzc-now': frac(0) } as React.CSSProperties}>
         <input
           id={inputId}
@@ -822,25 +853,13 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
           max={SCRUB_MAX_STEPS}
           step={1}
           value={steps}
-          disabled={locked}
           aria-valuetext={valueText}
-          aria-describedby={locked ? `${idBase}-scrub-locked` : `${idBase}-scrub-hint`}
-          onChange={(e) => {
-            // The two ends are the −12h / +36h presets: exact from the
-            // current minute, not snapped to a quarter hour (Home/End, or a
-            // drag to the end).
-            // `disabled` stops a real user, but not a synthesised event: the
-            // guard is what makes "a locked slider cannot discard the pick"
-            // true rather than merely unreachable.
-            if (locked) return;
-            const v = Number(e.currentTarget.value);
-            onChange(offsetPlan(v, v === SCRUB_MIN_STEPS || v === SCRUB_MAX_STEPS));
-          }}
+          aria-describedby={`${idBase}-scrub-zone ${idBase}-scrub-hint`}
+          onChange={(e) => shift(Number(e.currentTarget.value))}
           onKeyDown={(e) => {
-            if (locked) return;
             if (e.key === 'Home' || e.key === 'End') {
               e.preventDefault();
-              onChange(offsetPlan(e.key === 'Home' ? SCRUB_MIN_STEPS : SCRUB_MAX_STEPS, true));
+              shift(e.key === 'Home' ? SCRUB_MIN_STEPS : SCRUB_MAX_STEPS, true);
               return;
             }
             let next: number | null = null;
@@ -848,8 +867,7 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
             else if (e.key === 'PageDown') next = steps - 4;
             if (next === null) return;
             e.preventDefault();
-            const clamped = Math.max(SCRUB_MIN_STEPS, Math.min(SCRUB_MAX_STEPS, next));
-            onChange(offsetPlan(clamped, clamped === SCRUB_MIN_STEPS || clamped === SCRUB_MAX_STEPS));
+            shift(Math.max(SCRUB_MIN_STEPS, Math.min(SCRUB_MAX_STEPS, next)));
           }}
         />
         <span className="tzc-range-now" aria-hidden="true" />
@@ -862,26 +880,20 @@ function Scrubber({ plan, pick, pickNote, nowMs, home, hour12, scrubbed, onChang
               <button
                 type="button"
                 className="tzc-scale-btn"
-                aria-label={scaleLabel(h)}
-                aria-pressed={plan.kind !== 'absolute' && steps === target && (exact || target === 0)}
-                onClick={() => onChange(offsetPlan(target, true))}
+                aria-label={scaleLabel(h, fromPick)}
+                aria-pressed={steps === target && (fromPick || exact || target === 0)}
+                onClick={() => shift(target, true)}
               >
-                {h === 0 ? 'Now' : `${h > 0 ? '+' : '−'}${Math.abs(h)}h`}
+                {h === 0 ? (fromPick ? 'Pick' : 'Now') : `${h > 0 ? '+' : '−'}${Math.abs(h)}h`}
               </button>
             </li>
           );
         })}
       </ul>
-      {locked ? (
-        <p className="tzc-hint tzc-hint-locked" id={`${idBase}-scrub-locked`}>
-          The slider is paused while a picked date is planned: no slider position stands for one. Press Now, or one of
-          the jump buttons, to plan from the current time again.
-        </p>
-      ) : (
-        <p className="tzc-hint" id={`${idBase}-scrub-hint`}>
-          Arrow keys move 15 minutes, Page Up/Down one hour. Escape, while this planner has focus, returns to now.
-        </p>
-      )}
+      <p className="tzc-hint" id={`${idBase}-scrub-hint`}>
+        {fromPick ? 'Counting from the picked time. ' : ''}Arrow keys move 15 minutes, Page Up/Down one hour. Escape,
+        while this planner has focus, returns to now.
+      </p>
       <p className="tzc-sr-only" aria-live="polite">
         {live}
       </p>
@@ -1328,6 +1340,8 @@ interface ZoneCardProps {
   readonly hour12: boolean;
   readonly planning: boolean;
   readonly dragging: boolean;
+  /** Plan the instant this card's own slider was moved to. Stable. */
+  readonly onRetime: (target: number) => void;
   /** Stable callbacks taking the zone, so the memoized card skips unchanged renders. */
   readonly registerRef: (zone: string, el: HTMLLIElement | null) => void;
   readonly onMove: (zone: string, delta: number) => void;
@@ -1338,6 +1352,8 @@ interface ZoneCardProps {
   readonly onHandlePointerUp: () => void;
   readonly onHandlePointerCancel: () => void;
 }
+
+const QUARTER_MS = STEP_MINUTES * 60_000;
 
 /**
  * One clock card. Memoized on its props, which are exactly what it displays
@@ -1359,8 +1375,16 @@ const ZoneCard = memo(function ZoneCard(props: ZoneCardProps): JSX.Element {
   const place = zonePlace(zone);
   const desc = zoneDescription(zone);
   const offset = utcOffsetLabel(offsetMinutesAt(instant, zone));
-  const progress = dayProgress(parts);
   const date = dateText(instant, zone, { weekday: 'long', day: 'numeric', month: 'short' });
+  // Two wall-clock reads per card; live, the instant moves every second, but
+  // the slider only every quarter hour, so it is keyed on that.
+  const quarter = Math.floor(instant / QUARTER_MS) * QUARTER_MS;
+  const day = useMemo(() => daySlider(quarter, zone), [quarter, zone]);
+  const { onRetime } = props;
+  const retimeTo = (step: number): void => {
+    if (!day) return;
+    onRetime(day.startMs + Math.max(0, Math.min(day.max, step)) * QUARTER_MS);
+  };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLLIElement>): void => {
     if (isHome || !e.altKey) return;
@@ -1423,11 +1447,33 @@ const ZoneCard = memo(function ZoneCard(props: ZoneCardProps): JSX.Element {
         {work.text}
       </p>
 
-      <div className="tzc-progress" aria-hidden="true">
-        <span className="tzc-progress-work" />
-        <span className="tzc-progress-fill" style={{ width: `${progress * 100}%` }} />
-        <span className="tzc-progress-mark" style={{ left: `${progress * 100}%` }} />
-      </div>
+      {/* This zone's day, midnight to midnight, as a slider: moving it plans
+          that time here, and every other card and the main slider follow.
+          It counts real quarter hours from midnight (see daySlider), so a
+          DST day is simply shorter or longer, and the band behind it marks
+          working hours. */}
+      {day && (
+        <div className="tzc-progress" style={{ '--tzc-fill': String(day.max ? day.value / day.max : 0) } as React.CSSProperties}>
+          <span className="tzc-progress-work" aria-hidden="true" />
+          <span className="tzc-progress-fill" aria-hidden="true" />
+          <input
+            className="tzc-day-range"
+            type="range"
+            min={0}
+            max={day.max}
+            step={1}
+            value={day.value}
+            aria-label={`Time in ${place}`}
+            aria-valuetext={`${face.main}${face.meridiem ? ` ${face.meridiem}` : ''}, ${date}`}
+            onChange={(e) => retimeTo(Number(e.currentTarget.value))}
+            onKeyDown={(e) => {
+              if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
+              e.preventDefault();
+              retimeTo(day.value + (e.key === 'PageUp' ? 4 : -4));
+            }}
+          />
+        </div>
+      )}
 
       {!isHome && (
         <div className="tzc-card-tools">

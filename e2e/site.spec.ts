@@ -209,7 +209,7 @@ for (const how of ['https', 'file'] as const) {
       expect(errors).toEqual([]);
     });
 
-    test('the scrubber cannot throw away a picked date', async ({ page }) => {
+    test('the scrubber moves from a picked date, and so does every card slider', async ({ page }) => {
       const errors = await open(page, 'clock.html');
       const app = page.locator('#clock-root .tzc-app');
       await app.getByRole('button', { name: '24-hour clock' }).click();
@@ -227,32 +227,30 @@ for (const how of ['https', 'file'] as const) {
       await pop.getByRole('button', { name: 'Apply' }).click();
       await expect(pop).toBeHidden();
       await expect(homeCard.locator('.tzc-time')).toHaveText('14:15');
-      const planned = await app.locator('.tzc-plan-chip').innerText();
-      const label = await trigger.innerText();
-      expect(planned).toMatch(/\+\d+d/);
+      expect(await app.locator('.tzc-plan-chip').innerText()).toMatch(/\+\d+d/);
 
-      // The slider is locked at its "now" mark while the pick is applied, and
-      // says so, instead of sitting at 0 and discarding the pick on the first
-      // arrow key.
-      await expect(slider).toBeDisabled();
-      await expect(slider).toHaveValue('0');
-      await expect(slider).toHaveAttribute('aria-valuetext', 'Now');
-      await expect(app.locator('.tzc-hint-locked')).toContainText('slider is paused while a picked date is planned');
-
-      // Trying to touch it anyway: a disabled range takes neither the click
-      // nor the keys, so the plan is exactly where it was.
-      await slider.click({ force: true });
-      await page.keyboard.press('ArrowRight');
-      await page.keyboard.press('End');
-      await expect(app.locator('.tzc-plan-chip')).toHaveText(planned);
-      await expect(trigger).toHaveText(label);
-      await expect(homeCard.locator('.tzc-time')).toHaveText('14:15');
-      await expect(homeCard.locator('.tzc-day')).toHaveText(/In \d+ days/);
-
-      // A jump button is an explicit instruction, so that does take over —
-      // and then the slider holds the plan again.
-      await app.getByRole('button', { name: 'Plan 6 hours ahead', exact: true }).click();
+      // The slider stays live and counts from the pick: a real arrow key is a
+      // quarter hour after it, still on the picked day, not "now + 15 min".
       await expect(slider).toBeEnabled();
+      await expect(slider).toHaveValue('0');
+      await slider.focus();
+      await page.keyboard.press('ArrowRight');
+      await expect(homeCard.locator('.tzc-time')).toHaveText('14:30');
+      await expect(homeCard.locator('.tzc-day')).toHaveText(/In \d+ days/);
+      await expect(trigger).toContainText('14:30');
+      await app.getByRole('button', { name: 'Plan the picked time' }).click();
+      await expect(homeCard.locator('.tzc-time')).toHaveText('14:15');
+
+      // The home card's own slider moves every clock and the main slider.
+      const homeDay = homeCard.locator('.tzc-day-range');
+      await homeDay.focus();
+      await page.keyboard.press('PageUp');
+      await expect(homeCard.locator('.tzc-time')).toHaveText('15:15');
+      await expect(slider).toHaveValue('4');
+
+      // From now again, the presets count from now.
+      await app.getByRole('button', { name: 'Back to now' }).click();
+      await app.getByRole('button', { name: 'Plan 6 hours ahead', exact: true }).click();
       await expect(slider).toHaveValue('24');
       await expect(trigger).toHaveText('Pick date & time');
       expect(errors).toEqual([]);

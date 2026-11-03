@@ -294,7 +294,10 @@ export function makeHome(prefs: Preferences, zone: string): Preferences {
  * What the board shows.
  * - `live`: the current time.
  * - `offset`: the scrubber, −12 h … +36 h in 15-minute steps (see shownInstant).
- * - `absolute`: an instant picked outright, which the scrubber cannot reach.
+ * - `absolute`: an instant picked outright (the date picker, or a card's own
+ *   slider), which the scrubber then shifts by `steps` quarter hours, −12 h …
+ *   +36 h around it, exactly as it shifts the current time when live. The
+ *   slider used to lock while a pick was applied; it moves from the pick now.
  *
  * A union rather than extra arguments on shownInstant/minutesFromNow: those
  * two carry the scrubber's snapping rules, which an absolute pick has nothing
@@ -303,7 +306,7 @@ export function makeHome(prefs: Preferences, zone: string): Preferences {
 export type Plan =
   | { readonly kind: 'live' }
   | { readonly kind: 'offset'; readonly steps: number; readonly exact: boolean }
-  | { readonly kind: 'absolute'; readonly epochMs: number };
+  | { readonly kind: 'absolute'; readonly epochMs: number; readonly steps: number };
 
 export const LIVE: Plan = { kind: 'live' };
 
@@ -312,9 +315,27 @@ export function offsetPlan(steps: number, exact = false): Plan {
   return steps === 0 ? LIVE : { kind: 'offset', steps, exact };
 }
 
-/** A picked instant. Anything non-finite falls back to live rather than showing NaN. */
-export function absolutePlan(epochMs: number): Plan {
-  return Number.isFinite(epochMs) ? { kind: 'absolute', epochMs } : LIVE;
+/**
+ * A picked instant, shifted by `steps` of the scrubber. Anything non-finite
+ * falls back to live rather than showing NaN.
+ */
+export function absolutePlan(epochMs: number, steps = 0): Plan {
+  return Number.isFinite(epochMs) ? { kind: 'absolute', epochMs, steps } : LIVE;
+}
+
+/** The scrubber's position for a plan: steps from now, or from the pick. */
+export function planSteps(plan: Plan): number {
+  return plan.kind === 'live' ? 0 : plan.steps;
+}
+
+/**
+ * Move the scrubber to `steps` without losing what it is counted from: a
+ * live or offset plan counts from now, a picked one from the pick. `exact`
+ * only means anything from now (see shownInstant).
+ */
+export function shiftPlan(plan: Plan, steps: number, exact = false): Plan {
+  if (plan.kind === 'absolute') return absolutePlan(plan.epochMs, steps);
+  return offsetPlan(steps, exact);
 }
 
 export function isPlanning(plan: Plan): boolean {
@@ -324,7 +345,7 @@ export function isPlanning(plan: Plan): boolean {
 /** The instant every card shows for a plan. */
 export function planInstant(nowMs: number, plan: Plan): number {
   if (plan.kind === 'live') return nowMs;
-  if (plan.kind === 'absolute') return plan.epochMs;
+  if (plan.kind === 'absolute') return plan.epochMs + plan.steps * STEP_MS;
   return shownInstant(nowMs, plan.steps, plan.exact);
 }
 
@@ -343,7 +364,53 @@ export function planInstant(nowMs: number, plan: Plan): number {
 export function planMinutesFromNow(nowMs: number, plan: Plan): number {
   if (plan.kind === 'live') return 0;
   if (plan.kind === 'offset') return minutesFromNow(nowMs, plan.steps, plan.exact);
-  return Math.round((plan.epochMs - Math.round(nowMs / MINUTE_MS) * MINUTE_MS) / MINUTE_MS);
+  return Math.round((planInstant(nowMs, plan) - Math.round(nowMs / MINUTE_MS) * MINUTE_MS) / MINUTE_MS);
+}
+
+/**
+ * The plan that shows `target`, chosen on one card's own slider. A picked
+ * plan keeps its pick and only moves the scrubber when the target is a whole
+ * number of steps away and in range, so the main thumb travels with the
+ * card's; otherwise (or from live) the target becomes the new pick.
+ */
+export function retimePlan(plan: Plan, target: number): Plan {
+  if (plan.kind === 'absolute') {
+    const delta = target - plan.epochMs;
+    const steps = delta / STEP_MS;
+    if (Number.isInteger(steps) && steps >= SCRUB_MIN_STEPS && steps <= SCRUB_MAX_STEPS) {
+      return absolutePlan(plan.epochMs, steps);
+    }
+  }
+  return absolutePlan(target);
+}
+
+/**
+ * A card slider over one calendar day in a zone, in real 15-minute steps
+ * from that day's first instant. Counting real time rather than wall-clock
+ * positions is what lets the arrow keys walk through a DST change: a
+ * spring-forward day simply has 92 steps, a fall-back day 100, and the
+ * repeated hour can be reached twice. `startMs` is local midnight (or, where
+ * a zone skips midnight, the first instant of the day).
+ */
+export interface DaySlider {
+  readonly startMs: number;
+  /** The last step, i.e. the quarter hour before the next day starts. */
+  readonly max: number;
+  /** The planned instant's step, floored to a quarter hour and clamped. */
+  readonly value: number;
+}
+
+export function daySlider(epochMs: number, zone: string): DaySlider | null {
+  const today = wallPick(epochMs, zone);
+  const midnight = { ...today, h: 0, mi: 0 };
+  const start = wallClockToInstant(pickToIso(midnight), zone)?.epochMs;
+  const next = wallClockToInstant(pickToIso(addDays(midnight, 1)), zone)?.epochMs;
+  if (start === undefined || next === undefined || !Number.isFinite(start) || !Number.isFinite(next) || next <= start) {
+    return null;
+  }
+  const max = Math.ceil((next - start) / STEP_MS) - 1;
+  const value = Math.max(0, Math.min(max, Math.floor((epochMs - start) / STEP_MS)));
+  return { startMs: start, max, value };
 }
 
 const DAY_MINUTES = 1440;

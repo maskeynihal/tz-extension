@@ -221,7 +221,10 @@ body:has(> #root > .tzc-app) {
 .tzc-live-chip { color: var(--tzc-sub); border: 1px solid var(--tzc-line); }
 .tzc-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tzc-work); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tzc-work) 25%, transparent); }
 
-.tzc-range-wrap { position: relative; padding: 10px 0 4px; }
+.tzc-range-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 10px; font-size: 0.8125rem; }
+.tzc-range-label { font-weight: var(--tz-fw-semibold); color: var(--tzc-ink); }
+.tzc-range-zone { color: var(--tzc-sub); }
+.tzc-range-wrap { position: relative; padding: 4px 0 4px; }
 .tzc-range {
   -webkit-appearance: none; appearance: none; width: 100%; height: 28px; margin: 0;
   background: transparent; cursor: pointer; position: relative; z-index: 1;
@@ -242,7 +245,7 @@ body:has(> #root > .tzc-app) {
 .tzc-range:focus-visible::-webkit-slider-thumb { box-shadow: var(--tzc-ring); }
 .tzc-range:focus-visible::-moz-range-thumb { box-shadow: var(--tzc-ring); }
 .tzc-range-now {
-  position: absolute; top: 12px; bottom: 6px; width: 2px; border-radius: 2px;
+  position: absolute; top: 6px; bottom: 6px; width: 2px; border-radius: 2px;
   /* The thumb's centre travels from 10px to (100% - 10px). */
   left: calc(10px + (100% - 20px) * var(--tzc-now) - 1px);
   background: var(--tzc-sub); opacity: 0.5; pointer-events: none;
@@ -268,7 +271,6 @@ body:has(> #root > .tzc-app) {
 .tzc-range:disabled { cursor: default; opacity: 0.45; }
 .tzc-range:disabled::-webkit-slider-thumb { border-color: var(--tzc-sub); }
 .tzc-range:disabled::-moz-range-thumb { border-color: var(--tzc-sub); }
-.tzc-hint-locked { color: var(--tzc-ink); }
 
 /* ---------- Date & time picker ---------- */
 .tzc-dp { position: relative; }
@@ -450,21 +452,41 @@ body:has(> #root > .tzc-app) {
 
 /* 24-hour progress: the 09–18 working band sits under the elapsed fill. */
 .tzc-progress {
-  position: relative; height: 4px; margin: 10px 0 2px; border-radius: 999px;
-  background: color-mix(in srgb, var(--tzc-sub) 18%, transparent); overflow: visible;
+  position: relative; height: 20px; margin: 6px 0 0;
 }
+/* Track, working-hours band and fill sit behind the native range, which
+   keeps only its thumb. */
+.tzc-progress::before, .tzc-progress-work, .tzc-progress-fill {
+  content: ''; position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 999px;
+  pointer-events: none;
+}
+.tzc-progress::before { left: 0; right: 0; background: color-mix(in srgb, var(--tzc-sub) 18%, transparent); }
 .tzc-progress-work {
-  position: absolute; top: 0; bottom: 0; left: 37.5%; width: 37.5%;
-  background: color-mix(in srgb, var(--tzc-work) 30%, transparent); border-radius: 999px;
+  left: 37.5%; width: 37.5%;
+  background: color-mix(in srgb, var(--tzc-work) 30%, transparent);
 }
 .tzc-progress-fill {
-  position: absolute; top: 0; bottom: 0; left: 0; border-radius: 999px;
+  left: 0; width: calc(100% * var(--tzc-fill, 0));
   background: color-mix(in srgb, var(--tz-brand) 55%, transparent);
 }
-.tzc-progress-mark {
-  position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+.tzc-day-range {
+  -webkit-appearance: none; appearance: none; position: relative; z-index: 1;
+  width: 100%; height: 20px; margin: 0; background: transparent; cursor: pointer;
+}
+.tzc-day-range::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+.tzc-day-range::-moz-range-track { height: 4px; background: transparent; }
+.tzc-day-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -6px;
+  width: 16px; height: 16px; border-radius: 50%;
   background: var(--tzc-card); border: 2px solid var(--tz-brand);
 }
+.tzc-day-range::-moz-range-thumb {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--tzc-card); border: 2px solid var(--tz-brand);
+}
+.tzc-day-range:focus-visible { outline: none; box-shadow: none; }
+.tzc-day-range:focus-visible::-webkit-slider-thumb { box-shadow: var(--tzc-ring); }
+.tzc-day-range:focus-visible::-moz-range-thumb { box-shadow: var(--tzc-ring); }
 
 /* Card tools are always shown at full strength, so their labels stay readable (AA). */
 .tzc-card-tools {
@@ -500,6 +522,6 @@ body:has(> #root > .tzc-app) {
 }
 
 @media (forced-colors: active) {
-  .tzc-work-dot, .tzc-progress-mark, .tzc-live-dot { forced-color-adjust: none; }
+  .tzc-work-dot, .tzc-live-dot { forced-color-adjust: none; }
   .tzc-card { border-color: CanvasText; }
 }

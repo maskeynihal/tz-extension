@@ -250,11 +250,10 @@ describe('date & time picker: picking a time', () => {
     await flush();
     expect(planChip()).toHaveTextContent('Tue, Jan 2 12:00 in UTC-08:00');
     expect(planChip()?.textContent).not.toContain('from now');
-    // The slider holds no picked date, so it must not announce one: its value
-    // is its "now" mark and that is what a screen reader is told it is. The
-    // plan itself is announced by the chip and the planner's live region.
+    // The slider counts from the pick, so at its centre it announces the
+    // pick itself.
     const slider = screen.getByLabelText('Shift all clocks');
-    expect(slider).toHaveAttribute('aria-valuetext', 'Now');
+    expect(slider).toHaveAttribute('aria-valuetext', 'Tue, Jan 2 12:00 in UTC-08:00');
     expect((slider as HTMLInputElement).value).toBe('0');
   });
 
@@ -390,51 +389,56 @@ describe('date & time picker: returning to live', () => {
     expect(trigger()).toHaveTextContent('Pick date & time');
   });
 
-  it('locks the scrubber while a picked plan is applied, so it cannot discard it', async () => {
+  it('moves the scrubber from a picked plan instead of discarding it', async () => {
     await mount();
     await open();
     fireEvent.click(day('2024-01-20'));
     fireEvent.click(within(popover()).getByRole('button', { name: 'Apply' }));
     await flush();
-    // No slider position stands for a date days out, so no preset is pressed.
-    expect(screen.getByRole('button', { name: 'Plan the current time' })).toHaveAttribute('aria-pressed', 'false');
+    // The centre preset is the pick now, and it is the one pressed.
+    expect(screen.getByRole('button', { name: 'Plan the picked time' })).toHaveAttribute('aria-pressed', 'true');
 
-    const slider = screen.getByLabelText('Shift all clocks') as HTMLInputElement;
-    expect(slider).toBeDisabled();
-    expect(slider.value).toBe('0');
-    // The panel says why, rather than leaving a live-looking control that
-    // throws the pick away on the first arrow key.
-    expect(slider).toHaveAccessibleDescription(/slider is paused while a picked date is planned/);
-
-    // Even a synthesised nudge leaves the plan exactly where it was.
-    fireEvent.keyDown(slider, { key: 'ArrowRight' });
-    fireEvent.change(slider, { target: { value: '1' } });
-    fireEvent.keyDown(slider, { key: 'PageUp' });
-    fireEvent.change(slider, { target: { value: '8' } });
-    await flush();
-    expect(planChip()).toHaveTextContent('Sat, Jan 20 12:00 in UTC-08:00');
-    expect(timeOf('UTC-08:00')).toBe('12:00');
-    expect(trigger()).toHaveTextContent('Jan 20, 2024, 12:00');
-  });
-
-  it('a jump preset deliberately takes the plan back to an offset from now, and frees the slider', async () => {
-    await mount();
-    await open();
-    fireEvent.click(day('2024-01-20'));
-    fireEvent.click(within(popover()).getByRole('button', { name: 'Apply' }));
-    await flush();
-
-    // A labelled "plan 6 hours ahead" is an explicit instruction, so it does
-    // replace the pick — and then the slider is live again.
-    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours ahead' }));
-    await flush();
     const slider = screen.getByLabelText('Shift all clocks') as HTMLInputElement;
     expect(slider).toBeEnabled();
+    expect(slider.value).toBe('0');
+    expect(slider).toHaveAccessibleDescription(/UTC-08:00 time \(home\).*Counting from the picked time/);
+
+    // A quarter hour on from the pick, nine days out — not from now.
+    fireEvent.change(slider, { target: { value: '1' } });
+    await flush();
+    expect(planChip()).toHaveTextContent('Sat, Jan 20 12:15 in UTC-08:00');
+    expect(trigger()).toHaveTextContent('Jan 20, 2024, 12:15');
+    // Page Up and Home move from the pick too.
+    fireEvent.keyDown(slider, { key: 'PageUp' });
+    await flush();
+    expect(planChip()).toHaveTextContent('Sat, Jan 20 13:15 in UTC-08:00');
+    fireEvent.keyDown(slider, { key: 'Home' });
+    await flush();
+    expect(planChip()).toHaveTextContent('Sat, Jan 20 00:00 in UTC-08:00');
+    expect(slider.value).toBe('-48');
+  });
+
+  it('jump presets count from the pick; after Now they count from now again', async () => {
+    await mount();
+    await open();
+    fireEvent.click(day('2024-01-20'));
+    fireEvent.click(within(popover()).getByRole('button', { name: 'Apply' }));
+    await flush();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours after the picked time' }));
+    await flush();
+    const slider = screen.getByLabelText('Shift all clocks') as HTMLInputElement;
+    expect(slider.value).toBe('24');
+    expect(timeOf('UTC-08:00')).toBe('18:00');
+    expect(trigger()).toHaveTextContent('Jan 20, 2024, 18:00');
+    expect(slider).toHaveAttribute('aria-valuetext', expect.stringContaining('Sat, Jan 20 18:00 in UTC-08:00'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Plan 6 hours ahead' }));
+    await flush();
     expect(slider.value).toBe('24');
     expect(timeOf('UTC')).toBe('02:00');
     expect(trigger()).toHaveTextContent('Pick date & time');
-    // And now the slider's value and its announcement are the same plan.
-    expect(slider).toHaveAttribute('aria-valuetext', expect.stringContaining('18:00 in UTC-08:00'));
   });
 
   it('Escape dismisses the popover and keeps an applied plan, leaving focus on the trigger', async () => {
