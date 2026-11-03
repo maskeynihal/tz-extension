@@ -10,9 +10,15 @@
   // Observability tab, kept 7 days.
   //
   // Nothing about a visitor's timezones can appear in these: the converter
-  // and the clock run entirely in the browser, the site makes no requests of
-  // its own, and the zone handoff from the extension travels in the URL
-  // fragment, which browsers never put in the request line.
+  // and the clock run entirely in the browser, and the zone handoff from the
+  // extension travels in the URL fragment, which browsers never put in the
+  // request line.
+  //
+  // Visitor statistics come from Cloudflare Web Analytics, set up in the
+  // dashboard with automatic injection, so no beacon snippet is in site/.
+  // It is cookieless, and its beacon strips the query string and the
+  // fragment from the page URL before sending, so the zone handoff stays out
+  // of it too. site/privacy.html describes it; keep the two in step.
   "observability": {
     "logs": {
       "enabled": true,
