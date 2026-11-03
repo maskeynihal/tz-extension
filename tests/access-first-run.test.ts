@@ -88,6 +88,15 @@ describe('background: first install with site access withheld', () => {
     expect(h.create).not.toHaveBeenCalled();
   });
 
+  it('opens nothing once the banner was dismissed, e.g. synced from another device', async () => {
+    await saveAccessDismissed(true);
+    const h = await loadWorker(false);
+    install(h, 'install');
+    await vi.waitFor(() => expect(lastBadge(h)).toEqual({ text: '' }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.create).not.toHaveBeenCalled();
+  });
+
   it('opens nothing when the browser will not say', async () => {
     const h = await loadWorker('throws');
     install(h, 'install');

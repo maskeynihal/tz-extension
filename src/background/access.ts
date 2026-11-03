@@ -55,11 +55,14 @@ export async function refreshAccessBadge(): Promise<void> {
 
 /**
  * On a first install only: an update or a browser restart must not reopen a
- * tab the user already saw and chose to ignore.
+ * tab the user already saw and chose to ignore. A dismissal lives in sync
+ * storage and can outlast a reinstall or arrive from another device; the
+ * banner then renders nothing, so neither does this.
  */
 export async function openGrantPageIfWithheld(reason: string | undefined): Promise<void> {
   if (reason !== 'install') return;
   if ((await hasAllSites()) !== false) return;
+  if (await loadAccessDismissed()) return;
   const page = chrome.runtime.getManifest().options_page;
   if (!page || typeof chrome.tabs?.create !== 'function') return;
   try {
