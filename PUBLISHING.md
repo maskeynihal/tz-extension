@@ -113,7 +113,16 @@ To publish from your machine, drop `--dry-run`. Other options:
 
 ## 5. What happens on a release
 
-`.github/workflows/release.yml`, on every push to `main`:
+`.github/workflows/release.yml`, on every push to `main`. A release happens
+only when a commit since the last tag changes what ships in the extension:
+`src/` (except `src/clock/`, which only the website uses), `public/`,
+`package-lock.json`, `vite.config.ts` or `scripts/firefox-manifest.mjs`
+(`EXTENSION_PATHS` in `scripts/version-bump.mjs`). Only those commits decide
+the bump, so a `feat(site):` beside an extension `fix:` is a patch. A merge
+that changes only the website, docs, tests or CI stops after verification:
+no tag, no GitHub release, no store submission. To publish anyway, run the
+"Publish to stores" workflow by hand for an existing tag.
+
 
 1. Typecheck, lint and test.
 2. Bump the version from Conventional Commits, commit, tag `vX.Y.Z`.

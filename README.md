@@ -115,7 +115,7 @@ Zips contain the extension at the top level (manifest at root), source maps stri
 
 ## Releasing
 
-Every merge to `main` bumps the version from Conventional Commits, tags it, attaches both zips to a GitHub release, and submits the new version to the Chrome Web Store and Firefox Add-ons. Store credentials, local dry runs, and re-publishing a tag are covered in [PUBLISHING.md](PUBLISHING.md).
+Every merge to `main` that changes the extension (anything under `src/` except the website-only `src/clock/`, plus `public/`, the lockfile and the build config) bumps the version from Conventional Commits, tags it, attaches both zips to a GitHub release, and submits the new version to the Chrome Web Store and Firefox Add-ons. A merge that only touches the website, docs, tests or CI releases nothing; the website deploys on its own. Store credentials, local dry runs, and re-publishing a tag are covered in [PUBLISHING.md](PUBLISHING.md).
 
 ## Quality gate
 
