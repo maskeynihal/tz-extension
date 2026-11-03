@@ -256,6 +256,35 @@ for (const how of ['https', 'file'] as const) {
       expect(errors).toEqual([]);
     });
 
+    test('the header theme button picks Light or Dark for every page, and the clock follows', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      const errors = await open(page, 'guide.html');
+      const toggle = page.locator('[data-theme-toggle]');
+      const bg = (): Promise<string> => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+      await expect(toggle).toHaveAttribute('aria-label', 'Theme: System. Switch to Light');
+      expect(await bg()).toBe('rgb(15, 17, 21)');
+
+      await toggle.click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+      await expect(toggle).toHaveAttribute('aria-label', 'Theme: Light. Switch to Dark');
+      expect(await bg()).toBe('rgb(255, 255, 255)');
+
+      // The choice is the clock's own theme setting, so the clock opens light
+      // with Light pressed, and its control and the header stay in step.
+      page.removeAllListeners('pageerror');
+      page.removeAllListeners('console');
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      const clockErrors = await open(page, 'clock.html');
+      const app = page.locator('#clock-root .tzc-app');
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+      await expect(app.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true');
+      await page.locator('[data-theme-toggle]').click();
+      await expect(app.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
+      await app.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'System' }).click();
+      await expect(page.locator('[data-theme-toggle]')).toHaveAttribute('aria-label', 'Theme: System. Switch to Light');
+      expect([...errors, ...clockErrors]).toEqual([]);
+    });
+
     for (const width of [1280, 390]) {
       test(`at ${width} px the header is the same on every page and links to both tools`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
