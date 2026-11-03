@@ -3,8 +3,17 @@
 Copy for the Chrome Web Store Developer Dashboard. Field names match the store
 form. Character limits noted where the store enforces them.
 
+**Keep the dashboard in step with the manifest.** CI uploads each release and
+submits it, but it cannot edit the listing. When a release adds a permission or
+host access, its justification must be pasted into the dashboard's Privacy tab
+first; until then every submit fails with `HTTP 400 INVALID_ITEM_METADATA`
+("Your submission does not meet the requirements to be published"), even though
+the upload itself succeeded. Paste the new justification, save, then submit the
+draft from the dashboard or re-publish the tag (PUBLISHING.md section 6).
+
 Repo: https://github.com/maskeynihal/tz-extension
-Current version: 0.5.0
+Current version: 0.8.1
+Manifest: `permissions: ["storage", "contextMenus", "activeTab", "scripting"]`, `host_permissions: ["<all_urls>"]`
 
 ---
 
@@ -50,12 +59,19 @@ FEATURES
 • Custom formats — teach it the date layouts your sites use, with a live tester.
 • Light / Dark / System theme, with a quick toggle in the popup.
 • 12- or 24-hour clock, your home zone, and your target zones — all configurable.
+• World clock — the popup's clock button opens tz.nihal.com.np/clock with your
+  zones: live clocks, working hours, and a planner with a slider on every zone
+  and a date & time picker for any day.
+• Asks for site access in one click if your browser withheld it, and marks the
+  toolbar icon until it has it.
 
 PRIVATE BY DESIGN
 Everything runs locally in your browser. The extension makes no network
 requests, collects no data, and sends nothing off your device. Your preferences
 are saved in the browser's own storage, and synced only by the browser's
 account sync if you have it turned on. It adds one right-click menu item.
+The world clock button opens the website in a tab; your zones travel in the
+link's # fragment, which browsers never send to a server.
 
 Free and open source: https://github.com/maskeynihal/tz-extension
 ```
@@ -105,10 +121,16 @@ accessed and nothing is read beyond the user's selection.
 ### Permission justification — scripting
 
 ```
-Together with activeTab, used to load the extension's own bundled content script
-into the current tab after the user clicks the right-click "Convert" item, when
-that tab does not have it yet. Only files packaged in the extension are injected;
-no remote code, no arbitrary code strings.
+Loads the extension's own bundled content script into a tab that does not have
+it yet, in two cases, both started by the user:
+1. Together with activeTab, after the user clicks the right-click "Convert"
+   item in the current tab.
+2. Right after the user grants site access from the extension's "Allow on all
+   sites" button: the browser applies content scripts only to pages loaded
+   afterwards, so the extension loads it into the tabs that are already open,
+   limited to the URLs its manifest content script matches.
+Only files packaged in the extension are injected; no remote code, no arbitrary
+code strings.
 ```
 
 ### Permission justification — host permissions (`<all_urls>`)
@@ -162,9 +184,15 @@ not by any actual remote code. The manifest declares `permissions:
 extension's own packaged content-script file, so the honest answer is that no
 remote code is used.
 
-## Version notes (0.5.0)
+## Version notes (0.8.x)
 
 ```
-- New: Light / Dark / System theme, with a quick toggle in the popup.
-- Select-to-convert, popup converter, epoch tool, and pinned cards — all offline.
+- Select-to-convert works from install: the extension now declares access to
+  all sites, which it needs because conversion starts when you highlight text,
+  not when you click the icon.
+- If your browser withheld that access, the extension asks once in a tab and
+  shows a "!" on its icon until it is allowed.
+- The world clock moved to tz.nihal.com.np/clock; the popup's clock button opens
+  it with your zones. It plans any date and time, with a slider on every zone.
+- Credits and links to the author in the popup.
 ```

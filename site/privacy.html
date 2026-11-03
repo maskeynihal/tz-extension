@@ -57,7 +57,7 @@
     </header>
     <main>
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: 1 November 2026</p>
+      <p class="updated">Last updated: 3 November 2026</p>
 
       <p class="lead">
         <strong>TZ Converter collects no data.</strong> It makes no network
@@ -87,6 +87,7 @@
         <li>How to treat a date with no time</li>
         <li>Any custom date formats you add, and which built-in formats you switched off</li>
         <li>Whether the converter opens automatically when you select text</li>
+        <li>Whether you chose "Don't show again" on the site-access notice</li>
       </ul>
       <p>
         This data lives only in your browser. If you have browser sync enabled,
@@ -116,7 +117,11 @@
           item in a tab where the extension is not running yet (for example a tab
           opened before you installed or updated it), the extension loads its
           converter into that one tab. This only happens after your click, only
-          in that tab.
+          in that tab. The same happens right after you allow access to all
+          sites from the extension's own button: browsers only run an
+          extension on pages loaded after access is granted, so it loads its
+          converter into the tabs you already have open. It reads nothing from
+          those tabs until you select text there.
         </li>
         <li>
           <strong>Access to web pages</strong> — the "select to convert" feature
@@ -130,9 +135,36 @@
 
       <h2>Third parties</h2>
       <p>
-        There are no third parties. The extension bundles all its code at build
-        time and loads nothing from the network at runtime.
+        The extension has no third parties. It bundles all its code at build
+        time and loads nothing from the network at runtime. Its world clock
+        button opens this website in a tab; the timezones it hands over travel
+        in the part of the link after <code>#</code>, which browsers never send
+        to a server. Links to the author's profiles open only when you click
+        them.
       </p>
+      <p>
+        This website is different from the extension in one respect: it is a
+        website, so loading it makes ordinary web requests.
+      </p>
+      <ul>
+        <li>
+          <strong>Hosting.</strong> The site is served by Cloudflare. Like any
+          web host, Cloudflare receives your IP address and the page you request.
+          We keep Cloudflare's request logs (the page requested, the time and the
+          response status) for up to 7 days to spot broken pages after an update.
+          They contain nothing you type or plan on the site: that never leaves
+          your browser.
+        </li>
+        <li>
+          <strong>Font.</strong> Pages load the Inter typeface from
+          <code>rsms.me</code>, which receives your IP address with that request.
+        </li>
+        <li>
+          <strong>Support links.</strong> "Buy me a coffee" and "Buy me chiya"
+          go to Buy Me a Coffee and Reffero, which have their own privacy
+          policies. Nothing is sent to them unless you click.
+        </li>
+      </ul>
 
       <h2>Changes</h2>
       <p>

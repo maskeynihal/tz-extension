@@ -190,6 +190,8 @@ re-publishing an old tag is only useful for a version the store hasn't received 
 
 | Symptom | Fix |
 |---|---|
+| `token refresh: HTTP 401` / `invalid_client` ("The OAuth client was not found") | `CWS_CLIENT_ID` / `CWS_CLIENT_SECRET` don't name an existing OAuth client, or not the one the refresh token was made with. Copy both from that client (step 1.4); if it no longer exists, make a new client and a new refresh token (step 1.5) and update all three. |
+| `publish: HTTP 400` / `INVALID_ITEM_METADATA` ("does not meet the requirements to be published"), after `upload … succeeded` | The package is fine; the listing is incomplete. Usually a release added a permission or host access whose justification isn't in the dashboard's **Privacy** tab yet. The API can't edit the listing: paste the missing text from `STORE_LISTING.md`, save, fix anything else the dashboard flags, then submit the draft there or re-publish the tag (section 6). |
 | `token refresh: HTTP 400` / `invalid_grant` | Refresh token expired or revoked. Make sure the OAuth app is "In production" (step 1.3), get a new token (step 1.5), and update `CWS_REFRESH_TOKEN`. |
 | `fetchStatus: HTTP 403` / `404` | Wrong `CWS_PUBLISHER_ID`, or the token belongs to an account that doesn't own the item. |
 | Chrome warning "still reviewing vX … was NOT submitted" | An older version is in review. Re-publish the tag after that review finishes, or re-publish with `cancel_pending` (section 5). |
