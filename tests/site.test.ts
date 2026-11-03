@@ -157,3 +157,20 @@ describe('popup / settings / clock contrast and layout CSS', () => {
     expect(clock).toMatch(/@media \(max-width: 480px\)/);
   });
 });
+
+describe('website credits', () => {
+  it('every page footer names the author and offers both ways to say thanks', () => {
+    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
+      const footer = /<footer[\s\S]*?<\/footer>/.exec(read(`site/${page}`))?.[0] ?? '';
+      for (const href of [
+        'https://nihal.com.np',
+        'https://github.com/maskeynihal',
+        'https://www.linkedin.com/in/maskeynihal',
+        'https://buymeacoffee.com/maskeynihal',
+        'https://www.app.reffero.com/nihal/buymechiya?qty=10',
+      ]) {
+        expect(footer, `${page} ${href}`).toContain(`href="${href}"`);
+      }
+    }
+  });
+});

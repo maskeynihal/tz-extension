@@ -53,3 +53,12 @@
   .site-cta-long { display: none; }
   .site-cta-short { display: inline; }
 }
+
+/* Who made it, and a way to say thanks: the last line of every footer. */
+.site-credit { margin: 12px 0 0; font-size: 13px; line-height: 1.6; color: var(--muted, var(--body)); }
+.site-credit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.site-credit a:hover { color: var(--ink); }
+.site-credit-support { display: inline-block; margin-left: 4px; }
+@media (max-width: 560px) {
+  .site-credit-support { display: block; margin: 4px 0 0; }
+}

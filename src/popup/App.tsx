@@ -12,6 +12,13 @@ type Tab = 'converter' | 'epoch';
 
 const BUILD = getBuildInfo();
 
+/** Who made it: the author's site first, then their profiles. */
+const AUTHOR_LINKS: ReadonlyArray<{ readonly label: string; readonly href: string }> = [
+  { label: 'Nihal Maskey', href: 'https://nihal.com.np' },
+  { label: 'GitHub', href: 'https://github.com/maskeynihal' },
+  { label: 'LinkedIn', href: 'https://www.linkedin.com/in/maskeynihal' },
+];
+
 export function App(): JSX.Element {
   // Own-write echoes are skipped, so quick reorders never jump back.
   const { prefs, loaded, saveError, update: updatePrefs } = useSyncedPreferences();
@@ -187,11 +194,22 @@ export function App(): JSX.Element {
               rel="noopener noreferrer"
               title="Open the repository on GitHub"
             >
-              GitHub
+              Source
             </a>
           </>
         )}
       </footer>
+      <p className="tzx-foot-author">
+        Made by{' '}
+        {AUTHOR_LINKS.map((l, i) => (
+          <span key={l.href}>
+            {i > 0 && <span className="tzx-foot-sep"> · </span>}
+            <a className="tzx-foot-link" href={l.href} target="_blank" rel="noopener noreferrer me">
+              {l.label}
+            </a>
+          </span>
+        ))}
+      </p>
     </div>
   );
 }

@@ -290,6 +290,15 @@ describe('popup App', () => {
     expect(screen.getByRole('tab', { name: 'Converter' })).toBeInTheDocument();
   });
 
+  it('credits the author with their site and profiles, apart from the source link', async () => {
+    installPermissions(true);
+    await mount(<App />);
+    expect(screen.getByRole('link', { name: 'Nihal Maskey' })).toHaveAttribute('href', 'https://nihal.com.np');
+    expect(screen.getByRole('link', { name: 'GitHub' })).toHaveAttribute('href', 'https://github.com/maskeynihal');
+    expect(screen.getByRole('link', { name: 'LinkedIn' })).toHaveAttribute('href', 'https://www.linkedin.com/in/maskeynihal');
+    expect(screen.getByRole('link', { name: 'LinkedIn' })).toHaveAttribute('target', '_blank');
+  });
+
   it('shows no banner when access is granted', async () => {
     const p = installPermissions(true);
     await mount(<App />);

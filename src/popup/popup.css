@@ -168,6 +168,10 @@ input:focus-visible, button:focus-visible, select:focus-visible, .tzx-opt:focus-
   border-bottom: 1px solid transparent;
 }
 .tzx-foot-link:hover { color: var(--tz-brand); border-bottom-color: var(--tz-brand); }
+.tzx-foot-author {
+  margin: 4px 0 0; text-align: center;
+  font-size: var(--tz-fs-xs); color: var(--muted);
+}
 
 .tzx-select {
   font: inherit; font-size: var(--tz-fs-lg); font-family: var(--tz-font);
