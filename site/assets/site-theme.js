@@ -21,7 +21,7 @@
       var raw = window.localStorage.getItem(KEY);
       var obj = raw ? JSON.parse(raw) : null;
       return obj && typeof obj === 'object' ? obj : {};
-    } catch (e) {
+    } catch {
       return {};
     }
   }
@@ -48,7 +48,7 @@
     var value = JSON.stringify(prefs);
     try {
       window.localStorage.setItem(KEY, value);
-    } catch (e) {
+    } catch {
       return; // private mode or storage off: the choice lasts for this page only
     }
     // The storage event reaches other tabs on its own. Tell this tab too, so
@@ -56,7 +56,7 @@
     // instead of writing its old one back on its next save.
     try {
       window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: value, storageArea: window.localStorage }));
-    } catch (e) {
+    } catch {
       /* an old browser without the StorageEvent constructor: other tabs still follow */
     }
   }
