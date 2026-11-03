@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const siteDir = resolve(root, 'site');
-export const PAGES = ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html'];
+export const PAGES = ['index.html', 'app.html', 'clock.html', 'guide.html', 'privacy.html', 'terms.html'];
 
 /** esbuild options for the site's two script entries, written into `outdir`. */
 export function siteBuildOptions(outdir, { dev = false } = {}) {

@@ -85,7 +85,7 @@ describe('website pages', () => {
   it('built pages and scripts only reference files that exist in docs/', () => {
     const docs = resolve(root, 'docs');
     const missing: string[] = [];
-    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
+    for (const page of ['index.html', 'app.html', 'clock.html', 'guide.html', 'privacy.html', 'terms.html']) {
       const html = readFileSync(resolve(docs, page), 'utf8');
       for (const m of html.matchAll(/(?:src|href)="(\.\/[^"#?]+)"/g)) {
         const ref = m[1] as string;
@@ -104,7 +104,7 @@ describe('website pages', () => {
   // disk. The site ships classic, self-contained scripts instead.
   it('pages load classic scripts that import nothing, so they also work from file://', () => {
     const docs = resolve(root, 'docs');
-    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
+    for (const page of ['index.html', 'app.html', 'clock.html', 'guide.html', 'privacy.html', 'terms.html']) {
       for (const dir of ['site', 'docs']) {
         expect(readFileSync(resolve(root, dir, page), 'utf8'), `${dir}/${page}`).not.toMatch(/<script[^>]*type=["']module["']/);
       }
@@ -160,7 +160,7 @@ describe('popup / settings / clock contrast and layout CSS', () => {
 
 describe('website credits', () => {
   it('every page footer names the author and offers both ways to say thanks', () => {
-    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
+    for (const page of ['index.html', 'app.html', 'clock.html', 'guide.html', 'privacy.html', 'terms.html']) {
       const footer = /<footer[\s\S]*?<\/footer>/.exec(read(`site/${page}`))?.[0] ?? '';
       for (const href of [
         'https://nihal.com.np',
@@ -172,5 +172,28 @@ describe('website credits', () => {
         expect(footer, `${page} ${href}`).toContain(`href="${href}"`);
       }
     }
+  });
+});
+
+describe('how-to-use guide', () => {
+  const PAGES = ['index.html', 'app.html', 'clock.html', 'guide.html', 'privacy.html', 'terms.html'];
+
+  it('every page header links to the guide', () => {
+    for (const page of PAGES) {
+      const nav = /<nav class="site-links"[\s\S]*?<\/nav>/.exec(read(`site/${page}`))?.[0] ?? '';
+      expect(nav, page).toContain('href="./guide.html"');
+    }
+  });
+
+  it('every in-page link in the guide lands on a section that exists', () => {
+    const html = read('site/guide.html');
+    const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
+    const targets = [...html.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]);
+    expect(targets.length).toBeGreaterThan(10);
+    for (const t of targets) expect(ids, `#${t}`).toContain(t);
+  });
+
+  it('is built into docs/', () => {
+    expect(read('scripts/site-config.mjs')).toContain("'guide.html'");
   });
 });
