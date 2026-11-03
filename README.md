@@ -4,7 +4,7 @@
 
 A Manifest V3 browser extension for timezone conversion. Works in Chromium (Chrome, Edge, Brave) and Firefox.
 
-**[Chrome Web Store](https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk)** · **[Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/)** · **[Website](https://tz.nihal.com.np/)** · **[Live converter](https://tz.nihal.com.np/app)** · **[Latest release](https://github.com/maskeynihal/tz-extension/releases/latest)** · **[Privacy](https://tz.nihal.com.np/privacy)**
+**[Chrome Web Store](https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk)** · **[Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/)** · **[Website](https://tz.nihal.com.np/)** · **[Live converter](https://tz.nihal.com.np/app)** · **[How to use](https://tz.nihal.com.np/guide)** · **[Latest release](https://github.com/maskeynihal/tz-extension/releases/latest)** · **[Privacy](https://tz.nihal.com.np/privacy)**
 
 No install needed to try it — the [online converter](https://tz.nihal.com.np/app) runs the same engine the extension ships.
 

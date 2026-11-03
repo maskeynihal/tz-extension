@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>How to use — TZ Converter</title>
+    <meta name="description" content="Every feature of the TZ Converter extension and website, and how to use it: select to convert, right-click, pinned cards, the popup converter and epoch tool, custom formats, the online converter and the world clock planner." />
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <style>
+      :root {
+        --ground: #ffffff; --raised: #f7f8fa; --border: #e6e7ec;
+        --ink: #16181d; --body: #3a3d46; --muted: #62656f; --accent: #4f46e5; --accent-ink: #ffffff;
+        --maxw: 820px;
+        --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ground: #0f1115; --raised: #16181d; --border: #262930;
+          --ink: #f3f4f6; --body: #c3c6ce; --muted: #8b8e98; --accent: #8b8bf0; --accent-ink: #0b0b16;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-padding-top: 80px; }
+      body {
+        margin: 0; background: var(--ground); color: var(--body);
+        font-family: var(--font); font-size: 17px; line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+      main { max-width: var(--maxw); margin: 0 auto; padding: 56px 24px 96px; }
+      a { color: var(--accent); }
+      h1 { color: var(--ink); font-size: 2.2rem; letter-spacing: -0.02em; margin: 0 0 8px; line-height: 1.2; }
+      h2 { color: var(--ink); font-size: 1.45rem; letter-spacing: -0.01em; margin: 56px 0 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+      h3 { color: var(--ink); font-size: 1.08rem; margin: 32px 0 6px; }
+      .kicker { color: var(--accent); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 8px; }
+      .lead { font-size: 1.1rem; color: var(--ink); margin: 0 0 28px; }
+      .toc {
+        background: var(--raised); border: 1px solid var(--border); border-radius: 12px;
+        padding: 16px 20px; margin: 0 0 8px; columns: 2 220px; column-gap: 32px;
+      }
+      .toc p { margin: 0 0 6px; font-weight: 700; color: var(--ink); break-after: avoid; }
+      .toc ol { margin: 0 0 12px; padding-left: 20px; break-inside: avoid; }
+      .toc li { margin: 2px 0; }
+      .steps { counter-reset: step; list-style: none; padding: 0; display: grid; gap: 12px; }
+      .steps li {
+        counter-increment: step; position: relative; padding: 14px 16px 14px 56px;
+        background: var(--raised); border: 1px solid var(--border); border-radius: 12px;
+      }
+      .steps li::before {
+        content: counter(step); position: absolute; left: 16px; top: 14px;
+        width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+        background: var(--accent); color: var(--accent-ink); font-size: 0.85rem; font-weight: 700;
+      }
+      .steps strong { color: var(--ink); }
+      ul { padding-left: 22px; }
+      li { margin: 6px 0; }
+      li strong, p strong { color: var(--ink); }
+      .tip {
+        border-left: 3px solid var(--accent); background: var(--raised);
+        padding: 10px 14px; border-radius: 0 10px 10px 0; margin: 16px 0;
+      }
+      table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin: 12px 0; }
+      th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th { color: var(--ink); font-weight: 600; }
+      .table-wrap { overflow-x: auto; }
+      kbd { white-space: nowrap; }
+      kbd, code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em;
+        background: var(--raised); border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px;
+      }
+      details {
+        border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin: 10px 0; background: var(--raised);
+      }
+      summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+      details[open] summary { margin-bottom: 6px; }
+      footer { color: var(--muted); font-size: 0.9rem; margin-top: 48px; border-top: 1px solid var(--border); padding-top: 20px; }
+    </style>
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./assets/site-nav.css" />
+  </head>
+  <body>
+    <header class="site-nav">
+      <div class="site-nav-inner">
+        <a class="site-brand" href="./index.html"><span class="site-brand-dot" aria-hidden="true">TZ</span><span class="site-brand-name">TZ Converter</span></a>
+        <nav class="site-links" aria-label="Site">
+          <a href="./app.html">Converter</a>
+          <a href="./clock.html">World clock</a>
+          <a href="./guide.html" aria-current="page">Guide</a>
+          <a class="site-cta" id="nav-add" href="./index.html#install"><span class="site-cta-long">Add to browser</span><span class="site-cta-short">Install</span></a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <p class="kicker">Guide</p>
+      <h1>How to use TZ Converter</h1>
+      <p class="lead">
+        Everything the extension and this website can do, and how to do it. The extension converts times
+        where you read them; the website has an online converter and a world clock for planning across zones.
+        Both run entirely in your browser.
+      </p>
+
+      <nav class="toc" aria-label="On this page">
+        <p>Start</p>
+        <ol>
+          <li><a href="#quick-start">Quick start</a></li>
+          <li><a href="#site-access">Site access</a></li>
+        </ol>
+        <p>Extension</p>
+        <ol>
+          <li><a href="#select">Select to convert</a></li>
+          <li><a href="#right-click">Right-click to convert</a></li>
+          <li><a href="#cards">Conversion cards</a></li>
+          <li><a href="#pins">Pins and the dock</a></li>
+          <li><a href="#keyboard">Keyboard</a></li>
+          <li><a href="#popup">Popup converter</a></li>
+          <li><a href="#epoch">Epoch converter</a></li>
+          <li><a href="#settings">Settings</a></li>
+          <li><a href="#formats">Formats</a></li>
+          <li><a href="#zones">Timezones</a></li>
+        </ol>
+        <p>Website</p>
+        <ol>
+          <li><a href="#online-converter">Online converter</a></li>
+          <li><a href="#world-clock">World clock</a></li>
+          <li><a href="#plan">Plan a time</a></li>
+        </ol>
+        <p>More</p>
+        <ol>
+          <li><a href="#privacy">Privacy</a></li>
+          <li><a href="#faq">Troubleshooting</a></li>
+        </ol>
+      </nav>
+
+      <h2 id="quick-start">Quick start</h2>
+      <ol class="steps">
+        <li>
+          <strong>Install it</strong> from the
+          <a href="https://chromewebstore.google.com/detail/tz-converter-%E2%80%94-timezone-t/cokhjgalkhboifkgoomlbaigocjpmhkk">Chrome Web Store</a>
+          (Chrome, Edge, Brave) or
+          <a href="https://addons.mozilla.org/en-US/firefox/addon/tz-converter-timezone-tools/">Firefox Add-ons</a>.
+        </li>
+        <li>
+          <strong>Pin the TZ icon</strong> from your browser's extensions menu, then open it once and set your
+          <em>home timezone</em> and the zones you want to see in Settings.
+        </li>
+        <li>
+          <strong>Select any time on a page</strong> — <code>1730000000</code>, <code>2026-10-28T04:24:00Z</code>,
+          <code>22.03.2024 14:05</code>, “Wednesday, October 28, 2026, 04:24 UTC”. A card appears next to it
+          with that time in your zones.
+        </li>
+      </ol>
+      <p class="tip">
+        No install? The <a href="./app.html">online converter</a> runs the same engine in a tab.
+      </p>
+
+      <h2 id="site-access">Site access</h2>
+      <p>
+        To convert what you select, the extension needs permission to read the pages you visit. It reads
+        only the text you select, and nothing leaves your device.
+      </p>
+      <ul>
+        <li>
+          <strong>Chrome and Edge</strong> grant it when you install. If you narrowed it to “On click”, the popup
+          shows a banner with an <strong>Allow on all sites</strong> button.
+        </li>
+        <li>
+          <strong>Firefox</strong> may install with access withheld, especially when the add-on is loaded by hand.
+          The extension then opens its settings page with the same <strong>Allow on all sites</strong> button,
+          and the toolbar icon shows a <strong>!</strong> badge until access is granted.
+        </li>
+        <li>
+          Prefer to allow only some sites? Grant them from the browser's own menu and choose
+          <strong>Don't show again</strong> on the banner; the badge goes away too.
+        </li>
+      </ul>
+
+      <h2 id="select">Select to convert</h2>
+      <p>Select text that contains a date or time. If it reads as one, a card opens beside your selection.</p>
+      <ul>
+        <li><strong>Hundreds of layouts:</strong> Unix seconds and milliseconds, ISO 8601, RFC dates, numeric dates in any order and separator, compact <code>19990322</code>, week and ordinal dates, the Unix <code>date</code> output, and written dates in English, German, French, Spanish, Italian, Portuguese, Dutch, Chinese and Japanese.</li>
+        <li><strong>Zones in the text are honoured:</strong> <code>Z</code>, offsets like <code>+05:45</code>, <code>GMT+5:30</code>, <code>[Europe/Paris]</code>, and capitalised abbreviations like <code>EST</code>, <code>CET</code>, <code>IST</code>. A time with no zone is read in your home zone.</li>
+        <li><strong>Day or month first?</strong> For a date like <code>03/04/2024</code>, the card lets you pick the reading and remembers your choice.</li>
+        <li><strong>Several times at once:</strong> select a paragraph and the card shows a stepper, <code>‹ 2 of 3 ›</code>. Step through them; the mark on the page follows.</li>
+        <li><strong>Your selection stays:</strong> you can still copy everything you selected.</li>
+        <li><strong>Quiet when it's not a time:</strong> selecting ordinary text shows nothing.</li>
+      </ul>
+
+      <h2 id="right-click">Right-click to convert</h2>
+      <p>
+        Select text, right-click, and choose <strong>Convert “…” with TZ Converter</strong>. This works even with
+        automatic conversion switched off, and it says so when the selection holds no time it recognises.
+      </p>
+
+      <h2 id="cards">Conversion cards</h2>
+      <ul>
+        <li><strong>Your zones, side by side,</strong> each with its date, offset and difference from home.</li>
+        <li><strong>Drag</strong> a card by its header to move it.</li>
+        <li><strong>Compact or full:</strong> switch the card size; Settings decides how cards open (compact, full or last used).</li>
+        <li><strong>Remove a zone</strong> from a card with its <strong>×</strong>.</li>
+        <li><strong>See which format matched</strong> the text, and switch it off in Settings if you don't want it.</li>
+        <li><strong>Close</strong> with the × or <kbd>Esc</kbd>.</li>
+      </ul>
+
+      <h2 id="pins">Pins and the dock</h2>
+      <ul>
+        <li><strong>Pin to page</strong> keeps a card on the page while you work. New pins take a free spot near their text and never move the ones already pinned.</li>
+        <li>Once something is pinned, a small <strong>dock</strong> appears with <strong>Minimize all</strong>, <strong>Expand all</strong>, <strong>Unpin all</strong> (float them so they stay in view) and <strong>Close all</strong>, which you can undo.</li>
+        <li><strong>Pin all to page</strong> puts floating cards back next to their text.</li>
+      </ul>
+
+      <h2 id="keyboard">Keyboard</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Key</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> on macOS)</td><td>Move focus into the open card, and back to where you were.</td></tr>
+            <tr><td><kbd>Tab</kbd></td><td>Walk through a card's buttons.</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Close the card and return focus.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The shortcut is a browser extension shortcut, so it never blocks a page's own keys. Change it at
+        <code>chrome://extensions/shortcuts</code> (Edge: <code>edge://extensions/shortcuts</code>) or, in Firefox,
+        Add-ons and themes → ⚙ → Manage Extension Shortcuts.
+      </p>
+
+      <h2 id="popup">Popup converter</h2>
+      <p>Click the TZ icon in the toolbar.</p>
+      <ul>
+        <li>Enter a date and time and pick the zone it's in; read it in every target zone. <strong>Now</strong> fills in the current time.</li>
+        <li>Daylight saving is handled, including times that don't exist (spring forward) or happen twice (fall back) — the popup tells you which one it used.</li>
+        <li>Switch between 12- and 24-hour clocks.</li>
+        <li>The clock button opens the <a href="#world-clock">world clock</a> with your zones already in it.</li>
+        <li>The gear opens Settings.</li>
+      </ul>
+
+      <h2 id="epoch">Epoch converter</h2>
+      <ul>
+        <li>Paste a Unix timestamp. Seconds or milliseconds are detected automatically, and you can override it.</li>
+        <li>See it in your zones and as ISO 8601 UTC.</li>
+        <li>Go the other way: turn a date back into an epoch.</li>
+      </ul>
+
+      <h2 id="settings">Settings</h2>
+      <p>Open from the popup's gear, or from the browser's extension details. Changes apply to open cards straight away.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Section</th><th>Settings</th></tr></thead>
+          <tbody>
+            <tr><td><strong>General</strong></td><td>Convert when I select text (off = right-click only) · Home timezone · Clock format (12/24-hour) · Appearance (system, light, dark)</td></tr>
+            <tr><td><strong>Cards</strong></td><td>Card size on open (compact, full, last used) · Date with no time (midnight or the current time) · Numeric date order (day or month first) · Keep selection highlighted</td></tr>
+            <tr><td><strong>Timezones</strong></td><td>Target timezones: add, remove, drag to reorder</td></tr>
+            <tr><td><strong>Formats</strong></td><td>Every recognised format, each with a switch · Your own formats · A live tester</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="formats">Formats</h2>
+      <p>
+        Every built-in format is listed in Settings → Formats with the pattern it matches, and any of them can be
+        switched off. Add your own with tokens, and check them in the live tester:
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Pattern</th><th>Matches</th></tr></thead>
+          <tbody>
+            <tr><td><code>DD/MM/YYYY HH:mm</code></td><td>22/03/2024 14:05</td></tr>
+            <tr><td><code>MMM D, YYYY h:mm A</code></td><td>Mar 22, 2024 2:05 PM</td></tr>
+            <tr><td><code>DD.MM.YYYY [um] HH:mm</code></td><td>22.03.2024 um 14:05</td></tr>
+            <tr><td><code>yyyy-MM-dd'T'HH:mm:ssXXX</code></td><td>2024-03-22T14:05:00+05:45 (Java / Talend style)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Tokens include <code>YYYY</code>, <code>MM</code>, <code>MMM</code>, <code>DD</code>, <code>Do</code>,
+        <code>HH</code>, <code>hh</code> with <code>A</code>, <code>mm</code>, <code>ss</code>, <code>SSS</code>,
+        <code>TZ</code>, weekday names and <code>[literal text]</code>. Advanced users can write a regular expression
+        with named groups instead. The full token list is in the
+        <a href="https://github.com/maskeynihal/tz-extension#custom-format-tokens">README</a>.
+      </p>
+
+      <h2 id="zones">Timezones</h2>
+      <p>Every zone picker is searchable and grouped:</p>
+      <ul>
+        <li><strong>Cities</strong> — every IANA zone, such as Kathmandu, New York, London.</li>
+        <li><strong>Fixed offsets</strong> — <code>UTC+05:45</code>, <code>UTC−08:00</code>, no daylight saving.</li>
+        <li><strong>Abbreviations</strong> — <code>PDT</code>, <code>EDT</code>, <code>CET</code>, <code>IST</code>, <code>AEST</code> and more.</li>
+        <li><strong>US zones that follow daylight saving</strong> — <code>PT</code>, <code>MT</code>, <code>CT</code>, <code>ET</code>.</li>
+      </ul>
+
+      <h2 id="online-converter">Online converter</h2>
+      <p>
+        <a href="./app.html">Open the converter</a>, paste any time — an epoch, an ISO string, a day-first date —
+        and read it across your zones. Search any city, offset or abbreviation to add a zone. Your zones and clock
+        format are saved in this browser.
+      </p>
+
+      <h2 id="world-clock">World clock</h2>
+      <p><a href="./clock.html">Open the world clock</a> for a board of live clocks, one card per zone.</p>
+      <ul>
+        <li><strong>Each card shows</strong> the time, date, Today / Tomorrow / Yesterday, offset, difference from home, day or night, and whether it's working hours there.</li>
+        <li><strong>Add a timezone</strong> from the search box; <strong>remove</strong> one with its ×.</li>
+        <li><strong>Reorder</strong> by dragging a card's handle, or with <kbd>Alt</kbd> + arrow keys.</li>
+        <li><strong>Make home</strong> moves any zone to the first card; differences are measured from it.</li>
+        <li><strong>12h / 24h</strong>, <strong>System / Light / Dark</strong>, and <strong>full screen</strong> for a wall display.</li>
+        <li><strong>From the extension:</strong> the popup's clock button opens this page with your extension zones, carried in the link's <code>#</code> part, which is never sent to any server.</li>
+      </ul>
+
+      <h2 id="plan">Plan a time</h2>
+      <p>Find a time that works across zones. Every way of planning moves the same instant, so all the clocks always agree.</p>
+      <h3>The main slider</h3>
+      <ul>
+        <li>Drag <strong>Shift all clocks</strong> to move every clock together, from 12 hours back to 36 hours ahead. It moves your home zone's time — the label next to it names the zone.</li>
+        <li>Arrow keys move 15 minutes, <kbd>Page Up</kbd>/<kbd>Page Down</kbd> one hour.</li>
+        <li>The marks under it (<strong>−12h … +36h</strong>) jump straight there.</li>
+      </ul>
+      <h3>Pick any date and time</h3>
+      <ul>
+        <li><strong>Pick date &amp; time</strong> opens a calendar and a time field, read as your home zone's clock. Use it for any day, weeks or months away.</li>
+        <li>After a pick, the main slider keeps working: it shifts around the picked time, and its centre mark reads <strong>Pick</strong>.</li>
+        <li>If the time you pick is skipped or repeated by daylight saving, the planner tells you which moment it used.</li>
+      </ul>
+      <h3>A slider on every card</h3>
+      <ul>
+        <li>Each card has its own slider covering that zone's day, midnight to midnight, with working hours shaded.</li>
+        <li>Move it to set the time <em>in that zone</em>; every other card and the main slider follow.</li>
+        <li>Example: pick <strong>8 PM</strong> at home, then drag the <strong>UTC</strong> card to <strong>5 PM</strong> to see what that means everywhere else.</li>
+      </ul>
+      <p class="tip"><strong>Now</strong> (or <kbd>Esc</kbd> inside the planner) returns every clock to the live time.</p>
+
+      <h2 id="privacy">Privacy</h2>
+      <p>
+        Nothing you select, type or plan leaves your device. The extension makes no network requests and has no
+        analytics; its settings live in your browser's extension storage. The website keeps its settings in this
+        browser's local storage. Read the <a href="./privacy.html">privacy policy</a>.
+      </p>
+
+      <h2 id="faq">Troubleshooting</h2>
+      <details>
+        <summary>Selecting a time does nothing</summary>
+        <p>
+          Check <a href="#site-access">site access</a> first: a <strong>!</strong> on the toolbar icon means it's
+          withheld. Also check that <strong>Convert when I select text</strong> is on in Settings → General, and
+          that the format isn't switched off in Settings → Formats. Browser pages (settings, the web stores) never
+          allow extensions to read them.
+        </p>
+      </details>
+      <details>
+        <summary>A page I already had open doesn't convert</summary>
+        <p>Reload it once. After you grant access, the extension also tries to reach tabs that were already open.</p>
+      </details>
+      <details>
+        <summary>03/04 reads as the wrong date</summary>
+        <p>Pick the other reading on the card, or set <strong>Numeric date order</strong> in Settings → Cards.</p>
+      </details>
+      <details>
+        <summary>The keyboard shortcut doesn't work</summary>
+        <p>Another extension may own the key. Set a new one in your browser's extension shortcuts (see <a href="#keyboard">Keyboard</a>); the card's hint says so when none is assigned.</p>
+      </details>
+      <details>
+        <summary>My own date format isn't recognised</summary>
+        <p>Add it in Settings → Formats with tokens, and paste a sample into the tester to check it matches.</p>
+      </details>
+
+      <footer>
+        Something missing? <a href="https://github.com/maskeynihal/tz-extension/issues">Open an issue on GitHub</a>.
+        <a href="./privacy.html">Privacy</a> · <a href="./terms.html">Terms</a>
+        <p class="site-credit">
+          Made by <a href="https://nihal.com.np" rel="me">Nihal Maskey</a> ·
+          <a href="https://github.com/maskeynihal" rel="me">GitHub</a> ·
+          <a href="https://www.linkedin.com/in/maskeynihal" rel="me">LinkedIn</a>
+          <span class="site-support">
+            <span class="site-support-lead">Find it useful?</span>
+            <a class="support-btn support-coffee" href="https://buymeacoffee.com/maskeynihal">
+              <span class="support-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="support-fill" d="M4.5 10.5h11v3.5a4.5 4.5 0 0 1-4.5 4.5h-2A4.5 4.5 0 0 1 4.5 14v-3.5z"/><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M16 10.5h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M5 21.5h10"/></svg><span class="support-steam"><i></i><i></i><i></i></span></span>
+              <span class="support-label">Buy me a coffee</span>
+            </a>
+            <a class="support-btn support-chiya" href="https://www.app.reffero.com/nihal/buymechiya?qty=10">
+              <span class="support-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="support-fill" d="M7.3 12.5h9.4l-.9 6.6a1.6 1.6 0 0 1-1.6 1.4H9.8a1.6 1.6 0 0 1-1.6-1.4l-.9-6.6z"/><path d="M6 8h12l-1.5 11.3a2 2 0 0 1-2 1.7h-5a2 2 0 0 1-2-1.7L6 8z"/><path d="M6.6 12.5h10.8"/></svg><span class="support-steam"><i></i><i></i><i></i></span></span>
+              <span class="support-label">Buy me chiya</span>
+            </a>
+          </span>
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>
