@@ -1,6 +1,8 @@
 name: Release
 
-# On every merge to main: verify, bump the version from conventional commits,
+# On every merge to main that changes the extension (src/ outside src/clock/,
+# public/, the lockfile or the build config; see EXTENSION_PATHS in
+# scripts/version-bump.mjs): verify, bump the version from conventional commits,
 # tag, build both browser zips, write funny release notes, and publish a release.
 # Then hand the release's zips to publish-stores.yml, which submits them to the
 # Chrome Web Store and Firefox Add-ons (skipped per store until secrets exist).
@@ -58,7 +60,7 @@ jobs:
 
       - name: Stop if nothing to release
         if: ${{ steps.bump.outputs.released != 'true' }}
-        run: echo "No releasable commits since the last tag — exiting."
+        run: echo "No commits since the last tag change the extension — nothing to release or publish."
 
       - name: Configure git identity
         if: ${{ steps.bump.outputs.released == 'true' }}
