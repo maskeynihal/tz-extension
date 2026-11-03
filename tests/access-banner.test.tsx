@@ -3,6 +3,7 @@ import type { Mock } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, cleanup } from '@testing-library/react';
 import { AccessBanner } from '../src/popup/AccessBanner';
 import { App } from '../src/popup/App';
+import { Options } from '../src/options/Options';
 import { loadAccessDismissed, saveAccessDismissed } from '../src/popup/access-dismissal';
 
 type Listener = () => void;
@@ -292,6 +293,25 @@ describe('popup App', () => {
   it('shows no banner when access is granted', async () => {
     const p = installPermissions(true);
     await mount(<App />);
+    await waitFor(() => expect(p.contains).toHaveBeenCalled());
+    expect(banner()).toBeNull();
+  });
+});
+
+describe('settings page', () => {
+  // The worker opens settings#access on a first install with access withheld,
+  // so the banner has to be there, at the anchor, above everything else.
+  it('shows the banner at #access when access is withheld', async () => {
+    installPermissions(false);
+    await mount(<Options />);
+    await waitFor(() => expect(banner()).not.toBeNull());
+    expect(banner()?.closest('#access')).not.toBeNull();
+    expect(allow()).toBeInTheDocument();
+  });
+
+  it('shows no banner when access is granted', async () => {
+    const p = installPermissions(true);
+    await mount(<Options />);
     await waitFor(() => expect(p.contains).toHaveBeenCalled());
     expect(banner()).toBeNull();
   });

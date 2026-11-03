@@ -7,6 +7,7 @@ import {
   type ConvertSelectionMessage,
 } from '../lib/messages';
 import { FOCUS_COMMAND, isGetShortcutMessage, type FocusCardMessage, type ShortcutReply } from './commands';
+import { openGrantPageIfWithheld, refreshAccessBadge, watchAccess } from './access';
 
 export const MENU_ID = 'tzx-convert-selection';
 const MENU_TITLE = 'Convert “%s” with TZ Converter';
@@ -33,8 +34,10 @@ function registerMenus(): void {
 }
 
 // On install/update, normalize any stored preferences (seeds defaults when empty).
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   registerMenus();
+  void refreshAccessBadge();
+  void openGrantPageIfWithheld(details?.reason);
   void (async () => {
     try {
       const prefs = await loadPreferences();
@@ -45,7 +48,12 @@ chrome.runtime.onInstalled.addListener(() => {
   })();
 });
 
-chrome.runtime.onStartup?.addListener(registerMenus);
+chrome.runtime.onStartup?.addListener(() => {
+  registerMenus();
+  void refreshAccessBadge();
+});
+
+watchAccess();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

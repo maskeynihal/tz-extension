@@ -58,7 +58,8 @@ const grantAll = (h: Harness): void => h.added.forEach((l) => l({ origins: ['<al
 describe('background: a new all-sites grant', () => {
   it('injects the content script into the tabs that are already open', async () => {
     const h = await loadWorker(webTabs);
-    expect(h.added).toHaveLength(1);
+    // One listener injects into open tabs; the other refreshes the toolbar badge.
+    expect(h.added).toHaveLength(2);
     grantAll(h);
     await vi.waitFor(() => expect(h.executeScript).toHaveBeenCalledTimes(3));
     expect(h.query).toHaveBeenCalledWith({});
