@@ -120,3 +120,28 @@ export function SettingsIcon(p: IconProps): JSX.Element {
     </Svg>
   );
 }
+
+export function CalendarIcon(p: IconProps): JSX.Element {
+  return (
+    <Svg {...p}>
+      <rect x="3" y="5" width="18" height="16" rx="2.5" />
+      <path d="M3 10h18M8 3v4M16 3v4" />
+    </Svg>
+  );
+}
+
+export function ChevronLeftIcon(p: IconProps): JSX.Element {
+  return (
+    <Svg {...p}>
+      <path d="M15 5l-7 7 7 7" />
+    </Svg>
+  );
+}
+
+export function ChevronRightIcon(p: IconProps): JSX.Element {
+  return (
+    <Svg {...p}>
+      <path d="M9 5l7 7-7 7" />
+    </Svg>
+  );
+}

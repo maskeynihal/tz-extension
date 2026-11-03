@@ -51,9 +51,11 @@ describe('website storage opt-in', () => {
   });
 
   it('the site build uses the website clock entry, not the extension one', () => {
-    const build = read('scripts/build-site.mjs');
-    expect(build).toContain("clock: resolve(siteDir, 'clock.ts')");
-    expect(build).not.toContain('src/clock/main.tsx');
+    // The entries live in site-config.mjs, shared by build:site and dev:site.
+    const config = read('scripts/site-config.mjs');
+    expect(config).toContain("clock: resolve(siteDir, 'clock.ts')");
+    expect(config).not.toContain('src/clock/main.tsx');
+    expect(read('scripts/build-site.mjs')).toContain('siteBuildOptions(outDir)');
   });
 
   it('the extension clock page never opts in', () => {
@@ -153,5 +155,22 @@ describe('popup / settings / clock contrast and layout CSS', () => {
   it('the clock header keeps full screen and settings together and compacts on phones', () => {
     expect(clock).toMatch(/\.tzc-actions\s*\{[^}]*flex:\s*none/);
     expect(clock).toMatch(/@media \(max-width: 480px\)/);
+  });
+});
+
+describe('website credits', () => {
+  it('every page footer names the author and offers both ways to say thanks', () => {
+    for (const page of ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html']) {
+      const footer = /<footer[\s\S]*?<\/footer>/.exec(read(`site/${page}`))?.[0] ?? '';
+      for (const href of [
+        'https://nihal.com.np',
+        'https://github.com/maskeynihal',
+        'https://www.linkedin.com/in/maskeynihal',
+        'https://buymeacoffee.com/maskeynihal',
+        'https://www.app.reffero.com/nihal/buymechiya?qty=10',
+      ]) {
+        expect(footer, `${page} ${href}`).toContain(`href="${href}"`);
+      }
+    }
   });
 });

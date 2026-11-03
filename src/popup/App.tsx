@@ -1,14 +1,23 @@
 import { useEffect, useState } from 'react';
 import type { Preferences } from '../types';
 import { useSyncedPreferences } from '../lib/use-synced-prefs';
+import { SITE_CLOCK_URL, clockUrlForPreferences } from '../lib/site';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { getBuildInfo } from '../lib/build-info';
+import { AccessBanner } from './AccessBanner';
 import { Converter } from './Converter';
 import { EpochTab } from './EpochTab';
 
 type Tab = 'converter' | 'epoch';
 
 const BUILD = getBuildInfo();
+
+/** Who made it: the author's site first, then their profiles. */
+const AUTHOR_LINKS: ReadonlyArray<{ readonly label: string; readonly href: string }> = [
+  { label: 'Nihal Maskey', href: 'https://nihal.com.np' },
+  { label: 'GitHub', href: 'https://github.com/maskeynihal' },
+  { label: 'LinkedIn', href: 'https://www.linkedin.com/in/maskeynihal' },
+];
 
 export function App(): JSX.Element {
   // Own-write echoes are skipped, so quick reorders never jump back.
@@ -33,14 +42,26 @@ export function App(): JSX.Element {
     updatePrefs({ ...prefs, theme: order[(i + 1) % order.length] ?? 'system' });
   }
 
+  /**
+   * Open the world clock on the website. The extension no longer carries its
+   * own copy of the page: it is the same app either way, and a tab on the site
+   * can be bookmarked, shared and left open.
+   *
+   * The site keeps its settings in its own origin's localStorage, so the
+   * zones configured here would not be there. They travel in the URL
+   * fragment, which is never sent to the server; see src/lib/site.ts.
+   */
   function openWorldClock(): void {
-    const page = 'src/clock/index.html';
-    if (typeof chrome !== 'undefined' && chrome.runtime?.getURL && chrome.tabs?.create) {
-      const url = chrome.runtime.getURL(page);
+    // Before the stored preferences have been read, `prefs` is still the
+    // defaults; handing those over would overwrite whatever the site had
+    // saved with settings the user never chose. Send nothing instead, which
+    // leaves the site on its own preferences.
+    const url = loaded ? clockUrlForPreferences(prefs) : SITE_CLOCK_URL;
+    if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
       void Promise.resolve(chrome.tabs.create({ url })).catch(() => window.open(url, '_blank', 'noopener'));
       return;
     }
-    window.open(new URL('../clock/index.html', window.location.href).href, '_blank', 'noopener');
+    window.open(url, '_blank', 'noopener');
   }
 
   function openOptions(): void {
@@ -51,6 +72,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="tzx-app">
+      <AccessBanner />
       <header className="tzx-app-head">
         <div className="tzx-tabs" role="tablist">
           <button
@@ -75,7 +97,7 @@ export function App(): JSX.Element {
             type="button"
             className="tzx-icon-btn"
             aria-label="Open world clock"
-            title="World clock"
+            title="World clock (opens tz.nihal.com.np)"
             onClick={openWorldClock}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false" style={{ display: 'block' }}>
@@ -172,11 +194,22 @@ export function App(): JSX.Element {
               rel="noopener noreferrer"
               title="Open the repository on GitHub"
             >
-              GitHub
+              Source
             </a>
           </>
         )}
       </footer>
+      <p className="tzx-foot-author">
+        Made by{' '}
+        {AUTHOR_LINKS.map((l, i) => (
+          <span key={l.href}>
+            {i > 0 && <span className="tzx-foot-sep"> · </span>}
+            <a className="tzx-foot-link" href={l.href} target="_blank" rel="noopener noreferrer me">
+              {l.label}
+            </a>
+          </span>
+        ))}
+      </p>
     </div>
   );
 }

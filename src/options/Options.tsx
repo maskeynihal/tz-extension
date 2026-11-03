@@ -4,6 +4,7 @@ import { useSyncedPreferences } from '../lib/use-synced-prefs';
 import { applyThemeToDocument, watchSystemTheme } from '../lib/theme';
 import { resolveZone, sameZone, viewInZone, zoneLabel } from '../lib/tz';
 import { ZonePicker } from '../popup/ZonePicker';
+import { AccessBanner } from '../popup/AccessBanner';
 import { FormatsSection, Switch } from './Formats';
 import { SettingsNav, useScrollSpy, type NavSection } from './SettingsNav';
 import { SortableList } from './SortableZoneList';
@@ -152,6 +153,11 @@ export function Options(): JSX.Element {
   return (
     <div className="tzx-options" ref={rootRef}>
       <h1>TZ Converter — Settings</h1>
+      {/* The worker opens settings#access on a first install with site access
+          withheld; the banner renders nothing once every site is allowed. */}
+      <div id="access">
+        <AccessBanner />
+      </div>
       <div className="tzx-settings-sticky" ref={stickyRef}>
         <SettingsNav sections={SECTIONS} active={activeSection} onNavigate={goToSection} />
         {saveError && (

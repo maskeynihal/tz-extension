@@ -97,6 +97,165 @@ for (const how of ['https', 'file'] as const) {
       expect(errors).toEqual([]);
     });
 
+    test('the picker plans any date and every card shows that one instant', async ({ page }) => {
+      const errors = await open(page, 'clock.html');
+      const app = page.locator('#clock-root .tzc-app');
+      // 24-hour clock, so every card's time parses the same way below.
+      await app.getByRole('button', { name: '24-hour clock' }).click();
+      const homeCard = app.locator('.tzc-card.is-home');
+      await expect(homeCard.locator('.tzc-day')).toHaveText('Today');
+
+      await app.locator('[data-dp-trigger]').click();
+      const pop = app.getByRole('dialog');
+      await expect(pop).toBeVisible();
+      // The 15th of next month: always out of the scrubber's +36 h reach.
+      await pop.getByRole('button', { name: 'Next month' }).click();
+      const fifteenth = pop.locator('button[data-day]').nth(14);
+      const iso = await fifteenth.getAttribute('data-day');
+      expect(iso).toMatch(/^\d{4}-\d{2}-15$/);
+      await fifteenth.click();
+      await pop.getByLabel('Hour').fill('9');
+      await pop.getByLabel('Minute').fill('30');
+      await pop.getByRole('button', { name: 'Apply' }).click();
+      await expect(pop).toBeHidden();
+
+      // Home shows the wall clock that was picked, tagged days out.
+      await expect(homeCard.locator('.tzc-time')).toHaveText('09:30');
+      await expect(homeCard.locator('.tzc-day')).toHaveText(/In \d+ days/);
+      await expect(app.locator('.tzc-plan-chip')).toContainText(/\+\d+d/);
+      await expect(app.locator('[data-dp-trigger]')).toContainText('09:30');
+      // Nothing is "today" a month out, in any zone on the board.
+      expect(await app.locator('.tzc-day').allInnerTexts()).not.toContain('Today');
+
+      // Every card is the same instant: its own clock less its own UTC offset,
+      // both read off the card, so this does not lean on the app's own maths.
+      const stamps = await app.locator('.tzc-card').evaluateAll((cards) =>
+        cards.map((c) => {
+          const [h, mi] = (c.querySelector('.tzc-time')?.textContent ?? '').split(':').map(Number);
+          const off = /UTC([+-])(\d{2}):(\d{2})/.exec(c.querySelector('.tzc-facts dd')?.textContent ?? '');
+          const minutes = off ? (off[1] === '-' ? -1 : 1) * (Number(off[2]) * 60 + Number(off[3])) : 0;
+          return ((((h ?? 0) * 60 + (mi ?? 0) - minutes) % 1440) + 1440) % 1440;
+        }),
+      );
+      expect(stamps.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(stamps).size, stamps.join(' ')).toBe(1);
+
+      // Back to now releases every card.
+      await app.getByRole('button', { name: 'Back to now' }).click();
+      await expect(homeCard.locator('.tzc-day')).toHaveText('Today');
+      await expect(app.locator('[data-dp-trigger]')).toHaveText('Pick date & time');
+      expect(errors).toEqual([]);
+    });
+
+    test('the picker is fully operable from the keyboard', async ({ page }) => {
+      const errors = await open(page, 'clock.html');
+      const app = page.locator('#clock-root .tzc-app');
+      await app.getByRole('button', { name: '24-hour clock' }).click();
+      const trigger = app.locator('[data-dp-trigger]');
+      const pop = app.getByRole('dialog');
+      const focusedDay = (): Promise<string | null> =>
+        page.evaluate(() => document.activeElement?.getAttribute('data-day') ?? null);
+      const dayMs = (iso: string): number => Date.parse(`${iso}T00:00:00Z`);
+
+      await trigger.press('Enter');
+      await expect(pop).toBeVisible();
+      // Opening puts focus on the selected day, which is today at home.
+      const start = await focusedDay();
+      expect(start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('ArrowRight');
+      const moved = await focusedDay();
+      expect(dayMs(moved!) - dayMs(start!)).toBe(8 * 86_400_000);
+
+      await page.keyboard.press('PageDown');
+      const nextMonth = await focusedDay();
+      expect(nextMonth!.slice(0, 7)).not.toBe(moved!.slice(0, 7));
+      await expect(page.locator('button[data-day]', { hasText: /^1$/ }).first()).toBeVisible();
+
+      // Tab reaches the time fields, then Apply.
+      await page.keyboard.press('Tab');
+      await expect(pop.getByLabel('Hour')).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(pop.getByLabel('Minute')).toBeFocused();
+      await pop.getByRole('button', { name: 'Apply' }).press('Enter');
+      await expect(pop).toBeHidden();
+      await expect(app.locator('.tzc-card.is-home .tzc-day')).not.toHaveText('Today');
+      await expect(trigger).toBeFocused();
+
+      // Escape dismisses the popover and leaves focus on the trigger. It does
+      // not clear the plan that was already applied: opening the picker to
+      // look at a plan must not be a way to lose it.
+      await trigger.press('Enter');
+      await expect(pop).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(pop).toBeHidden();
+      await expect(trigger).toBeFocused();
+      await expect(app.locator('.tzc-plan-chip')).toBeVisible();
+      await expect(app.locator('.tzc-card.is-home .tzc-day')).not.toHaveText('Today');
+
+      // Tab stays inside the dialog: it used to leave it open with focus on
+      // the page behind it.
+      await trigger.press('Enter');
+      await expect(pop).toBeVisible();
+      for (let i = 0; i < 9; i += 1) await page.keyboard.press('Tab');
+      expect(await pop.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+      await page.keyboard.press('Escape');
+
+      // Clearing is left to the controls that say they clear.
+      await app.getByRole('button', { name: 'Back to now' }).click();
+      await expect(app.locator('.tzc-live-chip')).toBeVisible();
+      await expect(app.locator('.tzc-card.is-home .tzc-day')).toHaveText('Today');
+      expect(errors).toEqual([]);
+    });
+
+    test('the scrubber moves from a picked date, and so does every card slider', async ({ page }) => {
+      const errors = await open(page, 'clock.html');
+      const app = page.locator('#clock-root .tzc-app');
+      await app.getByRole('button', { name: '24-hour clock' }).click();
+      const homeCard = app.locator('.tzc-card.is-home');
+      const trigger = app.locator('[data-dp-trigger]');
+      const slider = app.getByLabel('Shift all clocks');
+
+      // A date well out of the scrubber's +36 h reach: the 15th of next month.
+      await trigger.click();
+      const pop = app.getByRole('dialog');
+      await pop.getByRole('button', { name: 'Next month' }).click();
+      await pop.locator('button[data-day]').nth(14).click();
+      await pop.getByLabel('Hour').fill('14');
+      await pop.getByLabel('Minute').fill('15');
+      await pop.getByRole('button', { name: 'Apply' }).click();
+      await expect(pop).toBeHidden();
+      await expect(homeCard.locator('.tzc-time')).toHaveText('14:15');
+      expect(await app.locator('.tzc-plan-chip').innerText()).toMatch(/\+\d+d/);
+
+      // The slider stays live and counts from the pick: a real arrow key is a
+      // quarter hour after it, still on the picked day, not "now + 15 min".
+      await expect(slider).toBeEnabled();
+      await expect(slider).toHaveValue('0');
+      await slider.focus();
+      await page.keyboard.press('ArrowRight');
+      await expect(homeCard.locator('.tzc-time')).toHaveText('14:30');
+      await expect(homeCard.locator('.tzc-day')).toHaveText(/In \d+ days/);
+      await expect(trigger).toContainText('14:30');
+      await app.getByRole('button', { name: 'Plan the picked time' }).click();
+      await expect(homeCard.locator('.tzc-time')).toHaveText('14:15');
+
+      // The home card's own slider moves every clock and the main slider.
+      const homeDay = homeCard.locator('.tzc-day-range');
+      await homeDay.focus();
+      await page.keyboard.press('PageUp');
+      await expect(homeCard.locator('.tzc-time')).toHaveText('15:15');
+      await expect(slider).toHaveValue('4');
+
+      // From now again, the presets count from now.
+      await app.getByRole('button', { name: 'Back to now' }).click();
+      await app.getByRole('button', { name: 'Plan 6 hours ahead', exact: true }).click();
+      await expect(slider).toHaveValue('24');
+      await expect(trigger).toHaveText('Pick date & time');
+      expect(errors).toEqual([]);
+    });
+
     for (const width of [1280, 390]) {
       test(`at ${width} px the header is the same on every page and links to both tools`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });

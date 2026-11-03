@@ -2,5 +2,26 @@
   "name": "site-tz",
   "compatibility_date": "2026-11-02",
   "assets": { "directory": "./docs" },
-  "routes": [{ "pattern": "tz.nihal.com.np", "custom_domain": true }]
+  "routes": [{ "pattern": "tz.nihal.com.np", "custom_domain": true }],
+  // Workers Logs for the site. This is a static-asset Worker with no code of
+  // our own, so what lands here is invocation logs — one per request, with
+  // method, URL and status — which is what makes a broken page or a 404 wave
+  // visible after a deploy. Queryable in the dashboard under the Worker's
+  // Observability tab, kept 7 days.
+  //
+  // Nothing about a visitor's timezones can appear in these: the converter
+  // and the clock run entirely in the browser, the site makes no requests of
+  // its own, and the zone handoff from the extension travels in the URL
+  // fragment, which browsers never put in the request line.
+  "observability": {
+    "logs": {
+      "enabled": true,
+      // One log per invocation, not only custom console output.
+      "invocation_logs": true,
+      // Store in Cloudflare rather than only exporting. Note: from
+      // 2026-12-01 persisted data counts towards Observability ingestion and
+      // storage usage.
+      "persist": true
+    }
+  }
 }

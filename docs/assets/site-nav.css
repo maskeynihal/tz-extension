@@ -53,3 +53,99 @@
   .site-cta-long { display: none; }
   .site-cta-short { display: inline; }
 }
+
+/* Who made it, and a way to say thanks: the last line of every footer. */
+.site-credit { margin: 12px 0 0; font-size: 13px; line-height: 1.6; color: var(--muted, var(--body)); }
+.site-credit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.site-credit a:hover { color: var(--ink); }
+
+/* The two thank-you buttons. Each is a warm pill with its own drink: steam
+   drifts off the cup at rest, and on hover or focus the button lifts, a
+   shine sweeps across, the steam rises faster and the drink tips towards
+   the reader. All of it stops for prefers-reduced-motion. */
+/* Block, not flex, so each page's own text-align (centred on the tools,
+   left on the home page) places the buttons as it places the text. */
+.site-support { display: block; margin-top: 10px; }
+.site-support > * { vertical-align: middle; margin: 4px 10px 4px 0; }
+.site-support > :last-child { margin-right: 0; }
+.site-credit .support-btn {
+  --support-bg: linear-gradient(135deg, #ffd66b 0%, #f4a940 100%);
+  --support-ink: #2b1606;
+  --support-glow: rgba(244, 169, 64, 0.45);
+  --support-fill: #8a4b16;
+  position: relative; isolation: isolate;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px 8px 12px; border-radius: 999px;
+  background: var(--support-bg); color: var(--support-ink);
+  font-weight: 650; font-size: 14px; line-height: 1; white-space: nowrap;
+  text-decoration: none;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 2px 8px -2px var(--support-glow);
+  transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 220ms ease;
+}
+.site-credit .support-chiya {
+  --support-bg: linear-gradient(135deg, #f7c59a 0%, #e0844a 100%);
+  --support-ink: #2a1205;
+  --support-glow: rgba(224, 132, 74, 0.45);
+  --support-fill: #b4541d;
+}
+/* Shine: a soft diagonal band parked off the left edge. */
+.site-credit .support-btn::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+  background: linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, 0.55) 50%, transparent 65%);
+  background-size: 250% 100%; background-position: 120% 0; background-repeat: no-repeat;
+}
+.site-credit .support-btn:hover,
+.site-credit .support-btn:focus-visible {
+  color: var(--support-ink);
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 10px 22px -8px var(--support-glow);
+}
+.site-credit .support-btn:hover::after,
+.site-credit .support-btn:focus-visible::after { animation: support-shine 900ms ease forwards; }
+.site-credit .support-btn:active { transform: translateY(0) scale(0.97); transition-duration: 80ms; }
+.site-credit .support-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+.support-icon { position: relative; display: inline-grid; place-items: center; width: 22px; height: 22px; }
+.support-icon svg { width: 22px; height: 22px; transform-origin: 50% 90%; }
+.support-fill { fill: var(--support-fill); stroke: none; opacity: 0.85; }
+.site-credit .support-btn:hover .support-icon svg,
+.site-credit .support-btn:focus-visible .support-icon svg { animation: support-tip 700ms ease-in-out; }
+
+/* Three wisps of steam over the rim. */
+.support-steam {
+  position: absolute; left: 4px; right: 6px; top: -7px; height: 10px;
+  display: flex; justify-content: space-between; pointer-events: none;
+}
+.support-chiya .support-steam { left: 6px; right: 6px; }
+.support-steam i {
+  width: 2px; height: 7px; border-radius: 2px; background: currentColor; opacity: 0;
+  animation: support-steam 2.6s ease-in-out infinite;
+}
+.support-steam i:nth-child(2) { animation-delay: 0.6s; }
+.support-steam i:nth-child(3) { animation-delay: 1.2s; }
+.site-credit .support-btn:hover .support-steam i,
+.site-credit .support-btn:focus-visible .support-steam i { animation-duration: 1.1s; }
+
+@keyframes support-steam {
+  0% { opacity: 0; transform: translateY(4px) scaleY(0.6); }
+  35% { opacity: 0.55; }
+  100% { opacity: 0; transform: translateY(-6px) translateX(1px) scaleY(1.1); }
+}
+/* The band moves inside the pill's own box, so the steam above it is never clipped. */
+@keyframes support-shine { to { background-position: -20% 0; } }
+@keyframes support-tip {
+  0%, 100% { transform: rotate(0); }
+  30% { transform: rotate(-14deg); }
+  60% { transform: rotate(8deg); }
+  80% { transform: rotate(-3deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-credit .support-btn { transition: none; }
+  .site-credit .support-btn:hover, .site-credit .support-btn:focus-visible { transform: none; }
+  .site-credit .support-btn::after, .support-icon svg, .support-steam i { animation: none !important; }
+  .support-steam { display: none; }
+}
+@media (forced-colors: active) {
+  .site-credit .support-btn { border: 1px solid ButtonText; }
+}

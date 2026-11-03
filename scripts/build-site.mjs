@@ -15,33 +15,14 @@
 // tsc first.
 import { build } from 'esbuild';
 import { mkdirSync, copyFileSync, cpSync, existsSync, rmSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
+import { root, siteDir, PAGES, siteBuildOptions } from './site-config.mjs';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const siteDir = resolve(root, 'site');
 const outDir = resolve(root, 'docs');
-const PAGES = ['index.html', 'app.html', 'clock.html', 'privacy.html', 'terms.html'];
 
 mkdirSync(outDir, { recursive: true });
 
-await build({
-  entryPoints: {
-    demo: resolve(siteDir, 'demo.ts'),
-    clock: resolve(siteDir, 'clock.ts'),
-  },
-  bundle: true,
-  format: 'iife',
-  target: 'es2022',
-  minify: true,
-  sourcemap: false,
-  jsx: 'automatic',
-  loader: { '.css': 'css' },
-  define: { 'process.env.NODE_ENV': '"production"' },
-  outdir: outDir,
-  logLevel: 'info',
-  absWorkingDir: root,
-});
+await build(siteBuildOptions(outDir));
 
 // Earlier builds split shared code into docs/chunks/; nothing loads it now.
 // Removed only after a successful build, so a failed one leaves docs/ intact.

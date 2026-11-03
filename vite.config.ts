@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { crx } from '@crxjs/vite-plugin';
 import { execSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+
 import manifest from './src/manifest';
 import pkg from './package.json';
 
@@ -66,16 +66,9 @@ export default defineConfig({
     sourcemap: true,
     outDir,
     emptyOutDir: true,
-    rollupOptions: {
-      // crxjs adds the manifest's entry points (popup, options, background,
-      // content script). Extra extension pages that the manifest does not list
-      // go here; crxjs merges them in. Use the object form: crxjs replaces a
-      // lone string input ending in "index.html" with a stub.
-      // Emitted as <outDir>/src/clock/index.html (opened via runtime.getURL).
-      input: {
-        clock: fileURLToPath(new URL('./src/clock/index.html', import.meta.url)),
-      },
-    },
+    // Only the manifest's own entry points (popup, options, background,
+    // content script), which crxjs adds. The world clock is a website page
+    // now (site/clock.ts -> docs/), so the extension builds no extra page.
   },
   server: {
     port: 5173,

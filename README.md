@@ -36,7 +36,7 @@ https://github.com/maskeynihal/tz-extension/raw/main/docs/assets/demo-real.mp4
    - Open cards follow settings changed elsewhere (Settings, another tab): day/month order, 12/24-hour clock, target and home zones, and formats, staying on the same time.
 8. **Zones your way.** Every zone list is searchable and grouped: IANA cities, fixed offsets (`UTC+05:45`, `UTC−08:00`), abbreviations (`PDT`, `EDT`, `CET`, `IST`, `AEST`…) and the DST-aware `PT`, `MT`, `CT`, `ET`.
 9. **Pins with a dock.** Pin cards to compare times; once something is pinned, a small dock offers Minimize all, Expand all, Unpin all (float the cards on screen so they stay in view) and Close all with Undo.
-10. **World clock.** A full-page board of all your zones: live times, difference from home, today/tomorrow, day or night, working hours, and a scrubber to plan a time across zones. Open it from the popup, or [online](https://tz.nihal.com.np/clock).
+10. **World clock.** A full-page board of all your zones: live times, difference from home, today/tomorrow, day or night, working hours, and a scrubber to plan a time across zones. It lives on the website at [tz.nihal.com.np/clock](https://tz.nihal.com.np/clock), which the popup's clock button opens in a tab; the extension itself carries no copy of the page.
 
 Settings (tabbed: General · Cards · Timezones · Formats) also cover: home zone, target zones (drag to reorder, add, remove), 12/24-hour clock, theme, card size on open (compact, full or last used), numeric date order, the date-only time policy, highlighting the matched text, and **Convert when I select text** (turn it off to convert only from the right-click menu). Everything is persisted via `chrome.storage`; the website keeps the same settings in `localStorage`.
 
@@ -96,6 +96,7 @@ Prebuilt `tz-extension-chrome.zip` and `tz-extension-firefox.zip` are attached t
 npm install          # install dependencies
 npm run dev          # Vite dev server (Chrome manifest)
 npm run dev:firefox  # Vite dev server (Firefox manifest)
+npm run dev:site     # website on http://localhost:5174 with live reload (PORT to change)
 ```
 
 ## Build & package
