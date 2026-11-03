@@ -96,6 +96,7 @@ Prebuilt `tz-extension-chrome.zip` and `tz-extension-firefox.zip` are attached t
 npm install          # install dependencies
 npm run dev          # Vite dev server (Chrome manifest)
 npm run dev:firefox  # Vite dev server (Firefox manifest)
+npm run dev:site     # website on http://localhost:5174 with live reload (PORT to change)
 ```
 
 ## Build & package

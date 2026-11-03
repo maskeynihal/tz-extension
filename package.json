@@ -24,6 +24,7 @@
     "zip:source": "node scripts/source-archive.mjs",
     "publish:chrome": "node scripts/publish-chrome.mjs",
     "publish:firefox": "node scripts/publish-firefox.mjs",
+    "dev:site": "node scripts/dev-site.mjs",
     "build:site": "tsc --noEmit && node scripts/build-site.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings=0",
