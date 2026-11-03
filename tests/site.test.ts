@@ -197,3 +197,30 @@ describe('how-to-use guide', () => {
     expect(read('scripts/site-config.mjs')).toContain("'guide.html'");
   });
 });
+
+describe('site theme', () => {
+  const PAGES = ['index.html', 'app.html', 'clock.html', 'guide.html', 'privacy.html', 'terms.html'];
+
+  it('every page loads the theme script in its head and has the header button', () => {
+    for (const page of PAGES) {
+      const html = read(`site/${page}`);
+      const head = /<head>[\s\S]*?<\/head>/.exec(html)?.[0] ?? '';
+      expect(head, page).toContain('<script src="./assets/site-theme.js"></script>');
+      const nav = /<nav class="site-links"[\s\S]*?<\/nav>/.exec(html)?.[0] ?? '';
+      expect(nav, page).toContain('data-theme-toggle');
+    }
+  });
+
+  it('a chosen Light or Dark overrides the system on every page', () => {
+    for (const page of PAGES) {
+      const html = read(`site/${page}`);
+      expect(html, page).toContain(":root[data-theme='dark']");
+      expect(html, page).toMatch(/:root:not\(\[data-theme='light'\]\)/);
+    }
+  });
+
+  it('reads and writes the same settings item the website clock uses', () => {
+    expect(read('site/assets/site-theme.js')).toContain("var KEY = 'tz-extension-prefs';");
+    expect(read('src/lib/storage.ts')).toContain("export const PREFS_KEY = 'tz-extension-prefs';");
+  });
+});
