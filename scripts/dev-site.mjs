@@ -14,7 +14,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { createReadStream, watch } from 'node:fs';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
-import { siteDir, PAGES, siteBuildOptions } from './site-config.mjs';
+import { siteDir, PAGES, siteBuildOptions, applySupportFlags } from './site-config.mjs';
 
 const PORT = Number(process.env.PORT ?? 5174);
 const RELOAD_PATH = '/__reload';
@@ -105,7 +105,7 @@ const server = createServer(async (req, res) => {
 
   const type = TYPES[extname(file)] ?? 'application/octet-stream';
   if (extname(file) === '.html') {
-    const html = await readFile(file, 'utf8');
+    const html = applySupportFlags(await readFile(file, 'utf8'));
     const withReload = html.includes('</body>') ? html.replace('</body>', `${RELOAD_SNIPPET}</body>`) : html + RELOAD_SNIPPET;
     res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
     res.end(withReload);
