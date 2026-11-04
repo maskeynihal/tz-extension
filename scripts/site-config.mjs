@@ -28,3 +28,38 @@ export function siteBuildOptions(outdir, { dev = false } = {}) {
     absWorkingDir: root,
   };
 }
+
+/**
+ * Support buttons ("Buy me a coffee" / "Buy me chiya") are switched by env
+ * vars, set in Cloudflare (Workers Builds -> Variables) and read at build time:
+ *   SHOW_BUY_COFFEE  default on
+ *   SHOW_BUY_TEA     default off
+ * Values "1", "true", "on", "yes" turn one on; anything else turns it off.
+ * Pages mark each button with <!--support:coffee-->...<!--/support:coffee-->
+ * (or :tea), and the privacy note with <!--support-text:...--> markers.
+ */
+function flag(value, fallback) {
+  if (value === undefined || value === '') return fallback;
+  return /^(1|true|on|yes)$/i.test(value.trim());
+}
+
+export function supportFlags(env = process.env) {
+  return {
+    coffee: flag(env.SHOW_BUY_COFFEE, true),
+    tea: flag(env.SHOW_BUY_TEA, false),
+  };
+}
+
+/** Drops the marked blocks of disabled support buttons; keeps the rest. */
+export function applySupportFlags(html, flags = supportFlags()) {
+  const enabled = { ...flags, any: flags.coffee || flags.tea };
+  const re = /[ \t]*<!--(support|support-text):(coffee|tea|any)-->\n?([\s\S]*?)[ \t]*<!--\/\1:\2-->\n?/g;
+  // Blocks can nest (the "any" wrapper holds the per-service text), so repeat
+  // until no marker is left.
+  let out = html;
+  for (let prev = ''; prev !== out; ) {
+    prev = out;
+    out = out.replace(re, (_m, _kind, key, body) => (enabled[key] ? body : ''));
+  }
+  return out;
+}
